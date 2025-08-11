@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart' as dio;
@@ -73,7 +74,7 @@ class ApiChatData implements IApiChatData {
       _cancelTokens[threadId] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId]!;
 
-      final response = await _dio.post<ResponseBody>(
+      final response = await _dio.post<dio.ResponseBody>(
         endpoint,
         data: data,
         cancelToken: token,
@@ -84,7 +85,12 @@ class ApiChatData implements IApiChatData {
 
       _cancelTokens.remove(threadId);
 
-      final stream = response.data.stream.transform(utf8.decoder);
+      final body = response.data;
+      if (body == null) {
+        throw Exception('Respuesta de streaming vacía');
+      }
+  // body.stream is a Stream<List<int>>; decode as UTF8
+  final stream = utf8.decoder.bind(body.stream);
       final buffer = StringBuffer();
 
       await for (final chunk in stream) {

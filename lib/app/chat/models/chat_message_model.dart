@@ -9,7 +9,7 @@ import 'package:uuid/uuid.dart';
 class ChatMessageModel {
   final String uid;
   final String chatId;
-  final String text;
+  String text;
   final bool aiMessage;
   final DateTime createdAt;
   final DateTime updatedAt;
