@@ -30,6 +30,12 @@ func generateToken() string {
 	return hex.EncodeToString(b)
 }
 
+// GetEmailFromToken returns email for a given session token
+func GetEmailFromToken(token string) (string, bool) {
+	email, ok := sessions[token]
+	return email, ok
+}
+
 
 func Handler(c *gin.Context) {
 	var creds Credentials
