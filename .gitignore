@@ -1,0 +1,63 @@
+# Flutter/Dart/Pub related
+.dart_tool/
+.packages
+.pub/
+build/
+
+# Android related
+**/android/.gradle/
+**/android/app/build/
+
+# iOS/Xcode related
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Pods/
+**/ios/Runner.xcworkspace/
+**/ios/build/
+
+# macOS related
+**/macos/Flutter/ephemeral/
+**/macos/Pods/
+**/macos/build/
+
+# Linux related
+**/linux/build/
+
+# Windows related
+**/windows/build/
+
+# Web related
+**/web/.dart_tool/
+
+# VS Code
+.vscode/
+
+# Others
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Exclude APKs, AABs, and other binaries
+*.apk
+*.aab
+*.ipa
+*.dill
+*.so
+*.bin
+*.exe
+*.dll
+*.log
+*.tmp
+*.swp
+*.lock
+
+# Exclude test outputs
+coverage/
+
+# Exclude user-specific files
+*.DS_Store
+*.env
