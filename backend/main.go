@@ -1,37 +1,74 @@
 package main
 
 import (
-        "ema-backend/chat"
-        "ema-backend/conn"
-        "ema-backend/login"
-        "ema-backend/migrations"
-        "ema-backend/openai"
-        "ema-backend/subscriptions"
-        "github.com/gin-gonic/gin"
+
+	"log"
+	"net/http"
+	"os"
+
+	"ema-backend/chat"
+	"ema-backend/conn"
+	"ema-backend/login"
+	"ema-backend/migrations"
+	"ema-backend/openai"
+	"ema-backend/profile"
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-        r := gin.Default()
+	// Load environment variables from .env if present
+	if err := godotenv.Load(); err != nil {
+		log.Printf("no .env file found, using environment variables: %v", err)
+	}
 
-        db, err := conn.NewMySQL()
-        if err != nil {
-                panic(err)
-        }
-        if err := migrations.Run(db); err != nil {
-                panic(err)
-        }
-        subRepo := subscriptions.NewRepository(db)
-        subHandler := subscriptions.NewHandler(subRepo)
-        subHandler.RegisterRoutes(r)
+	// Connect to MySQL
+	db, err := conn.NewMySQL()
+	if err != nil {
+		log.Fatalf("database connection failed: %v", err)
+	}
+	defer db.Close()
 
-        r.POST("/login", login.Handler)
-        r.GET("/session", login.SessionHandler)
+	// Initialize migrations package with DB and run migrations
+	migrations.Init(db)
+	if err := migrations.Migrate(); err != nil {
+		log.Fatalf("migrations failed: %v", err)
+	}
+	if err := migrations.SeedDefaultUser(); err != nil {
+		log.Printf("seed default user failed: %v", err)
+	}
 
-        ai := openai.NewClient()
-        chatHandler := chat.NewHandler(ai)
-        r.POST("/asistente/start", chatHandler.Start)
-        r.POST("/asistente/message", chatHandler.Message)
+	r := gin.Default()
 
-        r.Run(":8080")
+	// Health check
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// Auth routes expected by Flutter
+	r.POST("/login", login.Handler)
+	r.GET("/session", login.SessionHandler)
+	r.POST("/logout", login.LogoutHandler)
+	r.POST("/register", login.RegisterHandler)
+	r.POST("/password/forgot", login.ForgotPasswordHandler)
+
+	// Profile routes and static media
+	profile.RegisterRoutes(r)
+	r.Static("/media", "./media")
+
+	// Chat/OpenAI endpoints (optional if keys provided)
+	ai := openai.NewClient()
+	chatHandler := chat.NewHandler(ai)
+	r.POST("/asistente/start", chatHandler.Start)
+	r.POST("/asistente/message", chatHandler.Message)
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
+
 }
 

@@ -1,5 +1,6 @@
 package migrations
 
+
 import "database/sql"
 
 type User struct {
@@ -70,4 +71,5 @@ func Run(db *sql.DB) error {
                 WHERE NOT EXISTS (SELECT id FROM subscription_plans WHERE name = 'Free')`)
         return err
 }
+
 
