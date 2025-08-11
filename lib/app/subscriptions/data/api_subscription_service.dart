@@ -9,7 +9,7 @@ class ApiSubscriptionService extends SubscriptionService {
     required String authToken,
   }) async {
     try {
-      final url = Uri.parse('$apiUrl/suscription-plans');
+      final url = Uri.parse('$apiUrl/plans');
       final response = await http.get(
         url,
         headers: {
@@ -30,14 +30,15 @@ class ApiSubscriptionService extends SubscriptionService {
     }
   }
 
-  Future<String> initiateCheckout({
+  @override
+  Future<Subscription> createSubscription({
     required int userId,
     required int subscriptionPlanId,
     required int frequency,
     required String authToken,
   }) async {
     try {
-      final url = Uri.parse('$apiUrl/checkout');
+      final url = Uri.parse('$apiUrl/subscriptions');
       final response = await http.post(
         url,
         headers: {
@@ -46,20 +47,18 @@ class ApiSubscriptionService extends SubscriptionService {
         },
         body: jsonEncode({
           'user_id': userId,
-          'subscription_plan_id': subscriptionPlanId,
+          'plan_id': subscriptionPlanId,
           'frequency': frequency,
         }),
       );
-
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        // Se asume que el endpoint retorna en JSON un campo "url"
-        return data['url'];
+        return Subscription.fromJson(data);
       } else {
-        throw Exception('Error al iniciar el checkout: ${response.statusCode}');
+        throw Exception('Error al crear la suscripción: ${response.statusCode}');
       }
     } catch (e) {
-      throw Exception('Error al iniciar el checkout: $e');
+      throw Exception('Error al crear la suscripción: $e');
     }
   }
 
@@ -98,10 +97,8 @@ class ApiSubscriptionService extends SubscriptionService {
     int? files,
   }) async {
     try {
-      final url = Uri.parse('$apiUrl/subscription');
-      final Map<String, dynamic> body = {
-        'subscription_id': subscriptionId,
-      };
+      final url = Uri.parse('$apiUrl/subscriptions/$subscriptionId');
+      final Map<String, dynamic> body = {};
 
       if (consultations != null) body['consultations'] = consultations;
       if (questionnaires != null) body['questionnaires'] = questionnaires;

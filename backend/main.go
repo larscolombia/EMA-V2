@@ -1,22 +1,37 @@
 package main
 
 import (
-	"ema-backend/chat"
-	"ema-backend/login"
-	"ema-backend/openai"
-	"github.com/gin-gonic/gin"
+        "ema-backend/chat"
+        "ema-backend/conn"
+        "ema-backend/login"
+        "ema-backend/migrations"
+        "ema-backend/openai"
+        "ema-backend/subscriptions"
+        "github.com/gin-gonic/gin"
 )
 
 func main() {
-	r := gin.Default()
+        r := gin.Default()
 
-	r.POST("/login", login.Handler)
-	r.GET("/session", login.SessionHandler)
+        db, err := conn.NewMySQL()
+        if err != nil {
+                panic(err)
+        }
+        if err := migrations.Run(db); err != nil {
+                panic(err)
+        }
+        subRepo := subscriptions.NewRepository(db)
+        subHandler := subscriptions.NewHandler(subRepo)
+        subHandler.RegisterRoutes(r)
 
-	ai := openai.NewClient()
-	chatHandler := chat.NewHandler(ai)
-	r.POST("/asistente/start", chatHandler.Start)
-	r.POST("/asistente/message", chatHandler.Message)
+        r.POST("/login", login.Handler)
+        r.GET("/session", login.SessionHandler)
 
-	r.Run(":8080")
+        ai := openai.NewClient()
+        chatHandler := chat.NewHandler(ai)
+        r.POST("/asistente/start", chatHandler.Start)
+        r.POST("/asistente/message", chatHandler.Message)
+
+        r.Run(":8080")
 }
+

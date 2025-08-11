@@ -3,6 +3,13 @@ import 'package:ema_educacion_medica_avanzada/app/subscriptions/subscriptions.da
 abstract class SubscriptionService {
   Future<List<Subscription>> fetchSubscriptions({required String authToken});
 
+  Future<Subscription> createSubscription({
+    required int userId,
+    required int subscriptionPlanId,
+    required int frequency,
+    required String authToken,
+  });
+
   Future<void> updateSubscriptionQuantities({
     required int subscriptionId,
     required String authToken,
