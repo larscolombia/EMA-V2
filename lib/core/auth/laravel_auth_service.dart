@@ -23,16 +23,12 @@ class LaravelAuthService extends GetxService {
 
       switch (response.statusCode) {
         case 200:
-          var responseBody = json.decode(response.body);
-
+          final responseBody = json.decode(response.body);
           return UserModel.fromLaravelApi(responseBody);
-
         case 401:
           throw Exception('Contraseña Incorrecta');
-
         case 422:
           throw Exception('Usuario o Contraseña Incorrecta');
-
         default:
           throw Exception('Error inesperado: ${response.statusCode}');
       }
@@ -97,7 +93,7 @@ class LaravelAuthService extends GetxService {
   }
 
   Future<UserModel> getUser(String token) async {
-    final url = Uri.parse('$apiUrl/user');
+    final url = Uri.parse('$apiUrl/session');
     final headers = {
       HttpHeaders.contentTypeHeader: 'application/json',
       HttpHeaders.authorizationHeader: 'Bearer $token',
@@ -107,16 +103,7 @@ class LaravelAuthService extends GetxService {
 
     if (response.statusCode == 200) {
       final responseBody = json.decode(response.body);
-      if (responseBody['success'] == true && responseBody['data'] != null) {
-        // Adjuntar el token al usuario para que se mantenga la sesión
-        responseBody['data']['token'] = token;
-        return UserModel.fromLaravelApi({
-          'user': responseBody['data'],
-          'token': token,
-        });
-      } else {
-        throw Exception('Respuesta no válida del servidor');
-      }
+      return UserModel.fromLaravelApi(responseBody);
     } else {
       throw Exception('Error al obtener el usuario: ${response.statusCode}');
     }

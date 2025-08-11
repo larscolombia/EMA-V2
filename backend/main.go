@@ -10,5 +10,8 @@ func main() {
 
 	r.POST("/login", login.Handler)
 
+	r.GET("/session", login.SessionHandler)
+
+
 	r.Run(":8080")
 }

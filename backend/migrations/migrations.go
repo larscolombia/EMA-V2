@@ -1,16 +1,26 @@
 package migrations
 
 type User struct {
-	Email    string
-	Password string
-	Role     string
+
+	ID        int
+	FirstName string
+	LastName  string
+	Email     string
+	Password  string
+	Role      string
+
 }
 
 var users = []User{
 	{
-		Email:    "leonardoherrerac10@gmail.com",
-		Password: "supersecret",
-		Role:     "super_admin",
+
+		ID:        1,
+		FirstName: "Leonardo",
+		LastName:  "Herrera",
+		Email:     "leonardoherrerac10@gmail.com",
+		Password:  "supersecret",
+		Role:      "super_admin",
+
 	},
 }
 

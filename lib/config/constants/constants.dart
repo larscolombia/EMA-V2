@@ -1,6 +1,5 @@
-/// https://emma.drleonardoherrera.com/api
-//const String apiUrl = 'http://10.0.2.2:8000/api';
-const String apiUrl = 'https://emma.drleonardoherrera.com/api';
+/// URL base para el backend en Go
+const String apiUrl = 'http://localhost:8080';
 
 /// Habilita toda la funcionalidad para pruebas
 /// `lib/config/constants/constants.dart`.
