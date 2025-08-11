@@ -22,6 +22,7 @@ abstract class IApiChatData {
     required String threadId,
     required String prompt,
     CancelToken? cancelToken,
+    void Function(String token)? onStream,
   });
 
   Future<ChatMessageModel> sendPdfUpload({
