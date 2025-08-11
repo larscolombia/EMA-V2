@@ -3,6 +3,7 @@ import 'package:ema_educacion_medica_avanzada/config/styles/app_styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
+import 'package:country_flags/country_flags.dart';
 
 class EditProfileDialog extends StatefulWidget {
   final UserModel profile;
@@ -173,11 +174,6 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                               label: 'Edad',
                               keyboardType: TextInputType.number,
                             ),
-                            _buildTextFormField(
-                              controller: _cityController,
-                              label: 'Ciudad',
-                            ),
-            
                             DropdownButtonFormField<String>(
                               value: _selectedGender,
                               decoration: const InputDecoration(
@@ -217,14 +213,31 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                               items: widget.countries.map((country) {
                                 return DropdownMenuItem<int>(
                                   value: country.id,
-                                  child: Text(country.name),
+                                  child: Row(
+                                    children: [
+                                      CountryFlag.fromCountryCode(
+                                        country.shortCode,
+                                        height: 20,
+                                        width: 30,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(country.name),
+                                    ],
+                                  ),
                                 );
                               }).toList(),
                               onChanged: (value) {
                                 setState(() {
                                   _selectedCountryId = value;
+                                  _cityController.clear();
                                 });
                               },
+                            ),
+                            const SizedBox(height: 16),
+                            _buildTextFormField(
+                              controller: _cityController,
+                              label: 'Ciudad',
+                              enabled: _selectedCountryId != null,
                             ),
                           ],
                         ),
@@ -284,11 +297,13 @@ class EditProfileDialogState extends State<EditProfileDialog> {
     required String label,
     TextInputType keyboardType = TextInputType.text,
     String? Function(String?)? validator,
+    bool enabled = true,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: TextFormField(
         controller: controller,
+        enabled: enabled,
         decoration: InputDecoration(
           labelText: label,
           filled: true,
