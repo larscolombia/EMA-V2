@@ -2,8 +2,10 @@ package login
 
 import (
 	"net/http"
+
 	"strings"
 	"time"
+
 
 	"ema-backend/migrations"
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,7 @@ type Credentials struct {
 
 const tokenValue = "dummy-token"
 
+
 func Handler(c *gin.Context) {
 	var creds Credentials
 	if err := c.ShouldBindJSON(&creds); err != nil {
@@ -25,6 +28,7 @@ func Handler(c *gin.Context) {
 
 	user := migrations.GetUserByEmail(creds.Email)
 	if user != nil && user.Password == creds.Password {
+
 		userRes := gin.H{
 			"id":            user.ID,
 			"first_name":    user.FirstName,
@@ -39,10 +43,12 @@ func Handler(c *gin.Context) {
 			"profile_image": "",
 		}
 		c.JSON(http.StatusOK, gin.H{"token": tokenValue, "user": userRes})
+
 	} else {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciales inválidas"})
 	}
 }
+
 
 func SessionHandler(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
@@ -71,3 +77,4 @@ func SessionHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"token": tokenValue, "user": userRes})
 }
+

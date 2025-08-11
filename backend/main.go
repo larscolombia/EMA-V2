@@ -9,7 +9,9 @@ func main() {
 	r := gin.Default()
 
 	r.POST("/login", login.Handler)
+
 	r.GET("/session", login.SessionHandler)
+
 
 	r.Run(":8080")
 }
