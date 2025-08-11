@@ -77,11 +77,19 @@ class ProfileController extends GetxController {
   }
 
   bool canUploadMoreFiles() {
-    return remainingFiles.value > 0 || useAllFeatures;
+  if (useAllFeatures) return true;
+  final sub = currentProfile.value.activeSubscription;
+  if (remainingFiles.value > 0) return true;
+  // Fallback to subscription value in case quotas haven't been propagated yet
+  return (sub?.files ?? 0) > 0;
   }
 
   bool canCreateMoreChats() {
-    return remainingChats.value > 0 || useAllFeatures;
+  if (useAllFeatures) return true;
+  final sub = currentProfile.value.activeSubscription;
+  if (remainingChats.value > 0) return true;
+  // Fallback to subscription value in case quotas haven't been propagated yet
+  return (sub?.consultations ?? 0) > 0;
   }
 
   bool canCreateMoreClinicalCases() {
