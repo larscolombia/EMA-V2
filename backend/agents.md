@@ -22,6 +22,7 @@ Env variables (.env)
 - DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 - PORT (optional, default 8080)
 - OPENAI_API_KEY, CHAT_PRINCIPAL_ASSISTANT (optional for chat)
+- SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM (opcional para correos)
 
 Good practices
 - Replace plaintext passwords with bcrypt and sessions with JWTs/expirable storage.
