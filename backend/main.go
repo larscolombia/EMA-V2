@@ -14,6 +14,7 @@ import (
 	"ema-backend/openai"
 	"ema-backend/profile"
 	"ema-backend/subscriptions"
+	"ema-backend/tests"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -79,6 +80,12 @@ func main() {
 	chatHandler := chat.NewHandler(ai)
 	r.POST("/asistente/start", chatHandler.Start)
 	r.POST("/asistente/message", chatHandler.Message)
+
+	// Tests/quiz generation endpoints
+	quizAI := tests.NewQuizAI()
+	testRepo := tests.NewRepository(db)
+	testHandler := tests.NewHandler(testRepo, quizAI)
+	testHandler.RegisterRoutes(r)
 
 	port := os.Getenv("PORT")
 	if port == "" {
