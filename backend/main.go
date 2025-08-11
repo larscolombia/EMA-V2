@@ -56,6 +56,7 @@ func main() {
 	r.POST("/logout", login.LogoutHandler)
 	r.POST("/register", login.RegisterHandler)
 	r.POST("/password/forgot", login.ForgotPasswordHandler)
+	r.POST("/password/change", login.ChangePasswordHandler)
 
 	// Profile routes and static media
 	profile.RegisterRoutes(r)

@@ -194,6 +194,15 @@ func UpdateUserProfile(id int, firstName, lastName, city, profession string) err
 	return err
 }
 
+// UpdateUserPassword updates the password for the given user id
+func UpdateUserPassword(id int, password string) error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	_, err := db.Exec("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", password, id)
+	return err
+}
+
 // CreateUser inserts a new user record
 func CreateUser(firstName, lastName, email, password, role string) error {
 	if db == nil {

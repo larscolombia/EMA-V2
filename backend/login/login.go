@@ -3,11 +3,12 @@ package login
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"net/http"
-
 	"strings"
 	"time"
 
+	mailer "ema-backend/email"
 	"ema-backend/migrations"
 
 	"github.com/gin-gonic/gin"
@@ -45,7 +46,6 @@ func Handler(c *gin.Context) {
 
 	user := migrations.GetUserByEmail(creds.Email)
 	if user != nil && user.Password == creds.Password {
-
 		token := generateToken()
 		sessions[token] = user.Email
 
@@ -63,7 +63,6 @@ func Handler(c *gin.Context) {
 			"profile_image": "",
 		}
 		c.JSON(http.StatusOK, gin.H{"token": token, "user": userRes})
-
 	} else {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciales inválidas"})
 	}
@@ -138,6 +137,9 @@ func RegisterHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo crear el usuario"})
 		return
 	}
+	if err := mailer.SendWelcome(p.Email); err != nil {
+		log.Printf("send welcome email failed for %s: %v", p.Email, err)
+	}
 	c.Status(http.StatusCreated)
 }
 
@@ -153,4 +155,37 @@ func ForgotPasswordHandler(c *gin.Context) {
 	}
 	// We acknowledge the request to reset the password.
 	c.JSON(http.StatusOK, gin.H{"message": "Si el correo existe, se enviarán instrucciones"})
+}
+
+type ChangePasswordPayload struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+func ChangePasswordHandler(c *gin.Context) {
+	var p ChangePasswordPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos"})
+		return
+	}
+	auth := c.GetHeader("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
+	userEmail, ok := GetEmailFromToken(token)
+	if !ok || token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido"})
+		return
+	}
+	user := migrations.GetUserByEmail(userEmail)
+	if user == nil || user.Password != p.OldPassword {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciales inválidas"})
+		return
+	}
+	if err := migrations.UpdateUserPassword(user.ID, p.NewPassword); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo actualizar la contraseña"})
+		return
+	}
+	if err := mailer.SendPasswordChanged(user.Email); err != nil {
+		log.Printf("send password change email failed for %s: %v", user.Email, err)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Contraseña actualizada"})
 }
