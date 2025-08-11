@@ -7,12 +7,13 @@ import (
 
 	"ema-backend/chat"
 	"ema-backend/conn"
+	"ema-backend/countries"
 	"ema-backend/login"
 	"ema-backend/migrations"
 	"ema-backend/openai"
 	"ema-backend/profile"
 	"ema-backend/subscriptions"
-	"ema-backend/countries"
+
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -83,4 +84,3 @@ func main() {
 	}
 
 }
-

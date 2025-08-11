@@ -2,6 +2,7 @@ package subscriptions
 
 import (
     "database/sql"
+    "fmt"
 )
 
 type Repository struct {
@@ -27,6 +28,19 @@ func (r *Repository) GetPlans() ([]Plan, error) {
         plans = append(plans, p)
     }
     return plans, nil
+}
+
+// GetPlanByID returns a plan by its ID
+func (r *Repository) GetPlanByID(id int) (*Plan, error) {
+    row := r.db.QueryRow(`SELECT id, name, currency, price, billing, consultations, questionnaires, clinical_cases, files FROM subscription_plans WHERE id=? LIMIT 1`, id)
+    var p Plan
+    if err := row.Scan(&p.ID, &p.Name, &p.Currency, &p.Price, &p.Billing, &p.Consultations, &p.Questionnaires, &p.ClinicalCases, &p.Files); err != nil {
+        if err == sql.ErrNoRows {
+            return nil, nil
+        }
+        return nil, err
+    }
+    return &p, nil
 }
 
 func (r *Repository) CreatePlan(p *Plan) error {
@@ -76,6 +90,19 @@ func (r *Repository) GetSubscriptions(userID int) ([]Subscription, error) {
 }
 
 func (r *Repository) CreateSubscription(s *Subscription) error {
+    // If quotas are zero/unset, initialize them from the selected plan
+    if s.Consultations == 0 && s.Questionnaires == 0 && s.ClinicalCases == 0 && s.Files == 0 {
+        plan, err := r.GetPlanByID(s.PlanID)
+        if err != nil {
+            return err
+        }
+        if plan != nil {
+            s.Consultations = plan.Consultations
+            s.Questionnaires = plan.Questionnaires
+            s.ClinicalCases = plan.ClinicalCases
+            s.Files = plan.Files
+        }
+    }
     res, err := r.db.Exec(`INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, frequency, consultations, questionnaires, clinical_cases, files) VALUES (?,?,?,?,?,?,?,?,?)`,
         s.UserID, s.PlanID, s.StartDate, s.EndDate, s.Frequency, s.Consultations, s.Questionnaires, s.ClinicalCases, s.Files)
     if err != nil {
@@ -89,10 +116,50 @@ func (r *Repository) CreateSubscription(s *Subscription) error {
     return nil
 }
 
-func (r *Repository) UpdateSubscription(id int, s *Subscription) error {
-    _, err := r.db.Exec(`UPDATE subscriptions SET consultations=?, questionnaires=?, clinical_cases=?, files=? WHERE id=?`,
-        s.Consultations, s.Questionnaires, s.ClinicalCases, s.Files, id)
+// DecrementSubscriptionFields decreases the provided fields by the given amounts (non-negative), clamped at 0
+func (r *Repository) DecrementSubscriptionFields(id int, deltas map[string]int) error {
+    if len(deltas) == 0 {
+        return nil
+    }
+    allowed := map[string]bool{
+        "consultations":  true,
+        "questionnaires": true,
+        "clinical_cases": true,
+        "files":         true,
+    }
+    sets := []string{}
+    args := []interface{}{}
+    for k, v := range deltas {
+        if !allowed[k] {
+            continue
+        }
+        if v < 0 {
+            return fmt.Errorf("delta for %s must be >= 0", k)
+        }
+        // Only update when there's a positive decrement
+        if v > 0 {
+            sets = append(sets, k+" = GREATEST("+k+" - ?, 0)")
+            args = append(args, v)
+        }
+    }
+    if len(sets) == 0 {
+        return nil
+    }
+    args = append(args, id)
+    query := "UPDATE subscriptions SET " + joinWithComma(sets) + " WHERE id=?"
+    _, err := r.db.Exec(query, args...)
     return err
+}
+
+func joinWithComma(parts []string) string {
+    if len(parts) == 0 {
+        return ""
+    }
+    out := parts[0]
+    for i := 1; i < len(parts); i++ {
+        out += ", " + parts[i]
+    }
+    return out
 }
 
 func (r *Repository) DeleteSubscription(id int) error {

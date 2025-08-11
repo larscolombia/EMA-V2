@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-
 	"ema-backend/migrations"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,7 +35,6 @@ func GetEmailFromToken(token string) (string, bool) {
 	email, ok := sessions[token]
 	return email, ok
 }
-
 
 func Handler(c *gin.Context) {
 	var creds Credentials
@@ -69,7 +68,6 @@ func Handler(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciales inválidas"})
 	}
 }
-
 
 func SessionHandler(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
@@ -156,4 +154,3 @@ func ForgotPasswordHandler(c *gin.Context) {
 	// We acknowledge the request to reset the password.
 	c.JSON(http.StatusOK, gin.H{"message": "Si el correo existe, se enviarán instrucciones"})
 }
-
