@@ -48,8 +48,9 @@ class ChatMessageModel {
   factory ChatMessageModel.fromApi(Map<String, dynamic> map) {
     return ChatMessageModel._(
       uid: Uuid().v4(),
-      chatId: map['chatId']
-          as String, // Todo: verificar si entrega chatId o cuestionario_id
+      chatId:
+          map['chatId']
+              as String, // Todo: verificar si entrega chatId o cuestionario_id
       text: map['text'] as String,
       aiMessage: map['role'] == 'assistant',
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['createdAt'] as int),
@@ -94,9 +95,10 @@ class ChatMessageModel {
       aiMessage: map['aiMessage'] == 1,
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['createdAt'] as int),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(map['updatedAt'] as int),
-      attach: map['attach'] != null
-          ? PdfAttachment.fromJson(map['attach'] as String)
-          : null, // Todo: desde json string
+      attach:
+          map['attach'] != null
+              ? PdfAttachment.fromJson(map['attach'] as String)
+              : null, // Todo: desde json string
     );
   }
 

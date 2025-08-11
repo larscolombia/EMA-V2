@@ -23,10 +23,7 @@ class ApiChatData implements IApiChatData {
   Future<ChatStartResponse> startChat(String prompt) async {
     const endpoint = '/asistente/start';
 
-    final response = await _dio.post(
-      endpoint,
-      data: {'prompt': prompt},
-    );
+    final response = await _dio.post(endpoint, data: {'prompt': prompt});
 
     if (response.statusCode == 200) {
       return ChatStartResponse(
@@ -66,10 +63,7 @@ class ApiChatData implements IApiChatData {
     const endpoint = '/asistente/message';
 
     try {
-      final data = {
-        'thread_id': threadId,
-        'prompt': prompt,
-      };
+      final data = {'thread_id': threadId, 'prompt': prompt};
 
       _cancelTokens[threadId] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId]!;
@@ -78,9 +72,10 @@ class ApiChatData implements IApiChatData {
         endpoint,
         data: data,
         cancelToken: token,
-        options: Options(responseType: ResponseType.stream, headers: {
-          'Accept': 'text/event-stream',
-        }),
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {'Accept': 'text/event-stream'},
+        ),
       );
 
       _cancelTokens.remove(threadId);
@@ -89,8 +84,8 @@ class ApiChatData implements IApiChatData {
       if (body == null) {
         throw Exception('Respuesta de streaming vacía');
       }
-  // body.stream is a Stream<List<int>>; decode as UTF8
-  final stream = utf8.decoder.bind(body.stream);
+      // body.stream is a Stream<List<int>>; decode as UTF8
+      final stream = utf8.decoder.bind(body.stream);
       final buffer = StringBuffer();
 
       await for (final chunk in stream) {
@@ -106,10 +101,7 @@ class ApiChatData implements IApiChatData {
         }
       }
 
-      return ChatMessageModel.ai(
-        chatId: threadId,
-        text: buffer.toString(),
-      );
+      return ChatMessageModel.ai(chatId: threadId, text: buffer.toString());
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation
@@ -161,11 +153,7 @@ class ApiChatData implements IApiChatData {
         data: formData,
         cancelToken: token,
         onSendProgress: onSendProgress,
-        options: dio.Options(
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        ),
+        options: dio.Options(headers: {'Content-Type': 'multipart/form-data'}),
       );
 
       // print('Response: ${response.statusCode}');
@@ -173,7 +161,8 @@ class ApiChatData implements IApiChatData {
 
       _cancelTokens.remove(threadId);
       if (response.statusCode == 200) {
-        final text = response.data['text'] as String? ??
+        final text =
+            response.data['text'] as String? ??
             "PDF cargado exitosamente. Puedes hacerme preguntas sobre su contenido ahora.";
         return ChatMessageModel.ai(chatId: threadId, text: text);
       } else if (response.statusCode == 500) {

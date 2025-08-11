@@ -142,29 +142,26 @@ func (h *Handler) updateSubscription(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id inválido"})
 		return
 	}
-	// Interpret provided fields as deltas to decrement remaining quotas
-	var payload struct {
-		Consultations  *int `json:"consultations"`
-		Questionnaires *int `json:"questionnaires"`
-		ClinicalCases  *int `json:"clinical_cases"`
-		Files          *int `json:"files"`
-	}
+	// Treat provided fields as decrement deltas, not absolute overwrite
+	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "datos inválidos"})
 		return
 	}
 	deltas := map[string]int{}
-	if payload.Consultations != nil {
-		deltas["consultations"] = *payload.Consultations
-	}
-	if payload.Questionnaires != nil {
-		deltas["questionnaires"] = *payload.Questionnaires
-	}
-	if payload.ClinicalCases != nil {
-		deltas["clinical_cases"] = *payload.ClinicalCases
-	}
-	if payload.Files != nil {
-		deltas["files"] = *payload.Files
+	for _, key := range []string{"consultations", "questionnaires", "clinical_cases", "files"} {
+		if v, ok := payload[key]; ok && v != nil {
+			switch vv := v.(type) {
+			case float64:
+				if vv > 0 {
+					deltas[key] = int(vv)
+				}
+			case int:
+				if vv > 0 {
+					deltas[key] = vv
+				}
+			}
+		}
 	}
 	if err := h.repo.DecrementSubscriptionFields(id, deltas); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

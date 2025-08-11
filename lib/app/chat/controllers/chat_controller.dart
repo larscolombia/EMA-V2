@@ -11,6 +11,7 @@ import 'package:ema_educacion_medica_avanzada/core/ui/ui_observer_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:ema_educacion_medica_avanzada/core/preferences/string_preference.dart';
+import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 
 import '../../../config/config.dart';
 import '../../profiles/profiles.dart';
@@ -23,6 +24,7 @@ class ChatController extends GetxService {
   final chatsService = Get.find<ChatsService>();
   final keyboardService = Get.find<UiObserverService>();
   final profileController = Get.find<ProfileController>();
+  final userService = Get.find<UserService>();
 
   final currentChat = ChatModel.empty().obs;
   final messages = <ChatMessageModel>[].obs;
@@ -122,43 +124,76 @@ class ChatController extends GetxService {
     print('📄 [ChatController] Documento adjunto: ${currentPdf != null ? "Sí" : "No"}');
     print('💬 [ChatController] Texto: "$cleanUserText"');
 
-    // Validar la cuota de chats y archivos antes de proceder
+    // Validar cuota de chats antes de proceder, pero con política "permitir primero"
+    // Si es un hilo nuevo, permitimos el primer mensaje aunque las cuotas aún no se hayan propagado.
+    final isNewThread = threadId.isEmpty;
     if (!profileController.canCreateMoreChats()) {
-      Get.snackbar(
-        'Límite alcanzado',
-        'Has alcanzado el límite de chats en tu plan actual. Actualiza tu plan para crear más chats.',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.orange,
-        colorText: Colors.white,
-        duration: const Duration(seconds: 5),
-        mainButton: TextButton(
-          onPressed: () => Get.toNamed(Routes.subscriptions.name),
-          child: const Text(
-            'Actualizar Plan',
-            style: TextStyle(color: Colors.white),
+      // Sembrar/actualizar perfil una vez para obtener cuotas actuales
+      if (profileController.currentProfile.value.id <= 0 ||
+          (profileController.currentProfile.value.authToken).isEmpty) {
+        final basic = userService.getProfileData();
+        if (basic.id > 0 && basic.authToken.isNotEmpty) {
+          profileController.currentProfile.value = basic;
+        }
+      }
+      if (profileController.currentProfile.value.id > 0 &&
+          profileController.currentProfile.value.authToken.isNotEmpty) {
+        await profileController.refreshProfile();
+      }
+      // Re-evaluar tras refrescar; si sigue sin cuota y NO es hilo nuevo, bloquear
+      if (!profileController.canCreateMoreChats() && !isNewThread) {
+        Get.snackbar(
+          'Límite alcanzado',
+          'Has alcanzado el límite de chats en tu plan actual. Actualiza tu plan para crear más chats.',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.orange,
+          colorText: Colors.white,
+          duration: const Duration(seconds: 5),
+          mainButton: TextButton(
+            onPressed: () => Get.toNamed(Routes.subscriptions.name),
+            child: const Text(
+              'Actualizar Plan',
+              style: TextStyle(color: Colors.white),
+            ),
           ),
-        ),
-      );
-      return;
+        );
+        return;
+      }
+      // Si es un hilo nuevo, continuamos de forma optimista y el backend hará cumplir límites si aplica
     }
 
     if (currentPdf != null && !profileController.canUploadMoreFiles()) {
-      Get.snackbar(
-        'Límite alcanzado',
-        'Has alcanzado el límite de archivos PDF en tu plan actual. Actualiza tu plan para subir más archivos.',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.orange,
-        colorText: Colors.white,
-        duration: const Duration(seconds: 5),
-        mainButton: TextButton(
-          onPressed: () => Get.toNamed(Routes.subscriptions.name),
-          child: const Text(
-            'Actualizar Plan',
-            style: TextStyle(color: Colors.white),
+      // Seed profile if it's not ready
+      if (profileController.currentProfile.value.id <= 0 ||
+          (profileController.currentProfile.value.authToken).isEmpty) {
+        final basic = userService.getProfileData();
+        if (basic.id > 0 && basic.authToken.isNotEmpty) {
+          profileController.currentProfile.value = basic;
+        }
+      }
+      if (profileController.currentProfile.value.id > 0 &&
+          profileController.currentProfile.value.authToken.isNotEmpty) {
+        await profileController.refreshProfile();
+      }
+      // Si sigue sin cuota, bloquear solo si no es un hilo nuevo; si es nuevo, permitir para evitar falsos negativos
+      if (!profileController.canUploadMoreFiles() && !isNewThread) {
+        Get.snackbar(
+          'Límite alcanzado',
+          'Has alcanzado el límite de archivos PDF en tu plan actual. Actualiza tu plan para subir más archivos.',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.orange,
+          colorText: Colors.white,
+          duration: const Duration(seconds: 5),
+          mainButton: TextButton(
+            onPressed: () => Get.toNamed(Routes.subscriptions.name),
+            child: const Text(
+              'Actualizar Plan',
+              style: TextStyle(color: Colors.white),
+            ),
           ),
-        ),
-      );
-      return;
+        );
+        return;
+      }
     }
 
     try {
@@ -166,41 +201,97 @@ class ChatController extends GetxService {
       isTyping.value = true;
       print('✅ [ChatController] Estados inicializados: isSending=${isSending.value}, isTyping=${isTyping.value}');
 
-      // Si el chat es nuevo, inicializamos el hilo con el asistente usando el primer mensaje
+      // Si el chat es nuevo, intentar iniciar el hilo con el mensaje del usuario.
+      // Si falla (p.ej., 500), reintentar con prompt vacío para obtener threadId
       if (threadId.isEmpty) {
         print('🆕 [ChatController] Iniciando nuevo chat');
-        final start = await chatsService.startChat(cleanUserText);
-        threadId = start.threadId;
-        threadPref.setValue(threadId);
+        try {
+          final start = await chatsService.startChat(cleanUserText);
+          threadId = start.threadId;
+          threadPref.setValue(threadId);
 
-        currentChat.value = await chatsService.generateNewChat(
-          currentChat.value,
-          cleanUserText,
-          null,
-          threadId,
-        );
+          currentChat.value = await chatsService.generateNewChat(
+            currentChat.value,
+            cleanUserText,
+            null,
+            threadId,
+          );
 
-        final success = await profileController.decrementChatQuota();
-        if (success) {
-          profileController.refreshChatQuota();
+          final success = await profileController.decrementChatQuota();
+          if (success) {
+            profileController.refreshChatQuota();
+          }
+
+          final userMessage = ChatMessageModel.user(
+            chatId: currentChat.value.uid,
+            text: cleanUserText,
+          );
+          chatsService.chatMessagesLocalData.insertOne(userMessage);
+          messages.add(userMessage);
+
+          final aiMessage = ChatMessageModel.ai(
+            chatId: currentChat.value.uid,
+            text: start.text,
+          );
+          chatsService.chatMessagesLocalData.insertOne(aiMessage);
+          messages.add(aiMessage);
+          scrollToBottom();
+          pendingPdf.value = null;
+          return;
+        } catch (e) {
+          // Fallback: crear thread con prompt vacío y luego enviar el mensaje del usuario vía streaming
+          print('⚠️ [ChatController] Fallback: start vacío tras error: $e');
+          final start = await chatsService.startChat('');
+          threadId = start.threadId;
+          threadPref.setValue(threadId);
+
+          currentChat.value = await chatsService.generateNewChat(
+            currentChat.value,
+            cleanUserText,
+            null,
+            threadId,
+          );
+
+          final userMessage = ChatMessageModel.user(
+            chatId: currentChat.value.uid,
+            text: cleanUserText,
+          );
+
+          // Reset scroll state to allow auto scrolling
+          resetAutoScroll();
+
+          messages.add(userMessage);
+          pendingPdf.value = null;
+          scrollToBottom();
+
+          // Mostrar burbuja de AI y transmitir tokens
+          final aiMessage = ChatMessageModel.ai(
+            chatId: currentChat.value.uid,
+            text: '',
+          );
+          messages.add(aiMessage);
+          scrollToBottom();
+
+          final response = await chatsService.sendMessage(
+            threadId: threadId,
+            userMessage: userMessage,
+            file: null,
+            onStream: (token) {
+              aiMessage.text += token;
+              messages.refresh();
+              scrollToBottom();
+            },
+          );
+          aiMessage.text = response.text;
+
+          // Descontar cuota después de enviar en fallback
+          final success = await profileController.decrementChatQuota();
+          if (success) {
+            profileController.refreshChatQuota();
+          }
+
+          return;
         }
-
-        final userMessage = ChatMessageModel.user(
-          chatId: currentChat.value.uid,
-          text: cleanUserText,
-        );
-        chatsService.chatMessagesLocalData.insertOne(userMessage);
-        messages.add(userMessage);
-
-        final aiMessage = ChatMessageModel.ai(
-          chatId: currentChat.value.uid,
-          text: start.text,
-        );
-        chatsService.chatMessagesLocalData.insertOne(aiMessage);
-        messages.add(aiMessage);
-        scrollToBottom();
-        pendingPdf.value = null;
-        return;
       }
 
       if (messages.length <= 1) {

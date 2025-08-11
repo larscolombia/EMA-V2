@@ -33,15 +33,44 @@ func RegisterRoutes(r *gin.Engine) {
 func getProfile(c *gin.Context) {
 	log.Printf("[PROFILE][GET] incoming request: path=%s headers=%v", c.Request.URL.Path, c.Request.Header)
 	idStr := c.Param("id")
+	// Try to parse id, but allow fallback to session user if invalid/zero
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		log.Printf("[PROFILE][GET] invalid id param: %s", idStr)
-		c.JSON(http.StatusBadRequest, gin.H{"message": "ID inválido"})
-		return
+		id = 0
 	}
-	user := getUserByID(id)
+
+	// Resolve session user from Bearer token (Laravel-like guard)
+	auth := c.GetHeader("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
+	var sessionUser *migrations.User
+	if token != "" {
+		if email, ok := login.GetEmailFromToken(token); ok {
+			sessionUser = migrations.GetUserByEmail(email)
+		}
+	}
+
+	// Pick effective user: if id==0 or mismatched, prefer session user when available
+	var user *migrations.User
+	if id == 0 && sessionUser != nil {
+		user = sessionUser
+		log.Printf("[PROFILE][GET] using session user (id=%d) due to id=0", user.ID)
+	} else if sessionUser != nil && id != 0 && id != sessionUser.ID {
+		// Frontend may send mismatched path; follow token to keep it tolerant
+		user = sessionUser
+		log.Printf("[PROFILE][GET] id mismatch (param=%d, session=%d). Using session user.", id, sessionUser.ID)
+	} else if id > 0 {
+		user = getUserByID(id)
+	}
+
 	if user == nil {
-		log.Printf("[PROFILE][GET] user not found for id=%d", id)
+		if id == 0 && sessionUser == nil {
+			// No valid id and no session user -> unauthorized like Laravel
+			log.Printf("[PROFILE][GET] no valid user: id=0 and token invalid/absent")
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "No autorizado"})
+			return
+		}
+		log.Printf("[PROFILE][GET] user not found (param id=%d)", id)
 		c.JSON(http.StatusNotFound, gin.H{"message": "Usuario no encontrado"})
 		return
 	}
