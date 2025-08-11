@@ -20,21 +20,22 @@ class ProfileController extends GetxController {
   RxBool isLoading = true.obs;
   RxList<CountryModel> countries = <CountryModel>[].obs;
   final RxString selectedPlan = ''.obs;
-  final user = UserModel(
-    id: 0,
-    firstName: '',
-    lastName: '',
-    email: '',
-    status: false,
-    language: '',
-    darkMode: false,
-    createdAt: DateTime.now(),
-    updatedAt: DateTime.now(),
-    fullName: '',
-    profileImage: '',
-    authToken: '',
-    countryName: '',
-  ).obs;
+  final user =
+      UserModel(
+        id: 0,
+        firstName: '',
+        lastName: '',
+        email: '',
+        status: false,
+        language: '',
+        darkMode: false,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        fullName: '',
+        profileImage: '',
+        authToken: '',
+        countryName: '',
+      ).obs;
   final Rx<MostStudiedCategory?> mostStudiedCategory =
       Rxn<MostStudiedCategory>();
 
@@ -54,12 +55,14 @@ class ProfileController extends GetxController {
       gender: detailed.gender ?? basic.gender,
       age: detailed.age ?? basic.age,
       city: detailed.city ?? basic.city,
-      countryName: detailed.countryName?.isNotEmpty == true
-          ? detailed.countryName
-          : basic.countryName,
-      profileImage: detailed.profileImage.isNotEmpty
-          ? detailed.profileImage
-          : basic.profileImage,
+      countryName:
+          detailed.countryName?.isNotEmpty == true
+              ? detailed.countryName
+              : basic.countryName,
+      profileImage:
+          detailed.profileImage.isNotEmpty
+              ? detailed.profileImage
+              : basic.profileImage,
       subscription: detailed.activeSubscription ?? basic.activeSubscription,
       authToken: basic.authToken,
     );
@@ -77,19 +80,19 @@ class ProfileController extends GetxController {
   }
 
   bool canUploadMoreFiles() {
-  if (useAllFeatures) return true;
-  final sub = currentProfile.value.activeSubscription;
-  if (remainingFiles.value > 0) return true;
-  // Fallback to subscription value in case quotas haven't been propagated yet
-  return (sub?.files ?? 0) > 0;
+    if (useAllFeatures) return true;
+    final sub = currentProfile.value.activeSubscription;
+    if (remainingFiles.value > 0) return true;
+    // Fallback to subscription value in case quotas haven't been propagated yet
+    return (sub?.files ?? 0) > 0;
   }
 
   bool canCreateMoreChats() {
-  if (useAllFeatures) return true;
-  final sub = currentProfile.value.activeSubscription;
-  if (remainingChats.value > 0) return true;
-  // Fallback to subscription value in case quotas haven't been propagated yet
-  return (sub?.consultations ?? 0) > 0;
+    if (useAllFeatures) return true;
+    final sub = currentProfile.value.activeSubscription;
+    if (remainingChats.value > 0) return true;
+    // Fallback to subscription value in case quotas haven't been propagated yet
+    return (sub?.consultations ?? 0) > 0;
   }
 
   bool canCreateMoreClinicalCases() {
@@ -99,7 +102,7 @@ class ProfileController extends GetxController {
   bool canCreateMoreQuizzes() {
     return remainingQuizzes.value > 0 || useAllFeatures;
   }
-  
+
   void updateSelectedPlan(String planName) {
     selectedPlan.value = planName;
   }
@@ -109,8 +112,9 @@ class ProfileController extends GetxController {
       isLoading.value = true;
       final basicProfile = userService.getProfileData();
       if (basicProfile.id != 0) {
-        final detailedProfile =
-            await profileService.fetchDetailedProfile(basicProfile);
+        final detailedProfile = await profileService.fetchDetailedProfile(
+          basicProfile,
+        );
 
         // Fusionar datos para asegurarnos de conservar campos importantes
         final mergedProfile = mergeProfiles(basicProfile, detailedProfile);
@@ -171,8 +175,10 @@ class ProfileController extends GetxController {
       final newProfile = await profileService.updateProfile(updatedProfile);
 
       // Usar merge para preservar datos críticos
-      final mergedProfile = mergeProfiles(currentProfile.value, newProfile)
-          .copyWith(authToken: currentToken);
+      final mergedProfile = mergeProfiles(
+        currentProfile.value,
+        newProfile,
+      ).copyWith(authToken: currentToken);
       currentProfile.value = mergedProfile;
 
       await userService.setCurrentUser(mergedProfile);
@@ -210,9 +216,11 @@ class ProfileController extends GetxController {
 
   Future<void> updateProfileImage(XFile imageFile) async {
     try {
-      print('🔄 [ProfileController] Iniciando actualización de imagen de perfil');
+      print(
+        '🔄 [ProfileController] Iniciando actualización de imagen de perfil',
+      );
       print('📁 [ProfileController] Archivo seleccionado: ${imageFile.path}');
-      
+
       Get.dialog(
         const Center(child: CircularProgressIndicator()),
         barrierDismissible: false,
@@ -224,7 +232,9 @@ class ProfileController extends GetxController {
         imageFile,
       );
       print('✅ [ProfileController] Servicio completado exitosamente');
-      print('🖼️ [ProfileController] Nueva URL de imagen: ${tempProfile.profileImage}');
+      print(
+        '🖼️ [ProfileController] Nueva URL de imagen: ${tempProfile.profileImage}',
+      );
 
       currentProfile.value = currentProfile.value.copyWith(
         profileImage: tempProfile.profileImage,
@@ -233,8 +243,9 @@ class ProfileController extends GetxController {
       print('🔄 [ProfileController] Perfil actualizado localmente');
 
       print('🔄 [ProfileController] Refrescando perfil desde servidor...');
-      final updatedProfile =
-          await profileService.fetchDetailedProfile(currentProfile.value);
+      final updatedProfile = await profileService.fetchDetailedProfile(
+        currentProfile.value,
+      );
       currentProfile.value = updatedProfile;
       update();
       print('✅ [ProfileController] Perfil refrescado exitosamente');
@@ -251,11 +262,11 @@ class ProfileController extends GetxController {
     } catch (e) {
       print('❌ [ProfileController] Error en updateProfileImage: $e');
       print('📋 [ProfileController] Tipo de error: ${e.runtimeType}');
-      
+
       Get.back();
       final errorMessage = _extractErrorMessage(e);
       print('📝 [ProfileController] Mensaje de error extraído: $errorMessage');
-      
+
       Get.snackbar(
         'Error',
         errorMessage,
@@ -268,11 +279,13 @@ class ProfileController extends GetxController {
 
   Future<void> refreshProfile({bool forceCancel = false}) async {
     try {
-      final fetchedProfile =
-          await profileService.fetchDetailedProfile(currentProfile.value);
-      final updatedProfile = forceCancel
-          ? fetchedProfile.copyWith(subscription: null)
-          : fetchedProfile;
+      final fetchedProfile = await profileService.fetchDetailedProfile(
+        currentProfile.value,
+      );
+      final updatedProfile =
+          forceCancel
+              ? fetchedProfile.copyWith(subscription: null)
+              : fetchedProfile;
 
       currentProfile.value = updatedProfile;
       await userService.setCurrentUser(updatedProfile);
