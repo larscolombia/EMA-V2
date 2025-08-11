@@ -7,3 +7,4 @@ Environment variables
 How it works
 - Funciones `SendWelcome` y `SendPasswordChanged` construyen y envían correos.
 - Los errores se retornan para que las llamadas los registren sin detener la ejecución.
+- `SendUpgradeSuggestion` envía promociones para cambiar a planes premium.

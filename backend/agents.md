@@ -10,6 +10,7 @@ Packages
 - openai: LLM client (go-openai) reading OPENAI_API_KEY and CHAT_PRINCIPAL_ASSISTANT.
 - chat: assistant HTTP endpoints; uses SSE for streaming.
 - sse: helper for Server-Sent Events.
+- marketing: envía correos y pushes periódicos a usuarios con plan gratuito.
 
 Boot sequence (main.go)
 1) Load .env (optional).
