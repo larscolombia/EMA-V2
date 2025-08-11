@@ -1,0 +1,10 @@
+export 'controllers/clinical_case_controller.dart';
+export 'data/api_clinical_case_data.dart';
+export 'model/clinical_case_model.dart';
+export 'model/clinical_case_type.dart';
+export 'views/clinical_case_analytical_view.dart';
+export 'widgets/clinical_case_chat.dart';
+export 'widgets/clinical_case_field_box.dart';
+export 'widgets/clinical_case_options.dart';
+export 'widgets/clinical_cases_list_by_history.dart';
+export 'widgets/clinical_cases_menu.dart';
