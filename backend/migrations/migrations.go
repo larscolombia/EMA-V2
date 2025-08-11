@@ -1,107 +1,75 @@
 package migrations
 
-import (
-	"database/sql"
-	"fmt"
-	"time"
-)
+
+import "database/sql"
 
 type User struct {
-	ID        int    `db:"id"`
-	FirstName string `db:"first_name"`
-	LastName  string `db:"last_name"`
-	Email     string `db:"email"`
-	Password  string `db:"password"`
-	Role      string `db:"role"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+        ID        int
+        FirstName string
+        LastName  string
+        Email     string
+        Password  string
+        Role      string
 }
 
-var db *sql.DB
-
-// Init sets the DB connection for migrations and queries
-func Init(database *sql.DB) {
-	db = database
+var users = []User{
+        {
+                ID:        1,
+                FirstName: "Leonardo",
+                LastName:  "Herrera",
+                Email:     "leonardoherrerac10@gmail.com",
+                Password:  "supersecret",
+                Role:      "super_admin",
+        },
 }
 
-// Migrate creates required tables if they do not exist
-func Migrate() error {
-	if db == nil {
-		return fmt.Errorf("db is not initialized")
-	}
-	// create database-level settings are assumed handled externally; ensure users table
-	createUsers := `
-	CREATE TABLE IF NOT EXISTS users (
-		id INT AUTO_INCREMENT PRIMARY KEY,
-		first_name VARCHAR(100) NOT NULL,
-		last_name VARCHAR(100) NOT NULL,
-		email VARCHAR(191) NOT NULL UNIQUE,
-		password VARCHAR(191) NOT NULL,
-		role VARCHAR(50) NOT NULL DEFAULT 'user',
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
-	if _, err := db.Exec(createUsers); err != nil {
-		return err
-	}
-	return nil
-}
-
-// SeedDefaultUser inserts a default user if it doesn't exist
-func SeedDefaultUser() error {
-	if db == nil {
-		return fmt.Errorf("db is not initialized")
-	}
-	// check if email exists
-	var count int
-	if err := db.QueryRow("SELECT COUNT(1) FROM users WHERE email = ?", "leonardoherrerac10@gmail.com").Scan(&count); err != nil {
-		return err
-	}
-	if count == 0 {
-		_, err := db.Exec(
-			"INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)",
-			"Leonardo", "Herrera", "leonardoherrerac10@gmail.com", "supersecret", "super_admin",
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// GetUserByEmail retrieves a user from DB by email
 func GetUserByEmail(email string) *User {
-	if db == nil {
-		return nil
-	}
-	row := db.QueryRow("SELECT id, first_name, last_name, email, password, role, created_at, updated_at FROM users WHERE email = ? LIMIT 1", email)
-	var u User
-	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.UpdatedAt); err != nil {
-		return nil
-	}
-	return &u
+        for i, u := range users {
+                if u.Email == email {
+                        return &users[i]
+                }
+        }
+        return nil
 }
 
-// EmailExists checks if a user with the given email exists
-func EmailExists(email string) (bool, error) {
-	if db == nil {
-		return false, fmt.Errorf("db is not initialized")
-	}
-	var count int
-	if err := db.QueryRow("SELECT COUNT(1) FROM users WHERE email = ?", email).Scan(&count); err != nil {
-		return false, err
-	}
-	return count > 0, nil
+// Run ejecuta las migraciones necesarias para el sistema de planes y suscripciones
+func Run(db *sql.DB) error {
+        _, err := db.Exec(`CREATE TABLE IF NOT EXISTS subscription_plans (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                currency VARCHAR(10) NOT NULL,
+                price DECIMAL(10,2) NOT NULL,
+                billing VARCHAR(50) NOT NULL,
+                consultations INT NOT NULL,
+                questionnaires INT NOT NULL,
+                clinical_cases INT NOT NULL,
+                files INT NOT NULL
+        )`)
+        if err != nil {
+                return err
+        }
+
+        _, err = db.Exec(`CREATE TABLE IF NOT EXISTS subscriptions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                plan_id INT NOT NULL,
+                start_date DATETIME NOT NULL,
+                end_date DATETIME NULL,
+                frequency INT NOT NULL,
+                consultations INT NOT NULL,
+                questionnaires INT NOT NULL,
+                clinical_cases INT NOT NULL,
+                files INT NOT NULL,
+                FOREIGN KEY (plan_id) REFERENCES subscription_plans(id)
+        )`)
+        if err != nil {
+                return err
+        }
+
+        _, err = db.Exec(`INSERT INTO subscription_plans (name, currency, price, billing, consultations, questionnaires, clinical_cases, files)
+                SELECT * FROM (SELECT 'Free' AS name, 'USD' AS currency, 0 AS price, 'Mensual' AS billing, 5 AS consultations, 5 AS questionnaires, 5 AS clinical_cases, 5 AS files) AS tmp
+                WHERE NOT EXISTS (SELECT id FROM subscription_plans WHERE name = 'Free')`)
+        return err
 }
 
-// CreateUser inserts a new user record
-func CreateUser(firstName, lastName, email, password, role string) error {
-	if db == nil {
-		return fmt.Errorf("db is not initialized")
-	}
-	_, err := db.Exec(
-		"INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)",
-		firstName, lastName, email, password, role,
-	)
-	return err
-}
+

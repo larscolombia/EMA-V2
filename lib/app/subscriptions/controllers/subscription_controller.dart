@@ -41,19 +41,25 @@ class SubscriptionController extends GetxController {
     }
   }
 
-  Future<String> initiateCheckout({
+  Future<void> createSubscription({
     required int subscriptionPlanId,
     required int frequency,
   }) async {
     try {
       final currentUser = _userService.getProfileData();
-      final checkoutUrl = await _apiSubscriptionService.initiateCheckout(
+      await _apiSubscriptionService.createSubscription(
         userId: currentUser.id,
         subscriptionPlanId: subscriptionPlanId,
         frequency: frequency,
         authToken: currentUser.authToken,
       );
-      return checkoutUrl;
+      Get.snackbar(
+        'Éxito',
+        'Suscripción creada correctamente',
+        snackPosition: SnackPosition.TOP,
+        backgroundColor: Colors.green.withAlpha((0.8 * 255).toInt()),
+        colorText: Colors.white,
+      );
     } catch (e) {
       final errorMessage = _extractErrorMessage(e);
       Get.snackbar(

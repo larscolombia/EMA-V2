@@ -170,11 +170,10 @@ class SubscriptionsView extends StatelessWidget {
             child: ElevatedButton(
               onPressed: () async {
                 try {
-                  final checkoutUrl = await controller.initiateCheckout(
+                  await controller.createSubscription(
                     subscriptionPlanId: subscription.id,
                     frequency: subscription.frequency ?? 0,
                   );
-                  Get.to(() => StripeCheckoutView(checkoutUrl: checkoutUrl));
                 } catch (e) {
                   Get.snackbar('Error', e.toString());
                 }
