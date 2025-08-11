@@ -44,3 +44,14 @@ func SendPasswordChanged(to string) error {
 	log.Printf("[EMAIL] password change notification sent to %s", to)
 	return nil
 }
+
+// SendUpgradeSuggestion envía un correo promocionando los planes premium.
+func SendUpgradeSuggestion(to string) error {
+	subject := "Actualiza a un plan premium"
+	body := "Aprovecha las funcionalidades avanzadas cambiándote a un plan premium."
+	if err := send(to, subject, body); err != nil {
+		return err
+	}
+	log.Printf("[EMAIL] upgrade suggestion sent to %s", to)
+	return nil
+}

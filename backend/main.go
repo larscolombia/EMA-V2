@@ -9,6 +9,7 @@ import (
 	"ema-backend/conn"
 	"ema-backend/countries"
 	"ema-backend/login"
+	"ema-backend/marketing"
 	"ema-backend/migrations"
 	"ema-backend/openai"
 	"ema-backend/profile"
@@ -42,6 +43,9 @@ func main() {
 	if err := migrations.SeedDefaultPlans(); err != nil {
 		log.Printf("seed default plans failed: %v", err)
 	}
+
+	mk := marketing.NewService(db)
+	go mk.Start()
 
 	r := gin.Default()
 
