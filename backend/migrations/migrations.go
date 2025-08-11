@@ -49,6 +49,41 @@ func Migrate() error {
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image VARCHAR(255) DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(100) DEFAULT ''")
 	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profession VARCHAR(100) DEFAULT ''")
+
+	// Subscriptions related tables
+	createPlans := `
+	CREATE TABLE IF NOT EXISTS subscription_plans (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(100) NOT NULL,
+		currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+		price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+		billing VARCHAR(50) NOT NULL DEFAULT 'Mensual',
+		consultations INT NOT NULL DEFAULT 0,
+		questionnaires INT NOT NULL DEFAULT 0,
+		clinical_cases INT NOT NULL DEFAULT 0,
+		files INT NOT NULL DEFAULT 0
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createPlans); err != nil {
+		return err
+	}
+	createSubs := `
+	CREATE TABLE IF NOT EXISTS subscriptions (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		user_id INT NOT NULL,
+		plan_id INT NOT NULL,
+		start_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		end_date DATETIME NULL,
+		frequency INT NOT NULL DEFAULT 0,
+		consultations INT NOT NULL DEFAULT 0,
+		questionnaires INT NOT NULL DEFAULT 0,
+		clinical_cases INT NOT NULL DEFAULT 0,
+		files INT NOT NULL DEFAULT 0,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE CASCADE
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createSubs); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -67,6 +102,32 @@ func SeedDefaultUser() error {
 			"Leonardo", "Herrera", "leonardoherrerac10@gmail.com", "supersecret", "super_admin",
 		)
 		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SeedDefaultPlans inserts some default plans if none exist
+func SeedDefaultPlans() error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(1) FROM subscription_plans").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// Free plan
+		if _, err := db.Exec(`INSERT INTO subscription_plans (name, currency, price, billing, consultations, questionnaires, clinical_cases, files) VALUES ('Free','USD',0.00,'Mensual',3,10,5,2)`); err != nil {
+			return err
+		}
+		// Pro plan
+		if _, err := db.Exec(`INSERT INTO subscription_plans (name, currency, price, billing, consultations, questionnaires, clinical_cases, files) VALUES ('Pro','USD',9.99,'Mensual',30,50,25,100)`); err != nil {
+			return err
+		}
+		// Premium plan
+		if _, err := db.Exec(`INSERT INTO subscription_plans (name, currency, price, billing, consultations, questionnaires, clinical_cases, files) VALUES ('Premium','USD',19.99,'Mensual',100,200,100,500)`); err != nil {
 			return err
 		}
 	}
@@ -122,6 +183,18 @@ func UpdateUserProfile(id int, firstName, lastName, city, profession string) err
 	if city == "" { city = cur.City }
 	if profession == "" { profession = cur.Profession }
 	_, err := db.Exec("UPDATE users SET first_name = ?, last_name = ?, city = ?, profession = ?, updated_at = NOW() WHERE id = ?", firstName, lastName, city, profession, id)
+	return err
+}
+
+// CreateUser inserts a new user record
+func CreateUser(firstName, lastName, email, password, role string) error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	_, err := db.Exec(
+		"INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)",
+		firstName, lastName, email, password, role,
+	)
 	return err
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"ema-backend/migrations"
 	"ema-backend/openai"
 	"ema-backend/profile"
+	"ema-backend/subscriptions"
+	"ema-backend/countries"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -37,6 +38,9 @@ func main() {
 	if err := migrations.SeedDefaultUser(); err != nil {
 		log.Printf("seed default user failed: %v", err)
 	}
+	if err := migrations.SeedDefaultPlans(); err != nil {
+		log.Printf("seed default plans failed: %v", err)
+	}
 
 	r := gin.Default()
 
@@ -55,6 +59,14 @@ func main() {
 	// Profile routes and static media
 	profile.RegisterRoutes(r)
 	r.Static("/media", "./media")
+
+	// Subscriptions routes
+	subRepo := subscriptions.NewRepository(db)
+	subHandler := subscriptions.NewHandler(subRepo)
+	subHandler.RegisterRoutes(r)
+
+	// Countries route (simple list)
+	countries.RegisterRoutes(r)
 
 	// Chat/OpenAI endpoints (optional if keys provided)
 	ai := openai.NewClient()
