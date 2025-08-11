@@ -67,10 +67,10 @@ func Migrate() error {
 		return err
 	}
 	createSubs := `
-	CREATE TABLE IF NOT EXISTS subscriptions (
-		id INT AUTO_INCREMENT PRIMARY KEY,
-		user_id INT NOT NULL,
-		plan_id INT NOT NULL,
+        CREATE TABLE IF NOT EXISTS subscriptions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                plan_id INT NOT NULL,
 		start_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		end_date DATETIME NULL,
 		frequency INT NOT NULL DEFAULT 0,
@@ -82,6 +82,33 @@ func Migrate() error {
 		FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE CASCADE
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createSubs); err != nil {
+		return err
+	}
+
+	createTests := `
+        CREATE TABLE IF NOT EXISTS tests (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createTests); err != nil {
+		return err
+	}
+
+	createTestQuestions := `
+        CREATE TABLE IF NOT EXISTS test_questions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                test_id INT NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                options TEXT,
+                category VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createTestQuestions); err != nil {
 		return err
 	}
 	return nil
