@@ -250,13 +250,23 @@ class ChatController extends GetxService {
 
       try {
         print('🚀 [ChatController] Enviando mensaje al servidor...');
-        final aiMessage = await chatsService.sendMessage(
-          threadId: threadId,
-          userMessage: userMessage,
-          file: currentPdf,
+        final aiMessage = ChatMessageModel.ai(
+          chatId: currentChat.value.uid,
+          text: '',
         );
         messages.add(aiMessage);
         scrollToBottom();
+        final response = await chatsService.sendMessage(
+          threadId: threadId,
+          userMessage: userMessage,
+          file: currentPdf,
+          onStream: (token) {
+            aiMessage.text += token;
+            messages.refresh();
+            scrollToBottom();
+          },
+        );
+        aiMessage.text = response.text;
         print('✅ [ChatController] Respuesta del servidor recibida');
 
         // Descontar la cuota después de enviar el archivo

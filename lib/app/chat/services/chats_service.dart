@@ -103,6 +103,7 @@ class ChatsService extends GetxService {
     required String threadId,
     required ChatMessageModel userMessage,
     PdfAttachment? file,
+    void Function(String token)? onStream,
   }) async {
     chatMessagesLocalData.insertOne(userMessage);
 
@@ -123,6 +124,7 @@ class ChatsService extends GetxService {
     final apiMessage = await apiChatService.sendMessage(
       threadId: threadId,
       prompt: userMessage.text,
+      onStream: onStream,
     );
     final aiMessage = ChatMessageModel.ai(
       chatId: userMessage.chatId,

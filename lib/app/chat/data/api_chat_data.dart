@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart' as dio;
@@ -59,6 +60,7 @@ class ApiChatData implements IApiChatData {
     required String threadId,
     required String prompt,
     CancelToken? cancelToken,
+    void Function(String token)? onStream,
   }) async {
     const endpoint = '/asistente/message';
 
@@ -71,20 +73,37 @@ class ApiChatData implements IApiChatData {
       _cancelTokens[threadId] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId]!;
 
-      final response = await _dio.post(
+      final response = await _dio.post<ResponseBody>(
         endpoint,
         data: data,
         cancelToken: token,
+        options: Options(responseType: ResponseType.stream, headers: {
+          'Accept': 'text/event-stream',
+        }),
       );
 
       _cancelTokens.remove(threadId);
 
-      if (response.statusCode == 200) {
-        final text = response.data['text'] as String;
-        return ChatMessageModel.ai(chatId: threadId, text: text);
-      } else {
-        throw Exception('Error al enviar mensaje');
+      final stream = response.data.stream.transform(utf8.decoder);
+      final buffer = StringBuffer();
+
+      await for (final chunk in stream) {
+        for (final line in const LineSplitter().convert(chunk)) {
+          if (line.startsWith('data:')) {
+            final content = line.substring(5).trim();
+            if (content == '[DONE]') {
+              break;
+            }
+            buffer.write(content);
+            onStream?.call(content);
+          }
+        }
       }
+
+      return ChatMessageModel.ai(
+        chatId: threadId,
+        text: buffer.toString(),
+      );
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation
