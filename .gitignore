@@ -60,4 +60,4 @@ coverage/
 
 # Exclude user-specific files
 *.DS_Store
-*.env
+backend/.env
