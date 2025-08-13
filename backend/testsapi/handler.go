@@ -245,7 +245,11 @@ func (h *Handler) evaluate(c *gin.Context) {
 		"Responde estrictamente en JSON válido con las claves:",
 		"evaluation: array de {question_id:int, is_correct:0|1, fit:string} (fit = feedback clínico breve por pregunta).",
 		"correct_answers:int,",
-		"fit_global:string = párrafo de feedback profesional (2–4 oraciones) basado en las respuestas, con una calificación explícita (por ejemplo: 'Calificación: 8/10' o 'Calificación: 80/100') y citas bibliográficas abreviadas.",
+		"fit_global:string = TEXTO MULTIPÁRRAFO estructurado (no HTML) con las siguientes secciones claramente separadas por doble salto de línea:\n"+
+			"1) 'Puntaje y Calificación:' en la primera línea incluye: 'Total de respuestas correctas: X de N.' en la siguiente línea 'Puntaje: <porcentaje con 2 decimales>%.' y en la tercera línea 'Clasificación: <desempeño alto|desempeño adecuado|desempeño moderado|desempeño bajo>' según porcentaje (>=85 alto, 70-84 adecuado, 50-69 moderado, <50 bajo).\n"+
+			"2) 'Retroalimentación:' párrafos (mínimo 2, máximo 5) que: a) Feliciten el esfuerzo. b) Destaquen fortalezas específicas detectadas. c) Señalen brevemente los patrones de error o conceptos a reforzar (sin listas extensas). d) Incluyan 1-2 recomendaciones prácticas de estudio. e) Inviten a solicitar explicación detallada de preguntas falladas.\n"+
+			"3) 'Referencias:' una línea con 1–3 citas abreviadas de fuentes médicas de alto valor (ej: 'Harrison. Principios de Medicina Interna.' o 'PMID: 12345678').\n"+
+			"Mantén formato de texto plano, sin viñetas, sin JSON dentro. Usa saltos de línea dobles entre secciones y simples entre oraciones dentro de cada párrafo.",
 		// Instrucciones adicionales
 		"Limita el contenido estrictamente a medicina interna.",
 		"Usa exclusivamente información contenida en el vector vs_680fc484cef081918b2b9588b701e2f4 y en https://pubmed.ncbi.nlm.nih.gov/.",
