@@ -170,6 +170,29 @@ func TestChatHandlerMultipart(t *testing.T) {
 		if _, err := io.Copy(fw, f); err != nil {
 			t.Fatalf("copy pdf: %v", err)
 		}
+	} else {
+		// No fixture found: create a tiny temporary PDF so we always cover the file-upload path
+		tmp, err := os.CreateTemp("", "sample-*.pdf")
+		if err != nil {
+			t.Fatalf("CreateTemp pdf: %v", err)
+		}
+		// Minimal PDF header/footer; server only checks extension and size > 0
+		_, _ = tmp.WriteString("%PDF-1.4\n%EOF\n")
+		_ = tmp.Close()
+		defer os.Remove(tmp.Name())
+
+		fw, err := w.CreateFormFile("file", filepath.Base(tmp.Name()))
+		if err != nil {
+			t.Fatalf("CreateFormFile tmp pdf: %v", err)
+		}
+		f, err := os.Open(tmp.Name())
+		if err != nil {
+			t.Fatalf("open tmp pdf: %v", err)
+		}
+		defer f.Close()
+		if _, err := io.Copy(fw, f); err != nil {
+			t.Fatalf("copy tmp pdf: %v", err)
+		}
 	}
 	// Add prompt
 	_ = w.WriteField("prompt", "Este es un mensaje de prueba para el asistente. Si hay audio, úsalo como contexto.")
