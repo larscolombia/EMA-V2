@@ -122,7 +122,19 @@ func (h *Handler) Message(c *gin.Context) {
 					vsID, err := h.AI.EnsureVectorStore(c, formThreadID)
 					if err != nil {
 						log.Printf("ERROR EnsureVectorStore: %v", err)
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						// Fallback: responder sin RAG (sin documento)
+						fb := strings.TrimSpace(prompt)
+						if fb == "" {
+							fb = "Responde al usuario. Nota: no se pudo procesar el documento adjunto."
+						} else {
+							fb = fb + "\n\nNota: no se pudo procesar el documento adjunto."
+						}
+						stream, ferr := h.AI.StreamMessage(c, fb)
+						if ferr != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+							return
+						}
+						sse.Stream(c, stream)
 						return
 					}
 					log.Printf("DEBUG: Successfully created/found vector store: %s", vsID)
@@ -130,7 +142,19 @@ func (h *Handler) Message(c *gin.Context) {
 					fileID, err := h.AI.UploadAssistantFile(c, formThreadID, tmp)
 					if err != nil {
 						log.Printf("ERROR UploadAssistantFile: %v", err)
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						// Fallback: responder sin RAG (sin documento)
+						fb := strings.TrimSpace(prompt)
+						if fb == "" {
+							fb = "Responde al usuario. Nota: no se pudo procesar el documento adjunto."
+						} else {
+							fb = fb + "\n\nNota: no se pudo procesar el documento adjunto."
+						}
+						stream, ferr := h.AI.StreamMessage(c, fb)
+						if ferr != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+							return
+						}
+						sse.Stream(c, stream)
 						return
 					}
 					log.Printf("DEBUG: Successfully uploaded file: %s", fileID)
@@ -138,13 +162,26 @@ func (h *Handler) Message(c *gin.Context) {
 					pStart := time.Now()
 					if err := h.AI.PollFileProcessed(c, fileID, 8*time.Second); err != nil {
 						log.Printf("{\"event\":\"file.processing\",\"thread\":%q,\"vs\":%q,\"file_id\":%q,\"status\":\"processing\",\"elapsed_ms\":%d}", formThreadID, vsID, fileID, time.Since(pStart).Milliseconds())
+						// No 500: informar procesamiento en curso
 						c.JSON(http.StatusAccepted, gin.H{"status": "processing", "message": "archivo en procesamiento, intenta en 1–2 min", "file_id": fileID})
 						return
 					}
 					// processed: add to vector store and proceed to run
 					if err := h.AI.AddFileToVectorStore(c, vsID, fileID); err != nil {
 						log.Printf("ERROR AddFileToVectorStore: %v", err)
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						// Fallback: responder sin RAG (sin documento)
+						fb := strings.TrimSpace(prompt)
+						if fb == "" {
+							fb = "Responde al usuario. Nota: no se pudo procesar el documento adjunto."
+						} else {
+							fb = fb + "\n\nNota: no se pudo procesar el documento adjunto."
+						}
+						stream, ferr := h.AI.StreamMessage(c, fb)
+						if ferr != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+							return
+						}
+						sse.Stream(c, stream)
 						return
 					}
 					log.Printf("DEBUG: Successfully added file %s to vector store %s", fileID, vsID)
@@ -157,7 +194,15 @@ func (h *Handler) Message(c *gin.Context) {
 					log.Printf("{\"event\":\"run.start\",\"thread\":%q,\"vs\":%q,\"file_id\":%q}", formThreadID, vsID, fileID)
 					stream, err := h.AI.StreamAssistantMessage(c, formThreadID, base)
 					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+						// Fallback: responder sin RAG (sin documento)
+						fb := base + "\n\nNota: no se pudo usar el documento adjunto."
+						fbs, ferr := h.AI.StreamMessage(c, fb)
+						if ferr != nil {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+							return
+						}
+						c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+						sse.Stream(c, fbs)
 						return
 					}
 					c.Header("X-Assistant-Start-Ms", time.Since(start).String())
