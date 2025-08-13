@@ -227,7 +227,15 @@ func (h *Handler) Message(c *gin.Context) {
 			// allow client thread id but we create our own thread on /start; we just send the prompt here
 			stream, err := h.AI.StreamAssistantMessage(c, formThreadID, prompt)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				// Fallback: responder sin Assistants si falla
+				log.Printf("ERROR StreamAssistantMessage (multipart): %v", err)
+				fbStream, ferr := h.AI.StreamMessage(c, prompt)
+				if ferr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+					return
+				}
+				c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+				sse.Stream(c, fbStream)
 				return
 			}
 			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
@@ -259,7 +267,15 @@ func (h *Handler) Message(c *gin.Context) {
 	if h.AI.AssistantID != "" && len(h.AI.AssistantID) >= 5 && h.AI.AssistantID[:5] == "asst_" && strings.HasPrefix(req.ThreadID, "thread_") {
 		stream, err := h.AI.StreamAssistantMessage(c, req.ThreadID, req.Prompt)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			// Fallback: responder sin Assistants si falla
+			log.Printf("ERROR StreamAssistantMessage (json): %v", err)
+			fbStream, ferr := h.AI.StreamMessage(c, req.Prompt)
+			if ferr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": ferr.Error()})
+				return
+			}
+			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+			sse.Stream(c, fbStream)
 			return
 		}
 		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
