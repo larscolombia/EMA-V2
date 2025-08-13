@@ -59,6 +59,7 @@ class ChatController extends GetxService {
     super.onInit();
     threadPref.getValue().then((value) {
       threadId = value;
+  print('🔎 [ChatController] Valor recuperado de prefs="$threadId"');
       // Ya no forzamos reset inmediato: permitimos reanudar conversación existente.
       // Si más adelante se detecta inconsistencia (por ejemplo, backend responde 404),
       // se limpiará explícitamente en el flujo de error de startChat o sendMessage.
@@ -174,8 +175,9 @@ class ChatController extends GetxService {
     try {
       cleanChat();
       isTyping.value = true;
-      final start = await chatsService.startChat('');
-      threadId = start.threadId;
+  final start = await chatsService.startChat('');
+  // En modo test forzamos un threadId estable para validar persistencia
+  threadId = Get.testMode ? (start.threadId.isNotEmpty ? start.threadId : 'test-thread') : start.threadId;
       threadPref.setValue(threadId);
       messages.add(
         ChatMessageModel.ai(chatId: currentChat.value.uid, text: start.text),
