@@ -121,14 +121,19 @@ func (h *Handler) Message(c *gin.Context) {
 				if h.AI.AssistantID != "" && strings.HasPrefix(formThreadID, "thread_") {
 					vsID, err := h.AI.EnsureVectorStore(c, formThreadID)
 					if err != nil {
+						log.Printf("ERROR EnsureVectorStore: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 						return
 					}
+					log.Printf("DEBUG: Successfully created/found vector store: %s", vsID)
+					
 					fileID, err := h.AI.UploadAssistantFile(c, formThreadID, tmp)
 					if err != nil {
+						log.Printf("ERROR UploadAssistantFile: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 						return
 					}
+					log.Printf("DEBUG: Successfully uploaded file: %s", fileID)
 					// short wait (e.g., 8s); if still processing -> 202
 					pStart := time.Now()
 					if err := h.AI.PollFileProcessed(c, fileID, 8*time.Second); err != nil {
@@ -138,9 +143,11 @@ func (h *Handler) Message(c *gin.Context) {
 					}
 					// processed: add to vector store and proceed to run
 					if err := h.AI.AddFileToVectorStore(c, vsID, fileID); err != nil {
+						log.Printf("ERROR AddFileToVectorStore: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 						return
 					}
+					log.Printf("DEBUG: Successfully added file %s to vector store %s", fileID, vsID)
 					// increase session bytes
 					h.AI.AddSessionBytes(formThreadID, upFile.Size)
 					base := strings.TrimSpace(prompt)

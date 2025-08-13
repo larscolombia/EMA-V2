@@ -211,7 +211,11 @@ func (c *Client) TranscribeFile(ctx context.Context, filePath string) (string, e
 
 // --- Assistants API helpers (HTTP) --- //
 
-func (c *Client) apiURL(path string) string { return "https://api.openai.com/v1" + path }
+func (c *Client) apiURL(path string) string { 
+	url := "https://api.openai.com/v1" + path
+	fmt.Printf("DEBUG: API URL: %s\n", url)
+	return url 
+}
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (*http.Response, error) {
 	if c.key == "" {
@@ -253,16 +257,23 @@ func okOrNotFound(resp *http.Response) error {
 
 // ensureVectorStore returns the existing vector store id for a thread or creates a new one.
 func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string, error) {
+	if c.key == "" {
+		return "", fmt.Errorf("OpenAI API key not set")
+	}
+
 	c.vsMu.RLock()
 	if id, ok := c.vectorStore[threadID]; ok {
 		c.vsMu.RUnlock()
+		fmt.Printf("DEBUG: Using existing vector store: %s for thread: %s\n", id, threadID)
 		return id, nil
 	}
 	c.vsMu.RUnlock()
 	// create new vector store named with threadID
 	payload := map[string]any{"name": "vs_session_" + threadID}
+	fmt.Printf("DEBUG: Creating new vector store for thread: %s\n", threadID)
 	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores", payload)
 	if err != nil {
+		fmt.Printf("ERROR: Failed to create vector store: %v\n", err)
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -310,9 +321,25 @@ func (c *Client) addFileToVectorStore(ctx context.Context, vsID, fileID string) 
 
 // AddFileToVectorStore exported wrapper
 func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) error {
+	fmt.Printf("DEBUG: Adding file %s to vector store %s\n", fileID, vsID)
+	
+	if c.key == "" {
+		return fmt.Errorf("OpenAI API key not set")
+	}
+
+	if vsID == "" {
+		return fmt.Errorf("vector store ID is empty")
+	}
+
+	if fileID == "" {
+		return fmt.Errorf("file ID is empty")
+	}
+
 	if err := c.addFileToVectorStore(ctx, vsID, fileID); err != nil {
+		fmt.Printf("ERROR: Failed to add file to vector store: %v\n", err)
 		return err
 	}
+	
 	// bump file count for the owning thread if we can map vs->thread
 	// Our mapping is threadID -> vsID, so reverse lookup
 	c.vsMu.RLock()
@@ -322,6 +349,7 @@ func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) 
 			c.sessMu.Lock()
 			c.sessFiles[thread] = c.sessFiles[thread] + 1
 			c.sessMu.Unlock()
+			fmt.Printf("DEBUG: Incremented file count for thread %s\n", thread)
 			return nil
 		}
 	}
@@ -371,14 +399,28 @@ func (c *Client) PollFileProcessed(ctx context.Context, fileID string, timeout t
 
 // UploadAssistantFile uploads a file with purpose=assistants; caches per-thread by sha256
 func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath string) (string, error) {
+	if c.key == "" {
+		return "", fmt.Errorf("OpenAI API key not set")
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		fmt.Printf("ERROR: File does not exist: %s\n", filePath)
+		return "", fmt.Errorf("file not found: %s", filePath)
+	}
+
+	fmt.Printf("DEBUG: Uploading file: %s for thread: %s\n", filePath, threadID)
+	
 	// hash content
 	f, err := os.Open(filePath)
 	if err != nil {
+		fmt.Printf("ERROR: Failed to open file: %v\n", err)
 		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
+		fmt.Printf("ERROR: Failed to calculate file hash: %v\n", err)
 		return "", err
 	}
 	sum := h.Sum(nil)
@@ -387,12 +429,14 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	c.fileMu.RLock()
 	if id, ok := c.fileCache[key]; ok {
 		c.fileMu.RUnlock()
+		fmt.Printf("DEBUG: Using cached file ID: %s\n", id)
 		return id, nil
 	}
 	c.fileMu.RUnlock()
 	// reopen for upload
 	f2, err := os.Open(filePath)
 	if err != nil {
+		fmt.Printf("ERROR: Failed to reopen file: %v\n", err)
 		return "", err
 	}
 	defer f2.Close()
@@ -401,6 +445,7 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 		"purpose": bytes.NewBufferString("assistants"),
 	})
 	if err != nil {
+		fmt.Printf("ERROR: Failed to upload file: %v\n", err)
 		return "", err
 	}
 	defer resp.Body.Close()
