@@ -44,6 +44,10 @@ func Handler(c *gin.Context) {
 		return
 	}
 
+	// Normalize inputs
+	creds.Email = strings.TrimSpace(strings.ToLower(creds.Email))
+	creds.Password = strings.TrimSpace(creds.Password)
+
 	user := migrations.GetUserByEmail(creds.Email)
 	if user != nil && user.Password == creds.Password {
 		token := generateToken()

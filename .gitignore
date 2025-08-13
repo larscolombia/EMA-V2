@@ -65,3 +65,4 @@ backend/media/
 backend/tmp/
 backend/openai/tmp/
 backend/openai/data/
+backend/ema-backend

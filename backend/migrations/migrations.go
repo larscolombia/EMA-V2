@@ -3,6 +3,7 @@ package migrations
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -46,9 +47,16 @@ func Migrate() error {
 	if _, err := db.Exec(createUsers); err != nil {
 		return err
 	}
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image VARCHAR(255) DEFAULT ''")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(100) DEFAULT ''")
-	_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profession VARCHAR(100) DEFAULT ''")
+	// Ensure optional columns exist (profile_image, city, profession)
+	if err := ensureColumnExists("users", "profile_image", "profile_image VARCHAR(255) DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "city", "city VARCHAR(100) DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "profession", "profession VARCHAR(100) DEFAULT ''"); err != nil {
+		return err
+	}
 
 	// Subscriptions related tables
 	createPlans := `
@@ -100,19 +108,38 @@ func Migrate() error {
 	return nil
 }
 
-// SeedDefaultUser inserts a default user if it doesn't exist
+// ensureColumnExists checks information_schema and adds the column if missing
+func ensureColumnExists(table, column, columnDef string) error {
+	var cnt int
+	q := `SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`
+	if err := db.QueryRow(q, table, column).Scan(&cnt); err != nil {
+		return err
+	}
+	if cnt == 0 {
+		_, err := db.Exec("ALTER TABLE "+table+" ADD COLUMN "+columnDef)
+		return err
+	}
+	return nil
+}
+
+// SeedDefaultUser inserts a default user if it doesn't exist, using env vars
 func SeedDefaultUser() error {
 	if db == nil {
 		return fmt.Errorf("db is not initialized")
 	}
+	email := os.Getenv("DEFAULT_USER_EMAIL")
+	password := os.Getenv("DEFAULT_USER_PASSWORD")
+	if email == "" || password == "" {
+		return nil
+	}
 	var count int
-	if err := db.QueryRow("SELECT COUNT(1) FROM users WHERE email = ?", "leonardoherrerac10@gmail.com").Scan(&count); err != nil {
+	if err := db.QueryRow("SELECT COUNT(1) FROM users WHERE email = ?", email).Scan(&count); err != nil {
 		return err
 	}
 	if count == 0 {
 		_, err := db.Exec(
 			"INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)",
-			"Leonardo", "Herrera", "leonardoherrerac10@gmail.com", "supersecret", "super_admin",
+			"Leonardo", "Herrera", email, password, "super_admin",
 		)
 		if err != nil {
 			return err
