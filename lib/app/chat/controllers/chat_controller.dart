@@ -59,11 +59,11 @@ class ChatController extends GetxService {
     super.onInit();
     threadPref.getValue().then((value) {
       threadId = value;
-      if (threadId.isNotEmpty && messages.isEmpty) {
-        // Posible threadId obsoleto tras reinicio: forzar nuevo hilo
-        print('🧹 [ChatController] Reset de threadId obsoleto tras reinicio');
-        threadId = '';
-        threadPref.setValue('');
+      // Ya no forzamos reset inmediato: permitimos reanudar conversación existente.
+      // Si más adelante se detecta inconsistencia (por ejemplo, backend responde 404),
+      // se limpiará explícitamente en el flujo de error de startChat o sendMessage.
+      if (threadId.isNotEmpty) {
+        print('🔁 [ChatController] threadId recuperado: $threadId');
       }
     });
     keyboardService.isKeyboardVisible.listen((visible) {
@@ -280,7 +280,8 @@ class ChatController extends GetxService {
 
     // Validar cuota de chats antes de proceder, pero con política "permitir primero".
     // Consideramos nuevo hilo si no hay threadId o si no hay mensajes (threadId persistido podría ser viejo).
-    final isNewThread = threadId.isEmpty || messages.isEmpty;
+  // Consideramos nuevo hilo SOLO si no hay threadId. Tener lista de mensajes vacía ya no obliga a reiniciar.
+  final isNewThread = threadId.isEmpty;
     if (!profileController.canCreateMoreChats()) {
       print(
         '⚖️ [ChatController] canCreateMoreChats=false (pre refresh), isNewThread=$isNewThread',
@@ -364,7 +365,8 @@ class ChatController extends GetxService {
 
       // Si el chat es nuevo, intentar iniciar el hilo con el mensaje del usuario.
       // Si falla (p.ej., 500), reintentar con prompt vacío para obtener threadId
-      if (threadId.isEmpty || messages.isEmpty) {
+  // Nuevo chat únicamente cuando no hay threadId vigente.
+  if (threadId.isEmpty) {
         print('🆕 [ChatController] Iniciando nuevo chat');
         try {
           final start = await chatsService.startChat(cleanUserText);
@@ -500,7 +502,8 @@ class ChatController extends GetxService {
         }
       }
 
-      if (messages.length <= 1) {
+  // Solo generar registro de chat si aún no existe uno persistido (currentChat.shortTitle vacío indica nuevo)
+  if (currentChat.value.shortTitle.isEmpty) {
         print('🔄 [ChatController] Generando nuevo chat con documento');
         currentChat.value = await chatsService.generateNewChat(
           currentChat.value,
@@ -609,7 +612,7 @@ class ChatController extends GetxService {
         scrollToBottom();
       }
     } catch (e) {
-      print('❌ [ChatController] Error general: $e');
+  print('❌ [ChatController] Error general: $e (threadId=$threadId, texto="${cleanUserText.substring(0, cleanUserText.length>30?30:cleanUserText.length)}")');
       debugPrint('Error sending message: $e');
     } finally {
       isSending.value = false;
