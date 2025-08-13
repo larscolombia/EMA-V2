@@ -40,6 +40,10 @@ class _MessageFieldBoxState extends State<MessageFieldBox> {
     _textController = TextEditingController();
     _focusNode = FocusNode();
     widget.chatController.setFocusNode(_focusNode);
+    // Listener para reconstruir y recalcular 'canSend' cuando cambia el texto
+    _textController.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
