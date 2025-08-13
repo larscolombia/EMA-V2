@@ -280,8 +280,8 @@ class ChatController extends GetxService {
 
     // Validar cuota de chats antes de proceder, pero con política "permitir primero".
     // Consideramos nuevo hilo si no hay threadId o si no hay mensajes (threadId persistido podría ser viejo).
-  // Consideramos nuevo hilo SOLO si no hay threadId. Tener lista de mensajes vacía ya no obliga a reiniciar.
-  final isNewThread = threadId.isEmpty;
+    // Consideramos nuevo hilo SOLO si no hay threadId. Tener lista de mensajes vacía ya no obliga a reiniciar.
+    final isNewThread = threadId.isEmpty;
     if (!profileController.canCreateMoreChats()) {
       print(
         '⚖️ [ChatController] canCreateMoreChats=false (pre refresh), isNewThread=$isNewThread',
@@ -303,7 +303,7 @@ class ChatController extends GetxService {
         print(
           '🚧 [ChatController] Sin cuota para crear nuevo chat; mostrando aviso pero continuando',
         );
-        Get.snackbar(
+  if(!Get.testMode) Get.snackbar(
           'Límite alcanzado',
           'Has alcanzado el límite de chats en tu plan actual. Actualiza tu plan para crear más chats.',
           snackPosition: SnackPosition.TOP,
@@ -337,7 +337,7 @@ class ChatController extends GetxService {
       }
       // Si sigue sin cuota, bloquear solo si no es un hilo nuevo; si es nuevo, permitir para evitar falsos negativos
       if (!profileController.canUploadMoreFiles() && !isNewThread) {
-        Get.snackbar(
+  if(!Get.testMode) Get.snackbar(
           'Límite alcanzado',
           'Has alcanzado el límite de archivos PDF en tu plan actual. Actualiza tu plan para subir más archivos.',
           snackPosition: SnackPosition.TOP,
@@ -365,8 +365,8 @@ class ChatController extends GetxService {
 
       // Si el chat es nuevo, intentar iniciar el hilo con el mensaje del usuario.
       // Si falla (p.ej., 500), reintentar con prompt vacío para obtener threadId
-  // Nuevo chat únicamente cuando no hay threadId vigente.
-  if (threadId.isEmpty) {
+      // Nuevo chat únicamente cuando no hay threadId vigente.
+      if (threadId.isEmpty) {
         print('🆕 [ChatController] Iniciando nuevo chat');
         try {
           final start = await chatsService.startChat(cleanUserText);
@@ -376,7 +376,7 @@ class ChatController extends GetxService {
           currentChat.value = await chatsService.generateNewChat(
             currentChat.value,
             cleanUserText,
-            null,
+            currentPdf, // incluir archivo para shortTitle si aplica
             threadId,
           );
 
@@ -384,15 +384,22 @@ class ChatController extends GetxService {
           if (success) {
             profileController.refreshChatQuota();
           }
+          // Validar PDF si existe antes de enviar primer mensaje
+          if (currentPdf != null) {
+            print('📄 [ChatController] Validando archivo PDF (nuevo chat)');
+            isUploadingPdf.value = true;
+            await attachmentService.validateFile(currentPdf);
+            isUploadingPdf.value = false;
+          }
 
           final userMessage = ChatMessageModel.user(
             chatId: currentChat.value.uid,
             text: cleanUserText,
+            attach: currentPdf,
           );
           messages.add(userMessage);
 
-          // Si el backend no devuelve texto inicial (caso actual), enviar el mensaje y streamear la respuesta
-          if ((start.text).trim().isEmpty) {
+          // Si hay PDF o el backend no envía texto inicial, procedemos a enviar mensaje (streaming) inmediatamente.
             final aiMessage = ChatMessageModel.ai(
               chatId: currentChat.value.uid,
               text: '',
@@ -402,7 +409,7 @@ class ChatController extends GetxService {
             final response = await chatsService.sendMessage(
               threadId: threadId,
               userMessage: userMessage,
-              file: null,
+              file: currentPdf,
               onStream: (token) {
                 if (!hasFirstToken) {
                   hasFirstToken = true;
@@ -423,19 +430,12 @@ class ChatController extends GetxService {
             }
             chatsService.chatMessagesLocalData.insertOne(aiMessage);
             pendingPdf.value = null;
+            // Descontar cuota de archivo si se usó
+            if (currentPdf != null) {
+              final fileSuccess = await profileController.decrementFileQuota();
+              if (fileSuccess) profileController.refreshFileQuota();
+            }
             return;
-          } else {
-            // Mantener comportamiento si el backend llega a devolver texto inicial
-            final aiMessage = ChatMessageModel.ai(
-              chatId: currentChat.value.uid,
-              text: start.text,
-            );
-            chatsService.chatMessagesLocalData.insertOne(aiMessage);
-            messages.add(aiMessage);
-            scrollToBottom();
-            pendingPdf.value = null;
-            return;
-          }
         } catch (e) {
           // Fallback: crear thread con prompt vacío y luego enviar el mensaje del usuario vía streaming
           print('⚠️ [ChatController] Fallback: start vacío tras error: $e');
@@ -450,9 +450,18 @@ class ChatController extends GetxService {
             threadId,
           );
 
+          // Validar PDF si existe
+          if (currentPdf != null) {
+            print('📄 [ChatController] Validando archivo PDF (fallback nuevo chat)');
+            isUploadingPdf.value = true;
+            await attachmentService.validateFile(currentPdf);
+            isUploadingPdf.value = false;
+          }
+
           final userMessage = ChatMessageModel.user(
             chatId: currentChat.value.uid,
             text: cleanUserText,
+            attach: currentPdf,
           );
 
           // Reset scroll state to allow auto scrolling
@@ -472,7 +481,7 @@ class ChatController extends GetxService {
           final response = await chatsService.sendMessage(
             threadId: threadId,
             userMessage: userMessage,
-            file: null,
+            file: currentPdf,
             onStream: (token) {
               if (!hasFirstToken) {
                 hasFirstToken = true;
@@ -497,13 +506,17 @@ class ChatController extends GetxService {
           if (success) {
             profileController.refreshChatQuota();
           }
+          if (currentPdf != null) {
+            final fileSuccess = await profileController.decrementFileQuota();
+            if (fileSuccess) profileController.refreshFileQuota();
+          }
 
           return;
         }
       }
 
-  // Solo generar registro de chat si aún no existe uno persistido (currentChat.shortTitle vacío indica nuevo)
-  if (currentChat.value.shortTitle.isEmpty) {
+      // Solo generar registro de chat si aún no existe uno persistido (currentChat.shortTitle vacío indica nuevo)
+      if (currentChat.value.shortTitle.isEmpty) {
         print('🔄 [ChatController] Generando nuevo chat con documento');
         currentChat.value = await chatsService.generateNewChat(
           currentChat.value,
@@ -526,9 +539,15 @@ class ChatController extends GetxService {
         print('✅ [ChatController] Archivo PDF validado');
       }
 
+      // Si el usuario envía solo el PDF sin texto en un hilo existente, generamos un prompt útil
+      var effectiveText = cleanUserText;
+      if (effectiveText.isEmpty && currentPdf != null) {
+        effectiveText = 'Analiza el archivo adjunto y dame un resumen en español con los puntos más importantes, estructura y conclusiones principales. '; // prompt por defecto
+      }
+
       final userMessage = ChatMessageModel.user(
         chatId: currentChat.value.uid,
-        text: cleanUserText,
+        text: effectiveText,
         attach: currentPdf,
       );
 
@@ -612,7 +631,9 @@ class ChatController extends GetxService {
         scrollToBottom();
       }
     } catch (e) {
-  print('❌ [ChatController] Error general: $e (threadId=$threadId, texto="${cleanUserText.substring(0, cleanUserText.length>30?30:cleanUserText.length)}")');
+      print(
+        '❌ [ChatController] Error general: $e (threadId=$threadId, texto="${cleanUserText.substring(0, cleanUserText.length > 30 ? 30 : cleanUserText.length)}")',
+      );
       debugPrint('Error sending message: $e');
     } finally {
       isSending.value = false;

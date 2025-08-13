@@ -696,7 +696,8 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
-		strict := "Responde únicamente usando información recuperada de los documentos de este chat. Si no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos cuando sea posible."
+		// Ajuste: permitir saludos/conversación natural sin forzar mensaje de 'No encontré...' si el usuario solo saluda.
+		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s) sin pedir que reformule. Para preguntas que requieren datos concretos del/los documento(s) debes usar EXCLUSIVAMENTE la información recuperada de los documentos de este hilo. Si después de revisar no hay evidencia suficiente para responder esa pregunta específica, responde exactamente: 'No encontré información en el archivo adjunto.' Siempre que cites información encontrada incluye fragmentos textuales concisos. No inventes contenido que no esté en los documentos."
 		// Bias to the most recently uploaded file if any
 		c.lastMu.RLock()
 		if lf, ok := c.lastFile[threadID]; ok && strings.TrimSpace(lf.Name) != "" {
@@ -742,7 +743,8 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 	go func() {
 		defer close(out)
 		// Constrain the run to only use the vector store
-		strict := "Responde únicamente usando información recuperada de los documentos de este chat. Si no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos cuando sea posible."
+		// Ajuste: permitir saludos y conversación general; solo emitir 'No encontré...' cuando la pregunta exige datos del documento y realmente no existen.
+		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s). Para preguntas que requieren datos concretos del/los documento(s) usa solo la información recuperada. Si tras revisar no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos textuales relevantes siempre que haya evidencia y no inventes datos." 
 		// Bias to this uploaded file
 		if base := filepath.Base(filePath); base != "" {
 			strict = strict + " Responde sobre el archivo recientemente subido '" + base + "' sin pedir confirmación, salvo que el usuario indique otro documento."

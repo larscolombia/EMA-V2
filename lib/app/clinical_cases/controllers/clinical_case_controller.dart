@@ -31,6 +31,8 @@ class ClinicalCaseController extends GetxController
 
   final isComplete = false.obs;
   final isTyping = false.obs; // New observable
+  final analyticalAiTurns = 0.obs; // Cuenta respuestas IA en modo analítico
+  static const int maxAnalyticalAiTurns = 15;
 
   @override
   void onInit() {
@@ -136,6 +138,7 @@ class ClinicalCaseController extends GetxController
           clinicalCase,
         );
         _insertMessages(newMessages);
+  analyticalAiTurns.value = newMessages.length; // usualmente 1
       } else {
         final newQuestion = await clinicalCaseServive.startInteractive(
           clinicalCase,
@@ -354,6 +357,10 @@ class ClinicalCaseController extends GetxController
       if (cleanUserText.isEmpty) {
         return;
       }
+      // Bloquear más mensajes si ya se completó el caso analítico
+      if (isComplete.value && clinicalCase?.type == ClinicalCaseType.analytical) {
+        return;
+      }
       if (clinicalCase == null) {
         throw Exception('Se perdió la conexción del caso clínico');
       }
@@ -372,6 +379,13 @@ class ClinicalCaseController extends GetxController
         userMessage,
       ); // Await AI response
       messages.add(aiMessage);
+      if (clinicalCase.type == ClinicalCaseType.analytical) {
+        analyticalAiTurns.value += 1;
+        // Si alcanzó el máximo, generar cierre automático
+        if (analyticalAiTurns.value >= maxAnalyticalAiTurns && !isComplete.value) {
+          await _finalizeAnalyticalCase(clinicalCase);
+        }
+      }
 
       _scrollToBottom();
 
@@ -385,6 +399,34 @@ class ClinicalCaseController extends GetxController
         meta: 'userText: $userText',
       );
       isTyping.value = false; // Ensure indicator is hidden on error
+    }
+  }
+
+  Future<void> _finalizeAnalyticalCase(ClinicalCaseModel clinicalCase) async {
+    try {
+      isTyping.value = true;
+      // Prompt para cierre: resume hallazgos, diagnóstico probable, diferenciales, plan inicial y bibliografía.
+    const closingPrompt = 'Genera un resumen final estructurado del caso: '
+      '1) Resumen clínico conciso 2) Diagnóstico más probable y diferenciales clave 3) Justificación clínica '
+      '4) Plan diagnóstico y terapéutico inicial 5) Errores comunes a evitar 6) Bibliografía (formato breve). '
+      'No hagas más preguntas. Marca el final claramente.';
+
+      final userClosingMessage = ChatMessageModel.user(
+        chatId: clinicalCase.uid,
+        text: closingPrompt,
+      );
+      messages.add(userClosingMessage);
+      _scrollToBottom();
+
+      final aiClosing = await clinicalCaseServive.sendMessage(userClosingMessage);
+      messages.add(aiClosing);
+      isComplete.value = true;
+    } catch (e) {
+      // Si falla el cierre, no bloquear al usuario (podría intentar nuevamente manualmente)
+      Logger.error('Error al generar cierre analítico: $e');
+    } finally {
+      isTyping.value = false;
+      _scrollToBottom();
     }
   }
 
