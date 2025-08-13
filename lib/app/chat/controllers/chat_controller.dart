@@ -46,6 +46,10 @@ class ChatController extends GetxService {
   final userManuallyScrolled = false.obs;
   final autoScrollEnabled = true.obs;
 
+  // Snapshot of last failed send to enable retry
+  ChatMessageModel? _lastFailedUserMessage;
+  PdfAttachment? _lastFailedPdf;
+
   @override
   void onInit() {
     super.onInit();
@@ -123,6 +127,72 @@ class ChatController extends GetxService {
 
   void attachPdf(PdfAttachment pdf) {
     pendingPdf.value = pdf;
+  }
+
+  /// Retry the last failed send without duplicating the user bubble.
+  Future<void> retryLastSend() async {
+    if (isSending.value) return;
+    final failedMsg = _lastFailedUserMessage;
+    final failedPdf = _lastFailedPdf;
+    if (failedMsg == null) return;
+
+    // Remove the last error bubble if it is present
+    if (messages.isNotEmpty &&
+        messages.last.aiMessage &&
+        (messages.last.text.contains('¡Ups!') ||
+            messages.last.text.contains('Error'))) {
+      messages.removeLast();
+    }
+
+    isSending.value = true;
+    isTyping.value = true;
+    try {
+      final aiMessage = ChatMessageModel.ai(chatId: failedMsg.chatId, text: '');
+      var hasFirstToken = false;
+      final response = await chatsService.sendMessage(
+        threadId: threadId,
+        userMessage: failedMsg,
+        file: failedPdf,
+        onStream: (token) {
+          if (!hasFirstToken) {
+            hasFirstToken = true;
+            aiMessage.text = token;
+            messages.add(aiMessage);
+          } else {
+            aiMessage.text += token;
+          }
+          messages.refresh();
+          scrollToBottom();
+        },
+      );
+      if (!hasFirstToken) {
+        aiMessage.text = response.text;
+        messages.add(aiMessage);
+      } else {
+        aiMessage.text = response.text;
+      }
+      // Success: clear snapshot
+      _lastFailedUserMessage = null;
+      _lastFailedPdf = null;
+      if (failedPdf != null) {
+        final success = await profileController.decrementFileQuota();
+        if (success) {
+          profileController.refreshFileQuota();
+        }
+      }
+    } catch (e) {
+      messages.add(
+        ChatMessageModel.temporal(
+          '¡Ups! Parece que hubo un problema al procesar tu mensaje. '
+          'Por favor, intenta nuevamente en unos momentos.',
+          true,
+        ),
+      );
+      scrollToBottom();
+    } finally {
+      isSending.value = false;
+      isTyping.value = false;
+    }
   }
 
   Future<void> sendMessage([String? userText]) async {
@@ -445,6 +515,9 @@ class ChatController extends GetxService {
         }
       } catch (error) {
         print('❌ [ChatController] Error al enviar mensaje: $error');
+        // Keep snapshot for retry
+        _lastFailedUserMessage = userMessage;
+        _lastFailedPdf = currentPdf;
         messages.add(
           ChatMessageModel.temporal(
             '¡Ups! Parece que hubo un problema al procesar tu mensaje. '

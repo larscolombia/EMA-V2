@@ -36,11 +36,28 @@ class ApiService extends GetxService {
           return handler.next(options);
         },
         onError: (DioException error, ErrorInterceptorHandler handler) async {
+          final status = error.response?.statusCode;
+          final uri = error.requestOptions.uri;
+          dynamic payload = error.response?.data;
+          // Normalize payload to string for clearer console logs
+          String body;
+          if (payload == null) {
+            body = '<no-body>';
+          } else if (payload is String) {
+            body = payload;
+          } else {
+            try {
+              body = payload.toString();
+            } catch (_) {
+              body = '<unprintable-body>';
+            }
+          }
+
           Logger.error(
             error.toString(),
             className: 'ApiService',
             methodName: 'dio.interceptors.add',
-            meta: 'url: ${error.requestOptions.uri}',
+            meta: 'url: $uri | status: $status | body: $body',
           );
           // Retry once on 401 with the latest stored token.
           if (error.response?.statusCode == 401 &&

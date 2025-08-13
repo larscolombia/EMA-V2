@@ -138,7 +138,7 @@ func (h *Handler) Message(c *gin.Context) {
 						return
 					}
 					log.Printf("DEBUG: Successfully created/found vector store: %s", vsID)
-					
+
 					fileID, err := h.AI.UploadAssistantFile(c, formThreadID, tmp)
 					if err != nil {
 						log.Printf("ERROR UploadAssistantFile: %v", err)
@@ -158,9 +158,15 @@ func (h *Handler) Message(c *gin.Context) {
 						return
 					}
 					log.Printf("DEBUG: Successfully uploaded file: %s", fileID)
-					// short wait (e.g., 8s); if still processing -> 202
+					// short wait; if still processing -> 202. Allow override via VS_POLL_SEC for tests.
 					pStart := time.Now()
-					if err := h.AI.PollFileProcessed(c, fileID, 8*time.Second); err != nil {
+					pollSec := 8
+					if v := os.Getenv("VS_POLL_SEC"); v != "" {
+						if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+							pollSec = n
+						}
+					}
+					if err := h.AI.PollFileProcessed(c, fileID, time.Duration(pollSec)*time.Second); err != nil {
 						log.Printf("{\"event\":\"file.processing\",\"thread\":%q,\"vs\":%q,\"file_id\":%q,\"status\":\"processing\",\"elapsed_ms\":%d}", formThreadID, vsID, fileID, time.Since(pStart).Milliseconds())
 						// No 500: informar procesamiento en curso
 						c.JSON(http.StatusAccepted, gin.H{"status": "processing", "message": "archivo en procesamiento, intenta en 1–2 min", "file_id": fileID})
@@ -189,7 +195,8 @@ func (h *Handler) Message(c *gin.Context) {
 					h.AI.AddSessionBytes(formThreadID, upFile.Size)
 					base := strings.TrimSpace(prompt)
 					if base == "" {
-						base = "Por favor, resume el documento adjunto."
+						// Hint to assistant: focus on the most recently uploaded file for this thread
+						base = "Por favor, resume el documento adjunto más reciente (archivo: " + filepath.Base(upFile.Filename) + ")."
 					}
 					log.Printf("{\"event\":\"run.start\",\"thread\":%q,\"vs\":%q,\"file_id\":%q}", formThreadID, vsID, fileID)
 					stream, err := h.AI.StreamAssistantMessage(c, formThreadID, base)

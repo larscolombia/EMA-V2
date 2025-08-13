@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,15 @@ type Client struct {
 	sessMu    sync.RWMutex
 	sessBytes map[string]int64
 	sessFiles map[string]int
+	// last uploaded file per thread to bias instructions
+	lastMu   sync.RWMutex
+	lastFile map[string]LastFileInfo
+}
+
+type LastFileInfo struct {
+	ID   string
+	Name string
+	At   time.Time
 }
 
 func NewClient() *Client {
@@ -56,6 +66,7 @@ func NewClient() *Client {
 		fileCache:   fcMap,
 		sessBytes:   make(map[string]int64),
 		sessFiles:   make(map[string]int),
+		lastFile:    make(map[string]LastFileInfo),
 	}
 }
 
@@ -211,10 +222,10 @@ func (c *Client) TranscribeFile(ctx context.Context, filePath string) (string, e
 
 // --- Assistants API helpers (HTTP) --- //
 
-func (c *Client) apiURL(path string) string { 
+func (c *Client) apiURL(path string) string {
 	url := "https://api.openai.com/v1" + path
 	fmt.Printf("DEBUG: API URL: %s\n", url)
-	return url 
+	return url
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (*http.Response, error) {
@@ -322,7 +333,7 @@ func (c *Client) addFileToVectorStore(ctx context.Context, vsID, fileID string) 
 // AddFileToVectorStore exported wrapper
 func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) error {
 	fmt.Printf("DEBUG: Adding file %s to vector store %s\n", fileID, vsID)
-	
+
 	if c.key == "" {
 		return fmt.Errorf("OpenAI API key not set")
 	}
@@ -339,7 +350,7 @@ func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) 
 		fmt.Printf("ERROR: Failed to add file to vector store: %v\n", err)
 		return err
 	}
-	
+
 	// bump file count for the owning thread if we can map vs->thread
 	// Our mapping is threadID -> vsID, so reverse lookup
 	c.vsMu.RLock()
@@ -410,7 +421,7 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	}
 
 	fmt.Printf("DEBUG: Uploading file: %s for thread: %s\n", filePath, threadID)
-	
+
 	// hash content
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -467,6 +478,11 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	}
 	c.fileMu.Unlock()
 	_ = saveFileCache(snap)
+
+	// remember last uploaded file for this thread
+	c.lastMu.Lock()
+	c.lastFile[threadID] = LastFileInfo{ID: data.ID, Name: filepath.Base(filePath), At: time.Now()}
+	c.lastMu.Unlock()
 	return data.ID, nil
 }
 
@@ -681,6 +697,12 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	go func() {
 		defer close(out)
 		strict := "Responde únicamente usando información recuperada de los documentos de este chat. Si no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos cuando sea posible."
+		// Bias to the most recently uploaded file if any
+		c.lastMu.RLock()
+		if lf, ok := c.lastFile[threadID]; ok && strings.TrimSpace(lf.Name) != "" {
+			strict = strict + " Prioriza el archivo más reciente de este hilo ('" + lf.Name + "') y no pidas confirmación a menos que el usuario lo contradiga."
+		}
+		c.lastMu.RUnlock()
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
 			out <- text
@@ -721,6 +743,10 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		defer close(out)
 		// Constrain the run to only use the vector store
 		strict := "Responde únicamente usando información recuperada de los documentos de este chat. Si no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos cuando sea posible."
+		// Bias to this uploaded file
+		if base := filepath.Base(filePath); base != "" {
+			strict = strict + " Responde sobre el archivo recientemente subido '" + base + "' sin pedir confirmación, salvo que el usuario indique otro documento."
+		}
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
 			out <- text

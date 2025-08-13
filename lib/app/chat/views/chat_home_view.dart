@@ -80,7 +80,7 @@ class _ChatHomeViewState extends State<ChatHomeView>
           message.text.contains('¡Ups!')) {
         return ChatErrorMessage(
           message: message.text,
-          onRetry: () => chatController.cleanChat(),
+          onRetry: () => chatController.retryLastSend(),
         );
       }
     }
@@ -127,10 +127,7 @@ class _ChatHomeViewState extends State<ChatHomeView>
     final actions = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(
-          'Acciones rápidas',
-          style: AppStyles.homeTitle,
-        ),
+        Text('Acciones rápidas', style: AppStyles.homeTitle),
         const SizedBox(height: 32),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
