@@ -9,7 +9,6 @@ import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-
 class ActionsDrawerListController extends GetxService {
   final _actionsList = <ActionModel>[].obs;
   final _actionsService = Get.find<ActionsService>();
@@ -28,9 +27,7 @@ class ActionsDrawerListController extends GetxService {
   int get page => _page.value;
   RxString get titleFilter => _titleFilter;
 
-  ActionsDrawerListController({
-    this.useTypeFilter = true,
-  });
+  ActionsDrawerListController({this.useTypeFilter = true});
 
   @override
   void onInit() {
@@ -67,7 +64,11 @@ class ActionsDrawerListController extends GetxService {
       page: _page.value,
     );
 
-    final actions = await _actionsService.getActions(where: where, whereArgs: whereArgs, page: _page.value);
+    final actions = await _actionsService.getActions(
+      where: where,
+      whereArgs: whereArgs,
+      page: _page.value,
+    );
 
     _actionsList.assignAll(actions);
 
@@ -84,7 +85,7 @@ class ActionsDrawerListController extends GetxService {
   void setTitleFilter(String title) {
     _titleFilter.value = title;
     _page.value = 1;
-    
+
     _changeCounter.value++;
   }
 
@@ -112,11 +113,15 @@ class ActionsDrawerListController extends GetxService {
       page: _page.value,
     );
 
-    final actions = await _actionsService.getActions(where: where, whereArgs: whereArgs, page: _page.value);
+    final actions = await _actionsService.getActions(
+      where: where,
+      whereArgs: whereArgs,
+      page: _page.value,
+    );
 
     _actionsList.addAll(actions);
 
-    loading.value = false;    
+    loading.value = false;
   }
 
   void cleanFilters() {
@@ -141,5 +146,9 @@ class ActionsDrawerListController extends GetxService {
 
     _page.value = 1;
     loadActions(0);
+  }
+
+  Future<void> deleteAction(ActionModel action) async {
+    await _actionsService.deleteAction(action);
   }
 }

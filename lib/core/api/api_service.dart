@@ -1,13 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:ema_educacion_medica_avanzada/config/constants/constants.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
-
+// auth_token_provider is re-exported via core/core.dart
 
 class ApiService extends GetxService {
-  final _userService = Get.find<UserService>();
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
   late Dio _dio;
 
   Future<void> init() async {
@@ -27,24 +24,38 @@ class ApiService extends GetxService {
   void _addTokenInterceptor(Dio dio) {
     dio.interceptors.add(
       InterceptorsWrapper(
-        onRequest:
-            (RequestOptions options, RequestInterceptorHandler handler) async {
-          var token = _userService.currentUser.value.authToken;
-
-          // If the token is not available in the user service, try to
-          // retrieve it from secure storage to keep the session persistent.
-          if (token.isEmpty) {
-            token = await _storage.read(key: 'auth_token') ?? '';
-          }
-
+        onRequest: (
+          RequestOptions options,
+          RequestInterceptorHandler handler,
+        ) async {
+          final token = await AuthTokenProvider.instance.getToken();
           if (token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
 
           return handler.next(options);
         },
-        onError: (DioException error, ErrorInterceptorHandler handler) {
-          Logger.error(error.toString(), className: 'ApiService', methodName: 'dio.interceptors.add', meta: 'url: ${error.requestOptions.uri}');
+        onError: (DioException error, ErrorInterceptorHandler handler) async {
+          Logger.error(
+            error.toString(),
+            className: 'ApiService',
+            methodName: 'dio.interceptors.add',
+            meta: 'url: ${error.requestOptions.uri}',
+          );
+          // Retry once on 401 with the latest stored token.
+          if (error.response?.statusCode == 401 &&
+              error.requestOptions.extra['__retried__'] != true) {
+            final latest = await AuthTokenProvider.instance.getToken();
+            if (latest.isNotEmpty) {
+              final req = error.requestOptions;
+              req.headers['Authorization'] = 'Bearer $latest';
+              req.extra = {...req.extra, '__retried__': true};
+              try {
+                final res = await dio.fetch(req);
+                return handler.resolve(res);
+              } catch (_) {}
+            }
+          }
           return handler.next(error);
         },
       ),

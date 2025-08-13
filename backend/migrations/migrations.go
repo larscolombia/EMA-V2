@@ -84,6 +84,19 @@ func Migrate() error {
 	if _, err := db.Exec(createSubs); err != nil {
 		return err
 	}
+
+	// Medical categories table for quizzes/tests
+	createMedicalCategories := `
+	CREATE TABLE IF NOT EXISTS medical_categories (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(191) NOT NULL UNIQUE,
+		description TEXT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createMedicalCategories); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -130,6 +143,89 @@ func SeedDefaultPlans() error {
 		if _, err := db.Exec(`INSERT INTO subscription_plans (name, currency, price, billing, consultations, questionnaires, clinical_cases, files) VALUES ('Premium','USD',19.99,'Mensual',100,200,100,500)`); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// SeedMedicalCategories inserts a default set of medical specialties used by quizzes/tests
+func SeedMedicalCategories() error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(1) FROM medical_categories").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	categories := []string{
+		"Alergología",
+		"Inmunología clínica",
+		"Cardiología",
+		"Endocrinología",
+		"Gastroenterología",
+		"Geriatría",
+		"Hematología",
+		"Infectología",
+		"Medicina interna",
+		"Medicina física y rehabilitación",
+		"Nefrología",
+		"Neumología",
+		"Neurología",
+		"Oncología médica",
+		"Pediatría",
+		"Psiquiatría",
+		"Reumatología",
+		"Cirugía general",
+		"Cirugía cardiovascular",
+		"Cirugía torácica",
+		"Cirugía plástica estética y reconstructiva",
+		"Cirugía maxilofacial",
+		"Cirugía pediátrica",
+		"Neurocirugía",
+		"Traumatología y ortopedia",
+		"Cirugía de mano",
+		"Cirugía colorrectal",
+		"Cirugía vascular periférica",
+		"Dermatología",
+		"Ginecología y obstetricia",
+		"Oftalmología",
+		"Otorrinolaringología",
+		"Urología",
+		"Anatomía patológica",
+		"Genética médica",
+		"Medicina nuclear",
+		"Radiología",
+		"Medicina de laboratorio",
+		"Microbiología clínica",
+		"Anestesiología",
+		"Medicina del deporte",
+		"Medicina de urgencias y emergencias",
+		"Medicina del trabajo",
+		"Medicina paliativa",
+		"Medicina preventiva",
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare("INSERT INTO medical_categories (name) VALUES (?)")
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, c := range categories {
+		if _, err := stmt.Exec(c); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return nil
 }

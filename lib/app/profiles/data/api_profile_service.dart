@@ -6,16 +6,19 @@ import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
+// AuthTokenProvider is exported by core/core.dart
 
 class ApiProfileService extends ProfileService {
   @override
   Future<UserModel> updateProfile(UserModel profile) async {
     try {
-      final url = Uri.parse('$apiUrl/user-detail/${profile.id}');
+      final token = await AuthTokenProvider.instance.getToken();
+      final effectiveId = profile.id == 0 ? '' : '${profile.id}';
+      final url = Uri.parse('$apiUrl/user-detail/$effectiveId');
       final response = await http.post(
         url,
         headers: {
-          'Authorization': 'Bearer ${profile.authToken}',
+          'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
@@ -27,7 +30,8 @@ class ApiProfileService extends ProfileService {
         return UserModel.fromMap(updatedData);
       } else {
         throw Exception(
-            'Error al actualizar el perfil: ${response.statusCode}');
+          'Error al actualizar el perfil: ${response.statusCode}',
+        );
       }
     } catch (e) {
       throw Exception('Error al actualizar el perfil: $e');
@@ -36,10 +40,14 @@ class ApiProfileService extends ProfileService {
 
   @override
   Future<UserModel> updateProfileImage(
-      UserModel profile, XFile imageFile) async {
+    UserModel profile,
+    XFile imageFile,
+  ) async {
     try {
-      final url = Uri.parse('$apiUrl/user-detail/${profile.id}');
-      
+      final token = await AuthTokenProvider.instance.getToken();
+      final effectiveId = profile.id == 0 ? '' : '${profile.id}';
+      final url = Uri.parse('$apiUrl/user-detail/$effectiveId');
+
       print('🔄 Iniciando actualización de imagen de perfil');
       print('📡 URL: $url');
       print('👤 User ID: ${profile.id}');
@@ -53,7 +61,7 @@ class ApiProfileService extends ProfileService {
       // Crear la solicitud
       var request = http.MultipartRequest('POST', url)
         ..headers.addAll({
-          'Authorization': 'Bearer ${profile.authToken}',
+          'Authorization': 'Bearer $token',
           'Accept': 'application/json',
         });
 
@@ -72,7 +80,7 @@ class ApiProfileService extends ProfileService {
       print('🚀 Enviando solicitud al servidor...');
       final streamedResponse = await request.send();
       final responseStr = await streamedResponse.stream.bytesToString();
-      
+
       print('📊 Respuesta del servidor:');
       print('   Status Code: ${streamedResponse.statusCode}');
       print('   Headers: ${streamedResponse.headers}');
@@ -82,8 +90,10 @@ class ApiProfileService extends ProfileService {
       return _handleResponse(streamedResponse, responseStr);
     } on SocketException {
       print('❌ Error de conexión: No hay conexión a Internet');
-      throw Exception(
-          {'success': false, 'message': 'No hay conexión a Internet'});
+      throw Exception({
+        'success': false,
+        'message': 'No hay conexión a Internet',
+      });
     } on HttpException catch (e) {
       print('❌ Error HTTP: ${e.message}');
       throw Exception({'success': false, 'message': e.message});
@@ -91,19 +101,21 @@ class ApiProfileService extends ProfileService {
       print('❌ Error inesperado: ${e.toString()}');
       throw Exception({
         'success': false,
-        'message': 'Error al actualizar la imagen: ${e.toString()}'
+        'message': 'Error al actualizar la imagen: ${e.toString()}',
       });
     }
   }
 
   Future<void> _validateImageFile(XFile imageFile) async {
     print('🔍 Validando archivo de imagen...');
-    
+
     // Verificar que el archivo existe
     if (!await File(imageFile.path).exists()) {
       print('❌ El archivo no existe: ${imageFile.path}');
-      throw Exception(
-          {'success': false, 'message': 'El archivo de imagen no existe'});
+      throw Exception({
+        'success': false,
+        'message': 'El archivo de imagen no existe',
+      });
     }
 
     // Validar el tipo de archivo
@@ -115,7 +127,7 @@ class ApiProfileService extends ProfileService {
       print('❌ Tipo de archivo no permitido: $mimeType');
       throw Exception({
         'success': false,
-        'message': 'El archivo no es una imagen válida (JPEG, PNG, GIF)'
+        'message': 'El archivo no es una imagen válida (JPEG, PNG, GIF)',
       });
     }
 
@@ -126,17 +138,21 @@ class ApiProfileService extends ProfileService {
 
     if (fileSize > maxSize) {
       print('❌ Archivo demasiado grande: $fileSize bytes');
-      throw Exception(
-          {'success': false, 'message': 'La imagen no puede ser mayor a 5 MB'});
+      throw Exception({
+        'success': false,
+        'message': 'La imagen no puede ser mayor a 5 MB',
+      });
     }
-    
+
     print('✅ Validación completada exitosamente');
   }
 
   UserModel _handleResponse(
-      http.StreamedResponse response, String responseStr) {
+    http.StreamedResponse response,
+    String responseStr,
+  ) {
     print('🔧 Procesando respuesta del servidor...');
-    
+
     if (response.statusCode == 200) {
       print('✅ Status 200 - Procesando datos...');
       final responseData = jsonDecode(responseStr);
@@ -147,7 +163,7 @@ class ApiProfileService extends ProfileService {
         print('❌ Respuesta no contiene datos válidos');
         throw Exception({
           'success': false,
-          'message': 'La respuesta del servidor no contiene datos válidos'
+          'message': 'La respuesta del servidor no contiene datos válidos',
         });
       }
 
@@ -165,13 +181,12 @@ class ApiProfileService extends ProfileService {
 
   @override
   Future<UserModel> fetchDetailedProfile(UserModel profile) async {
-    final url = Uri.parse('$apiUrl/user-detail/${profile.id}');
+    final token = await AuthTokenProvider.instance.getToken();
+    final effectiveId = profile.id == 0 ? '' : '${profile.id}';
+    final url = Uri.parse('$apiUrl/user-detail/$effectiveId');
     final response = await http.get(
       url,
-      headers: {
-        'Authorization': 'Bearer ${profile.authToken}',
-        'Accept': 'application/json',
-      },
+      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
     );
     if (response.statusCode == 200) {
       final responseMap = jsonDecode(response.body) as Map<String, dynamic>;
@@ -184,7 +199,8 @@ class ApiProfileService extends ProfileService {
       return UserModel.fromMap(data);
     } else {
       throw Exception(
-          'Error al obtener perfil detallado: ${response.statusCode}');
+        'Error al obtener perfil detallado: ${response.statusCode}',
+      );
     }
   }
 }

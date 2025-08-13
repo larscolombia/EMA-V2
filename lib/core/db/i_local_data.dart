@@ -1,6 +1,6 @@
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:get/get.dart';
-
 
 abstract class ILocalData<T> {
   final db = Get.find<DatabaseService>().db;
@@ -12,36 +12,62 @@ abstract class ILocalData<T> {
   T fromApi(Map<String, dynamic> map);
   T fromMap(Map<String, dynamic> map);
   Map<String, dynamic> toMap(dynamic item);
-  
-  Future<void> delete({required String where, required List<Object> whereArgs}) async {
+
+  Future<void> delete({
+    required String where,
+    required List<Object> whereArgs,
+  }) async {
     try {
       await db.delete(tableName, where: where, whereArgs: whereArgs);
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalData', methodName: 'delete', meta: 'tableName: $tableName');
-      throw Exception('Error al eliminar $singular del dispositivo.\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalData',
+        methodName: 'delete',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al eliminar $singular del dispositivo.\n${e.toString()}',
+      );
     }
   }
 
   Future<T?> getById(String where, List<Object> whereArgs) async {
     try {
-      final items = await getItems(where: where, whereArgs: whereArgs, limit: 1);
+      final items = await getItems(
+        where: where,
+        whereArgs: whereArgs,
+        limit: 1,
+      );
 
-      return items.isNotEmpty
-        ? items.first
-        : null;
-
+      return items.isNotEmpty ? items.first : null;
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalQuestionsData', methodName: 'getById', meta: 'tableName: $tableName');
-      throw Exception('Error al obtener $singular del dispositivo.\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalQuestionsData',
+        methodName: 'getById',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al obtener $singular del dispositivo.\n${e.toString()}',
+      );
     }
   }
 
-  Future<List<T>> getItems({String? where, List<Object>? whereArgs, String? orderBy, int page = 1, int? limit}) async {
+  Future<List<T>> getItems({
+    String? where,
+    List<Object>? whereArgs,
+    String? orderBy,
+    int page = 1,
+    int? limit,
+  }) async {
     try {
       String sql;
 
       if (where != null && whereArgs == null) {
-        throw Exception('El parámetro whereArgs es obligatorio cuando se especifica el parámetro where.');
+        throw Exception(
+          'El parámetro whereArgs es obligatorio cuando se especifica el parámetro where.',
+        );
       }
 
       sql = 'SELECT * FROM $tableName';
@@ -49,13 +75,20 @@ abstract class ILocalData<T> {
       sql += orderBy != null && orderBy.isNotEmpty ? ' ORDER BY $orderBy' : '';
       sql += limit != null ? ' LIMIT $limit OFFSET ${(page - 1) * limit};' : '';
 
-      final mapList = (await db.rawQuery(sql, whereArgs)).cast<Map<String, dynamic>>();
+      final mapList =
+          (await db.rawQuery(sql, whereArgs)).cast<Map<String, dynamic>>();
 
       return mapList.map((e) => fromMap(e)).toList();
-
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalData', methodName: 'getItems', meta: 'tableName: $tableName');
-      throw Exception('Error al obtener $plural almacenadas en el dispositivo.\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalData',
+        methodName: 'getItems',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al obtener $plural almacenadas en el dispositivo.\n${e.toString()}',
+      );
     }
   }
 
@@ -68,19 +101,36 @@ abstract class ILocalData<T> {
       }
 
       await batch.commit(noResult: true);
-      
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalData', methodName: 'insertMany', meta: 'tableName: $tableName');
-      throw Exception('Error al guardar $plural en el dispositivo.\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalData',
+        methodName: 'insertMany',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al guardar $plural en el dispositivo.\n${e.toString()}',
+      );
     }
   }
 
   Future<void> insertOne(T item) async {
     try {
-      await db.insert(tableName, toMap(item));
+      await db.insert(
+        tableName,
+        toMap(item),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalData', methodName: 'insertOne', meta: 'tableName: $tableName');
-      throw Exception('Error al guardar $singular en el dispositivo.}\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalData',
+        methodName: 'insertOne',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al guardar $singular en el dispositivo.}\n${e.toString()}',
+      );
     }
   }
 
@@ -93,10 +143,16 @@ abstract class ILocalData<T> {
       }
 
       await db.update(tableName, data, where: where, whereArgs: whereArgs);
-
     } catch (e) {
-      Logger.error(e.toString(), className: 'LocalData', methodName: 'update', meta: 'tableName: $tableName');
-      throw Exception('Error al actualizar $singular en el dispositivo.\n${e.toString()}');
+      Logger.error(
+        e.toString(),
+        className: 'LocalData',
+        methodName: 'update',
+        meta: 'tableName: $tableName',
+      );
+      throw Exception(
+        'Error al actualizar $singular en el dispositivo.\n${e.toString()}',
+      );
     }
   }
 }

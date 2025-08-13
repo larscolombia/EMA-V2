@@ -6,6 +6,7 @@ import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
 import '../../app/profiles/repositories/statistics_repository.dart'; // Nueva importación
+// auth_token_provider is re-exported via core/core.dart
 
 class LaravelAuthService extends GetxService {
   /// El método el usuario que inicia la sesión,
@@ -18,13 +19,21 @@ class LaravelAuthService extends GetxService {
       final url = '$apiUrl/login';
       final headers = {HttpHeaders.contentTypeHeader: 'application/json'};
 
-      final response =
-          await client.post(Uri.parse(url), headers: headers, body: body);
+      final response = await client.post(
+        Uri.parse(url),
+        headers: headers,
+        body: body,
+      );
 
       switch (response.statusCode) {
         case 200:
           final responseBody = json.decode(response.body);
-          return UserModel.fromLaravelApi(responseBody);
+          final user = UserModel.fromLaravelApi(responseBody);
+          // Persist auth token for later API calls/background restarts
+          try {
+            await AuthTokenProvider.instance.saveToken(user.authToken);
+          } catch (_) {}
+          return user;
         case 401:
           throw Exception('Contraseña Incorrecta');
         case 422:
@@ -50,7 +59,8 @@ class LaravelAuthService extends GetxService {
 
       if (response.statusCode != 200) {
         throw Exception(
-            'Error inesperado durante el logout: ${response.statusCode}');
+          'Error inesperado durante el logout: ${response.statusCode}',
+        );
       }
 
       // Limpiar la caché de estadísticas al cerrar sesión

@@ -29,25 +29,70 @@ class Subscription {
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
     final plan = json['subscription_plan'];
+
+    int _asInt(dynamic v, {int def = 0}) {
+      if (v == null) return def;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      final s = v.toString();
+      return int.tryParse(s) ?? def;
+    }
+
+    double _asDouble(dynamic v, {double def = 0.0}) {
+      if (v == null) return def;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? def;
+    }
+
+    String _asString(dynamic v, {String def = ''}) {
+      if (v == null) return def;
+      return v.toString();
+    }
+
+    final name =
+        plan != null ? _asString(plan['name']) : _asString(json['name']);
+    final currency =
+        plan != null
+            ? _asString(plan['currency'])
+            : _asString(json['currency']);
+    final price =
+        plan != null ? _asDouble(plan['price']) : _asDouble(json['price']);
+    final billing = plan != null ? 'Mensual' : _asString(json['billing']);
+
     return Subscription(
-      id: json['id'],
-      name: plan != null ? plan['name'] : json['name'],
-      currency: plan != null ? plan['currency'] : json['currency'],
-      price: plan != null
-          ? double.parse(plan['price'].toString())
-          : json['price'].toDouble(),
-      billing: plan != null ? 'Mensual' : json['billing'],
-      consultations:
-          json['consultations'] ?? (plan != null ? plan['consultations'] : 0),
-      questionnaires:
-          json['questionnaires'] ?? (plan != null ? plan['questionnaires'] : 0),
-      clinicalCases:
-          json['clinical_cases'] ?? (plan != null ? plan['clinical_cases'] : 0),
-      files: json['files'] ?? (plan != null ? plan['files'] : 0),
-      frequency: json['frequency'] ?? (plan != null ? plan['frequency'] : 0),
+      id: _asInt(json['id']), // Defaults to 0 if missing/null
+      name: name,
+      currency: currency,
+      price: price,
+      billing: billing,
+      consultations: _asInt(
+        json['consultations'],
+        def: plan != null ? _asInt(plan['consultations']) : 0,
+      ),
+      questionnaires: _asInt(
+        json['questionnaires'],
+        def: plan != null ? _asInt(plan['questionnaires']) : 0,
+      ),
+      clinicalCases: _asInt(
+        json['clinical_cases'],
+        def: plan != null ? _asInt(plan['clinical_cases']) : 0,
+      ),
+      files: _asInt(
+        json['files'],
+        def: plan != null ? _asInt(plan['files']) : 0,
+      ),
+      frequency:
+          json.containsKey('frequency')
+              ? _asInt(json['frequency'])
+              : (plan != null ? _asInt(plan['frequency']) : 0),
       endDate:
-          json['end_date'] != null ? DateTime.parse(json['end_date']) : null,
-      statistics: json['statistics'] ?? (plan != null ? plan['statistics'] : 0),
+          json['end_date'] != null && json['end_date'].toString().isNotEmpty
+              ? DateTime.tryParse(json['end_date'].toString())
+              : null,
+      statistics: _asInt(
+        json['statistics'],
+        def: plan != null ? _asInt(plan['statistics']) : 0,
+      ),
     );
   }
 

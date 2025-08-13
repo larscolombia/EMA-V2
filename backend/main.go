@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
+	"ema-backend/casos_clinico"
+	"ema-backend/casos_interactivos"
+	"ema-backend/categories"
 	"ema-backend/chat"
 	"ema-backend/conn"
 	"ema-backend/countries"
@@ -14,6 +18,7 @@ import (
 	"ema-backend/openai"
 	"ema-backend/profile"
 	"ema-backend/subscriptions"
+	"ema-backend/testsapi"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -42,6 +47,9 @@ func main() {
 	}
 	if err := migrations.SeedDefaultPlans(); err != nil {
 		log.Printf("seed default plans failed: %v", err)
+	}
+	if err := migrations.SeedMedicalCategories(); err != nil {
+		log.Printf("seed medical categories failed: %v", err)
 	}
 
 	mk := marketing.NewService(db)
@@ -74,11 +82,35 @@ func main() {
 	// Countries route (simple list)
 	countries.RegisterRoutes(r)
 
+	// Medical categories
+	catRepo := categories.NewRepository(db)
+	catHandler := categories.NewHandler(catRepo)
+	catHandler.RegisterRoutes(r)
+
 	// Chat/OpenAI endpoints (optional if keys provided)
+	openai.SetPersistDB(db)
 	ai := openai.NewClient()
 	chatHandler := chat.NewHandler(ai)
 	r.POST("/asistente/start", chatHandler.Start)
 	r.POST("/asistente/message", chatHandler.Message)
+	// Cleanup endpoint to delete OpenAI artifacts for a thread
+	r.POST("/asistente/delete", chatHandler.Delete)
+
+	// Tests (quizzes) endpoints for Flutter
+	testsHandler := testsapi.DefaultHandler()
+	// Inject category name resolver for better prompts when user selects a category
+	testsHandler.SetCategoryResolver(func(ctx context.Context, ids []int) ([]string, error) {
+		return catRepo.NamesByIDs(ctx, ids)
+	})
+	testsHandler.RegisterRoutes(r)
+
+	// Clinical cases endpoints (analytical & interactive)
+	clinicalHandler := casos_clinico.DefaultHandler()
+	clinicalHandler.RegisterRoutes(r)
+
+	// New interactive flow with stricter JSON turn contract
+	interactivosHandler := casos_interactivos.DefaultHandler()
+	interactivosHandler.RegisterRoutes(r)
 
 	port := os.Getenv("PORT")
 	if port == "" {

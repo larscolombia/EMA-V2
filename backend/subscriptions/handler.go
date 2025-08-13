@@ -9,11 +9,14 @@ import (
 )
 
 type Handler struct {
-	repo *Repository
+	repo   *Repository
+	stripe *StripeService
 }
 
 func NewHandler(repo *Repository) *Handler {
-	return &Handler{repo: repo}
+	// Initialize Stripe service from environment (optional)
+	s := NewStripeFromEnv(repo)
+	return &Handler{repo: repo, stripe: s}
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -31,6 +34,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/cancel-subscription", h.cancelSubscription)
 	// Minimal checkout stub to satisfy clients expecting /checkout
 	r.POST("/checkout", h.checkout)
+	// Stripe webhook endpoint (only active when STRIPE_WEBHOOK_SECRET is set)
+	r.POST("/stripe/webhook", h.handleStripeWebhook)
 	// Handle common misspelling if present in some older clients
 	r.GET("/suscription-plans", h.getPlans)
 }
@@ -196,9 +201,35 @@ func (h *Handler) checkout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "datos inválidos"})
 		return
 	}
-	// For now, return a static URL containing 'success' so the app can detect completion.
-	// Replace with a real payment provider session URL when integrating payments.
-	c.JSON(http.StatusOK, gin.H{
-		"checkout_url": "https://example.com/checkout/success",
-	})
+	// Decide flow based on plan price and Stripe availability
+	plan, _ := h.repo.GetPlanByID(body.PlanID)
+	// If Stripe configured and plan has price > 0, create a real checkout session
+	if h.stripe != nil && plan != nil && plan.Price > 0 {
+		url, err := h.stripe.CreateCheckoutSession(c.Request.Context(), body.UserID, body.PlanID, body.Frequency)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"checkout_url": url})
+		return
+	}
+	// Otherwise (free plan or Stripe disabled), create subscription immediately and return success URL.
+	s := &Subscription{UserID: body.UserID, PlanID: body.PlanID, StartDate: time.Now(), Frequency: body.Frequency}
+	if err := h.repo.CreateSubscription(s); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"checkout_url": "https://example.com/checkout/success"})
+}
+
+// handleStripeWebhook processes Stripe webhook events to finalize subscriptions on successful payments
+func (h *Handler) handleStripeWebhook(c *gin.Context) {
+	if h.stripe == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "stripe no configurado"})
+		return
+	}
+	if err := h.stripe.HandleWebhook(c.Writer, c.Request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 }

@@ -1,5 +1,6 @@
 export 'api/api_service.dart';
 export 'auth/laravel_auth_service.dart';
+export 'auth/auth_token_provider.dart';
 export 'db/database_service.dart';
 export 'di/di.dart';
 export 'logger/logger.dart';

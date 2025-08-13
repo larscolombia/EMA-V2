@@ -23,7 +23,8 @@ class ApiSubscriptionService extends SubscriptionService {
         return data.map((item) => Subscription.fromJson(item)).toList();
       } else {
         throw Exception(
-            'Error al obtener las suscripciones: ${response.statusCode}');
+          'Error al obtener las suscripciones: ${response.statusCode}',
+        );
       }
     } catch (e) {
       throw Exception('Error al obtener las suscripciones: $e');
@@ -38,25 +39,24 @@ class ApiSubscriptionService extends SubscriptionService {
     required String authToken,
   }) async {
     try {
-      final url = Uri.parse('$apiUrl/subscriptions');
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $authToken',
-        },
-        body: jsonEncode({
-          'user_id': userId,
-          'plan_id': subscriptionPlanId,
-          'frequency': frequency,
-        }),
+      // Request checkout; return a placeholder while UI opens WebView
+      await createCheckout(
+        userId: userId,
+        subscriptionPlanId: subscriptionPlanId,
+        frequency: frequency,
+        authToken: authToken,
       );
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        return Subscription.fromJson(data);
-      } else {
-        throw Exception('Error al crear la suscripción: ${response.statusCode}');
-      }
+      return Subscription(
+        id: 0,
+        name: 'Procesando',
+        currency: 'USD',
+        price: 0,
+        billing: 'Mensual',
+        consultations: 0,
+        questionnaires: 0,
+        clinicalCases: 0,
+        files: 0,
+      );
     } catch (e) {
       throw Exception('Error al crear la suscripción: $e');
     }
@@ -74,13 +74,12 @@ class ApiSubscriptionService extends SubscriptionService {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
         },
-        body: jsonEncode({
-          'subscription_id': subscriptionId,
-        }),
+        body: jsonEncode({'subscription_id': subscriptionId}),
       );
       if (response.statusCode != 200 && response.statusCode != 201) {
         throw Exception(
-            'Error al cancelar la suscripción: ${response.statusCode}');
+          'Error al cancelar la suscripción: ${response.statusCode}',
+        );
       }
     } catch (e) {
       throw Exception('Error al cancelar la suscripción: $e');
@@ -116,11 +115,44 @@ class ApiSubscriptionService extends SubscriptionService {
 
       if (response.statusCode != 200) {
         throw Exception(
-            'Error al actualizar las cantidades de la suscripción: ${response.statusCode}');
+          'Error al actualizar las cantidades de la suscripción: ${response.statusCode}',
+        );
       }
     } catch (e) {
       throw Exception(
-          'Error al actualizar las cantidades de la suscripción: $e');
+        'Error al actualizar las cantidades de la suscripción: $e',
+      );
     }
+  }
+
+  // Create a checkout session and return the URL to open in WebView
+  Future<String> createCheckout({
+    required int userId,
+    required int subscriptionPlanId,
+    required int frequency,
+    required String authToken,
+  }) async {
+    final url = Uri.parse('$apiUrl/checkout');
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $authToken',
+      },
+      body: jsonEncode({
+        'user_id': userId,
+        'plan_id': subscriptionPlanId,
+        'frequency': frequency,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Error en checkout: ${response.statusCode}');
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final checkoutUrl = data['checkout_url']?.toString();
+    if (checkoutUrl == null || checkoutUrl.isEmpty) {
+      throw Exception('checkout_url no recibido');
+    }
+    return checkoutUrl;
   }
 }

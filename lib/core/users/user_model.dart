@@ -72,7 +72,7 @@ class UserModel {
     String? authToken,
     Subscription? subscription,
     String? email,
-// added this parameter
+    // added this parameter
   }) {
     return UserModel(
       id: id,
@@ -110,54 +110,79 @@ class UserModel {
   factory UserModel.fromMap(Map<String, dynamic> map) {
     print('🔧 [UserModel] Procesando datos del servidor...');
     print('📋 [UserModel] Datos recibidos: $map');
-    
-    // Imprimir payload de la suscripción para depuración
+
+    int _asInt(dynamic v, {int def = 0}) {
+      if (v == null) return def;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString()) ?? def;
+    }
+
+    int? _asNullableInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString());
+    }
+
+    bool _asBool(dynamic v, {bool def = false}) {
+      if (v == null) return def;
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      final s = v.toString().toLowerCase();
+      if (s == 'true') return true;
+      if (s == 'false') return false;
+      final i = int.tryParse(s);
+      return i != null ? i != 0 : def;
+    }
+
+    DateTime _asDate(dynamic v) {
+      if (v == null) return DateTime.now();
+      final s = v.toString();
+      return DateTime.tryParse(s) ?? DateTime.now();
+    }
 
     final userModel = UserModel(
-      id: map['id'] != null ? map['id'] as int : 0,
+      id: _asInt(map['id'], def: 0),
       firstName: map['first_name']?.toString() ?? '',
       lastName: map['last_name']?.toString() ?? '',
       email: map['email']?.toString() ?? '',
       contact: map['contact']?.toString() ?? '',
       regionCode: map['region_code']?.toString() ?? '',
-      status: map['status'] != null ? map['status'] as bool : false,
+      status: _asBool(map['status'], def: false),
       language: map['language']?.toString() ?? 'es',
-      darkMode:
-          map['dark_mode'] != null ? (map['dark_mode'] as int) == 1 : false,
+      darkMode: _asBool(map['dark_mode']),
       emailVerifiedAt: map['email_verified_at']?.toString() ?? '',
       tenantId: map['tenant_id']?.toString() ?? '',
-      createdAt: map['created_at'] != null
-          ? DateTime.parse(map['created_at'])
-          : DateTime.now(),
-      updatedAt: map['updated_at'] != null
-          ? DateTime.parse(map['updated_at'])
-          : DateTime.now(),
+      createdAt: _asDate(map['created_at']),
+      updatedAt: _asDate(map['updated_at']),
       fullName: map['full_name']?.toString() ?? '',
       profileImage: map['profile_image']?.toString() ?? '',
       authToken: map['token']?.toString() ?? '',
       gender: map['genero']?.toString() ?? '',
-      age: map['edad'] != null ? (map['edad'] as num).toInt() : null,
-      countryId:
-          map['country_id'] != null ? (map['country_id'] as num).toInt() : null,
+      age: _asNullableInt(map['edad']),
+      countryId: _asNullableInt(map['country_id']),
       city: map['city']?.toString() ?? '',
       countryName: map['country_name']?.toString() ?? '',
       profession: map['profession']?.toString() ?? '',
-      roles: map['roles'] != null
-          ? List<Role>.from(
-              (map['roles'] as List<dynamic>).map((x) => Role.fromMap(x)),
-            )
-          : [],
-      subscription: map['active_subscription'] != null
-          ? Subscription.fromJson(map['active_subscription'])
-          : map['subscription'] != null
+      roles:
+          map['roles'] != null
+              ? List<Role>.from(
+                (map['roles'] as List<dynamic>).map((x) => Role.fromMap(x)),
+              )
+              : [],
+      subscription:
+          map['active_subscription'] != null
+              ? Subscription.fromJson(map['active_subscription'])
+              : map['subscription'] != null
               ? Subscription.fromJson(map['subscription'])
               : null,
       media: map['media'] ?? [],
     );
-    
+
     print('✅ [UserModel] Usuario creado exitosamente');
     print('🖼️ [UserModel] URL de imagen: ${userModel.profileImage}');
-    
+
     return userModel;
   }
 
@@ -211,29 +236,60 @@ class UserModel {
   }
 
   factory UserModel.fromLaravelApi(Map<String, dynamic> jsonData) {
-    final userData = jsonData['user'];
+    final userData = jsonData['user'] as Map<String, dynamic>;
+
+    int _asInt(dynamic v, {int def = 0}) {
+      if (v == null) return def;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString()) ?? def;
+    }
+
+    int? _asNullableInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      return int.tryParse(v.toString());
+    }
+
+    bool _asBool(dynamic v, {bool def = false}) {
+      if (v == null) return def;
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      final s = v.toString().toLowerCase();
+      if (s == 'true') return true;
+      if (s == 'false') return false;
+      final i = int.tryParse(s);
+      return i != null ? i != 0 : def;
+    }
+
+    DateTime _asDate(dynamic v) {
+      if (v == null) return DateTime.now();
+      final s = v.toString();
+      return DateTime.tryParse(s) ?? DateTime.now();
+    }
 
     return UserModel(
-      id: userData['id'] as int,
-      firstName: userData['first_name'] as String,
-      lastName: userData['last_name'] as String,
-      email: userData['email'] as String,
-      status: userData['status'] ?? true,
-      language: userData['language'] ?? 'es',
-      darkMode: (userData['dark_mode'] ?? 0) == 1,
-      createdAt: DateTime.parse(userData['created_at']),
-      updatedAt: DateTime.parse(userData['updated_at']),
-      fullName: userData['full_name'] as String,
-      profileImage: userData['profile_image'] ?? '',
-      authToken: jsonData['token'] as String,
-      gender: userData['genero'] as String?,
-      age: userData['edad'] as int?,
-      countryId: userData['country_id'] as int?,
-      countryName: userData['country_name'] as String?,
-      city: userData['city'] as String?,
-      profession: userData['profession'] as String?,
+      id: _asInt(userData['id']),
+      firstName: userData['first_name']?.toString() ?? '',
+      lastName: userData['last_name']?.toString() ?? '',
+      email: userData['email']?.toString() ?? '',
+      status: _asBool(userData['status'], def: true),
+      language: userData['language']?.toString() ?? 'es',
+      darkMode: _asBool(userData['dark_mode']),
+      createdAt: _asDate(userData['created_at']),
+      updatedAt: _asDate(userData['updated_at']),
+      fullName: userData['full_name']?.toString() ?? '',
+      profileImage: userData['profile_image']?.toString() ?? '',
+      authToken: jsonData['token']?.toString() ?? '',
+      gender: userData['genero']?.toString(),
+      age: _asNullableInt(userData['edad']),
+      countryId: _asNullableInt(userData['country_id']),
+      countryName: userData['country_name']?.toString(),
+      city: userData['city']?.toString(),
+      profession: userData['profession']?.toString(),
       media: userData['media'] ?? [],
-      tenantId: userData['tenant_id'] as String?,
+      tenantId: userData['tenant_id']?.toString(),
     );
   }
 

@@ -91,7 +91,10 @@ class ApiChatData implements IApiChatData {
       await for (final chunk in stream) {
         for (final line in const LineSplitter().convert(chunk)) {
           if (line.startsWith('data:')) {
-            final content = line.substring(5).trim();
+            // Preserve original token spacing. Our SSE writer sends "data: <msg>";
+            // remove only the single space after the colon to restore the exact token from OpenAI.
+            var content = line.substring(5); // " <msg>" or " [DONE]"
+            if (content.startsWith(' ')) content = content.substring(1);
             if (content == '[DONE]') {
               break;
             }
@@ -119,6 +122,7 @@ class ApiChatData implements IApiChatData {
     required PdfAttachment file,
     CancelToken? cancelToken,
     Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
   }) async {
     const endpoint = '/asistente/message';
     try {
@@ -148,28 +152,41 @@ class ApiChatData implements IApiChatData {
       _cancelTokens[threadId] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId]!;
 
-      final response = await _dio.post(
+      final response = await _dio.post<dio.ResponseBody>(
         endpoint,
         data: formData,
         cancelToken: token,
         onSendProgress: onSendProgress,
-        options: dio.Options(headers: {'Content-Type': 'multipart/form-data'}),
+        options: dio.Options(
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Accept': 'text/event-stream',
+          },
+          responseType: ResponseType.stream,
+        ),
       );
 
-      // print('Response: ${response.statusCode}');
-      // print('Response: ${response.data}');
-
       _cancelTokens.remove(threadId);
-      if (response.statusCode == 200) {
-        final text =
-            response.data['text'] as String? ??
-            "PDF cargado exitosamente. Puedes hacerme preguntas sobre su contenido ahora.";
-        return ChatMessageModel.ai(chatId: threadId, text: text);
-      } else if (response.statusCode == 500) {
-        throw Exception('Error del servidor: ${response.data['message']}');
-      } else {
-        throw Exception('Error al cargar el PDF: ${response.statusCode}');
+      final body = response.data;
+      if (body == null) {
+        throw Exception('Respuesta de streaming vacía');
       }
+      final stream = utf8.decoder.bind(body.stream);
+      final buffer = StringBuffer();
+      await for (final chunk in stream) {
+        for (final line in const LineSplitter().convert(chunk)) {
+          if (line.startsWith('data:')) {
+            var content = line.substring(5);
+            if (content.startsWith(' ')) content = content.substring(1);
+            if (content == '[DONE]') {
+              break;
+            }
+            buffer.write(content);
+            onStream?.call(content);
+          }
+        }
+      }
+      return ChatMessageModel.ai(chatId: threadId, text: buffer.toString());
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation

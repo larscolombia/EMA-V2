@@ -5,10 +5,10 @@ import 'package:ema_educacion_medica_avanzada/app/actions/models/action_model.da
 import 'package:ema_educacion_medica_avanzada/app/actions/models/action_type.dart';
 import 'package:ema_educacion_medica_avanzada/app/actions/services/actions_service.dart';
 import 'package:ema_educacion_medica_avanzada/config/routes/app_pages.dart';
+import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-
 
 class ActionsListController extends GetxService {
   final _actionsList = <ActionModel>[].obs;
@@ -28,9 +28,7 @@ class ActionsListController extends GetxService {
   int get page => _page.value;
   RxString get titleFilter => _titleFilter;
 
-  ActionsListController({
-    this.useTypeFilter = true,
-  });
+  ActionsListController({this.useTypeFilter = true});
 
   @override
   void onInit() {
@@ -67,7 +65,11 @@ class ActionsListController extends GetxService {
       page: _page.value,
     );
 
-    final actions = await _actionsService.getActions(where: where, whereArgs: whereArgs, page: _page.value);
+    final actions = await _actionsService.getActions(
+      where: where,
+      whereArgs: whereArgs,
+      page: _page.value,
+    );
 
     _actionsList.assignAll(actions);
 
@@ -84,7 +86,7 @@ class ActionsListController extends GetxService {
   void setTitleFilter(String title) {
     _titleFilter.value = title;
     _page.value = 1;
-    
+
     _changeCounter.value++;
   }
 
@@ -112,11 +114,15 @@ class ActionsListController extends GetxService {
       page: _page.value,
     );
 
-    final actions = await _actionsService.getActions(where: where, whereArgs: whereArgs, page: _page.value);
+    final actions = await _actionsService.getActions(
+      where: where,
+      whereArgs: whereArgs,
+      page: _page.value,
+    );
 
     _actionsList.addAll(actions);
 
-    loading.value = false;    
+    loading.value = false;
   }
 
   void cleanFilters() {
@@ -141,5 +147,14 @@ class ActionsListController extends GetxService {
 
     _page.value = 1;
     loadActions(0);
+  }
+
+  Future<void> deleteAction(ActionModel action) async {
+    await _actionsService.deleteAction(action);
+  }
+
+  Future<void> deleteChat(String chatId) async {
+    final chatsService = Get.find<ChatsService>();
+    await chatsService.deleteChat(chatId);
   }
 }

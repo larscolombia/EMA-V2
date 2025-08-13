@@ -7,9 +7,13 @@ import (
 )
 
 // Stream writes raw SSE lines in the form:
-//   data: <token>\n\n
+//
+//	data: <token>\n\n
+//
 // and finishes with:
-//   data: [DONE]\n\n
+//
+//	data: [DONE]\n\n
+//
 // This matches the frontend's simple 'data:' line parsing.
 func Stream(c *gin.Context, ch <-chan string) {
 	c.Header("Content-Type", "text/event-stream")

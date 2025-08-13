@@ -2,7 +2,6 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'animations/slide_in_left.dart';
 
 class ChatMessageAi extends StatefulWidget {

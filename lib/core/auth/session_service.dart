@@ -2,6 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 
 import '../core.dart';
+// auth_token_provider is exported by core/core.dart
 
 class SessionService extends GetxService {
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
@@ -44,7 +45,9 @@ class SessionService extends GetxService {
           await _userService.setCurrentUser(user);
 
           // Persistir el token actualizado
-          await _storage.write(key: 'auth_token', value: user.authToken);
+          await AuthTokenProvider.instance.saveToken(
+            user.authToken.isNotEmpty ? user.authToken : token,
+          );
         } catch (e) {
           try {
             final localUser = _userService.currentUser.value;

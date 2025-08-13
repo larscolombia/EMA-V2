@@ -61,3 +61,7 @@ coverage/
 # Exclude user-specific files
 *.DS_Store
 backend/.env
+backend/media/
+backend/tmp/
+backend/openai/tmp/
+backend/openai/data/

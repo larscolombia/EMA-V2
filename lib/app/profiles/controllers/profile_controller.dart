@@ -238,6 +238,7 @@ class ProfileController extends GetxController {
 
       currentProfile.value = currentProfile.value.copyWith(
         profileImage: tempProfile.profileImage,
+        authToken: currentProfile.value.authToken,
       );
       update();
       print('🔄 [ProfileController] Perfil actualizado localmente');

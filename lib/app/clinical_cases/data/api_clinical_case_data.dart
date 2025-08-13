@@ -11,66 +11,119 @@ import 'package:get/get.dart';
 class ApiClinicalCaseData {
   final Dio _dio = Get.find<ApiService>().dio;
 
-  Future<ClinicalCaseGenerateData> generateCase(ClinicalCaseModel clinicalCase) async {
+  Future<ClinicalCaseGenerateData> generateCase(
+    ClinicalCaseModel clinicalCase,
+  ) async {
     try {
       final body = clinicalCase.toRequestBody();
 
-      final url = clinicalCase.type == ClinicalCaseType.interactive ? '/casos-clinicos/interactivo' : '/caso-clinico';
+      // Opción A: usar flujo nuevo con contrato estricto para casos interactivos
+      final url =
+          clinicalCase.type == ClinicalCaseType.interactive
+              ? '/casos-interactivos/iniciar'
+              : '/caso-clinico';
 
       final response = await _dio.post(url, data: body);
 
       final generateClinicalCase = ClinicalCaseModel.fromApi(response.data);
 
-      final completeClinicalCase = generateClinicalCase.copyWith(type: clinicalCase.type, uid: clinicalCase.uid, userId: clinicalCase.userId);
+      final completeClinicalCase = generateClinicalCase.copyWith(
+        type: clinicalCase.type,
+        uid: clinicalCase.uid,
+        userId: clinicalCase.userId,
+      );
 
       QuestionResponseModel? firstQuestion;
       if (clinicalCase.type == ClinicalCaseType.interactive) {
-        final data = response.data['data'] as Map<String, dynamic>;
-        final questionsData = data['questions'] as Map<String, dynamic>?;
-        
-        if (questionsData != null) {
+        // Nuevo contrato: data { feedback, next { hallazgos, pregunta } }
+        final data =
+            (response.data['data'] ?? const <String, dynamic>{})
+                as Map<String, dynamic>;
+        final next =
+            (data['next'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
+        final pregunta = next['pregunta'] as Map<String, dynamic>?;
+        final feedback = data['feedback'] as String? ?? '';
+
+        if (pregunta != null) {
           final questionMap = {
-            'id': 0, // No hay ID específico en la respuesta inicial
-            'question': questionsData['texto'] ?? '',
-            'answer': '', // No hay respuesta correcta en la pregunta inicial
-            'type': questionsData['tipo'] ?? 'single_choice',
-            'options': questionsData['opciones'] ?? [],
+            'id': 0,
+            'question': pregunta['texto'] ?? '',
+            'answer': '',
+            'type': (pregunta['tipo'] ?? 'single_choice').toString().replaceAll(
+              '-',
+              '_',
+            ),
+            'options': pregunta['opciones'] ?? [],
           };
-          firstQuestion = QuestionResponseModel.fromClinicalCaseApi(quizId: clinicalCase.uid, feedback: '', questionMap: questionMap);
+          firstQuestion = QuestionResponseModel.fromClinicalCaseApi(
+            quizId: clinicalCase.uid,
+            feedback: feedback,
+            questionMap: questionMap,
+          );
         }
       }
 
       try {
         final storage = const FlutterSecureStorage();
-        await storage.write(key: 'interactive_case_thread_id', value: generateClinicalCase.threadId);
+        final key =
+            clinicalCase.type == ClinicalCaseType.interactive
+                ? 'interactive_strict_thread_id'
+                : 'interactive_case_thread_id';
+        await storage.write(key: key, value: generateClinicalCase.threadId);
       } catch (_) {}
 
-      return ClinicalCaseGenerateData(clinicalCase: completeClinicalCase, question: firstQuestion);
+      return ClinicalCaseGenerateData(
+        clinicalCase: completeClinicalCase,
+        question: firstQuestion,
+      );
     } catch (e) {
       Logger.error(e.toString());
       throw Exception('No fue posible crear el caso clínico.');
     }
   }
 
-  Future<QuestionResponseModel> sendAnswerMessage(QuestionResponseModel questionWithAnswer) async {
+  Future<QuestionResponseModel> sendAnswerMessage(
+    QuestionResponseModel questionWithAnswer,
+  ) async {
+    // Flujo nuevo: /casos-interactivos/mensaje
     final storage = const FlutterSecureStorage();
-    final threadId = await storage.read(key: 'interactive_case_thread_id');
+    final threadId = await storage.read(key: 'interactive_strict_thread_id');
 
     final body = {'thread_id': threadId, 'mensaje': questionWithAnswer.message};
 
-    Logger.objectValue('body_enviado_al_endpoint: /casos-clinicos/interactivo/conversar', body.toString());
+    Logger.objectValue(
+      'body_enviado_al_endpoint: /casos-interactivos/mensaje',
+      body.toString(),
+    );
 
-    final response = await _dio.post('/casos-clinicos/interactivo/conversar', data: body);
+    final response = await _dio.post('/casos-interactivos/mensaje', data: body);
 
     if (response.statusCode == 200) {
       final data = response.data['data'] ?? response.data;
       final feedback = data['feedback'] as String? ?? '';
-      final questionMap = data['question'] as Map<String, dynamic>? ?? {};
+      final next =
+          (data['next'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
+      final pregunta =
+          (next['pregunta'] ?? const <String, dynamic>{})
+              as Map<String, dynamic>;
+      final questionMap = {
+        'id': 0,
+        'question': pregunta['texto'] ?? '',
+        'answer': '',
+        'type': (pregunta['tipo'] ?? 'single_choice').toString().replaceAll(
+          '-',
+          '_',
+        ),
+        'options': pregunta['opciones'] ?? [],
+      };
 
       final newThreadId = data['thread_id'];
       if (newThreadId is String && newThreadId.isNotEmpty) {
         try {
-          await storage.write(key: 'interactive_case_thread_id', value: newThreadId);
+          await storage.write(
+            key: 'interactive_strict_thread_id',
+            value: newThreadId,
+          );
         } catch (_) {}
       }
 
@@ -101,7 +154,9 @@ class ApiClinicalCaseData {
     }
   }
 
-  Future<List<ClinicalCaseModel>> getClinicalCaseByUserId({required String userId}) async {
+  Future<List<ClinicalCaseModel>> getClinicalCaseByUserId({
+    required String userId,
+  }) async {
     await Future.delayed(Duration(seconds: 1));
 
     List<ClinicalCaseModel> quizzes = [];

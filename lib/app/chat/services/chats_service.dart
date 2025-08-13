@@ -1,6 +1,7 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
 
 import 'package:ema_educacion_medica_avanzada/app/actions/models/action_model.dart';
+import 'package:ema_educacion_medica_avanzada/app/actions/models/action_type.dart';
 import 'package:ema_educacion_medica_avanzada/app/actions/services/actions_service.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/data/local_chat_data.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/data/local_chat_message_data.dart';
@@ -83,7 +84,9 @@ class ChatsService extends GetxService {
     final whereArgs = [id];
 
     final localMessages = await chatMessagesLocalData.getItems(
-        where: where, whereArgs: whereArgs);
+      where: where,
+      whereArgs: whereArgs,
+    );
 
     if (localMessages.isNotEmpty) {
       return localMessages;
@@ -105,13 +108,14 @@ class ChatsService extends GetxService {
     PdfAttachment? file,
     void Function(String token)? onStream,
   }) async {
-    chatMessagesLocalData.insertOne(userMessage);
+    // Persisting of the user message is handled by the controller to avoid duplicates.
 
     if (file != null) {
       final apiMessage = await apiChatService.sendPdfUpload(
         threadId: threadId,
         prompt: userMessage.text,
         file: file,
+        onStream: onStream,
       );
       final aiPdfMessage = ChatMessageModel.ai(
         chatId: userMessage.chatId,
@@ -133,5 +137,19 @@ class ChatsService extends GetxService {
     chatMessagesLocalData.insertOne(aiMessage);
 
     return aiMessage;
+  }
+
+  /// Delete a chat and all its local messages by chatId (uid).
+  /// Also removes the associated Action record(s).
+  Future<void> deleteChat(String chatId) async {
+    // Delete messages first (FK-like order safety)
+    await chatMessagesLocalData.delete(
+      where: 'chatId = ?',
+      whereArgs: [chatId],
+    );
+    // Delete the chat row
+    await chatsLocalData.delete(where: 'uid = ?', whereArgs: [chatId]);
+    // Delete related actions referencing this chat
+    await actionsService.deleteActionsByItemId(ActionType.chat, chatId);
   }
 }

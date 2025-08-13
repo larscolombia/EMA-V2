@@ -10,13 +10,12 @@ import 'package:ema_educacion_medica_avanzada/config/styles/app_styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-
 class ActionsListWidget extends StatelessWidget {
   final _actionsController = Get.find<ActionsListController>();
   final _clinicalCaseController = Get.find<ClinicalCaseController>();
   final _quizController = Get.find<QuizController>();
 
-  ActionsListWidget({super.key,});
+  ActionsListWidget({super.key});
 
   void _onActionSelected(ActionModel action) {
     if (action.type == ActionType.clinicalCase) {
@@ -44,51 +43,99 @@ class ActionsListWidget extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 12, top: 24),
-            child: Obx(() => Text(
-              _actionsController.typeTitle.value.toUpperCase(),
-              style: AppStyles.breadCumb,
-            )),
+            child: Obx(
+              () => Text(
+                _actionsController.typeTitle.value.toUpperCase(),
+                style: AppStyles.breadCumb,
+              ),
+            ),
           ),
-          
+
           Divider(),
 
-          Obx(
-            () {
-              if (_actionsController.actions.isEmpty) {
-                return StateMessageWidget(
-                  message: 'No se encontraron ${_actionsController.typeTitle}', 
-                  type: StateMessageType.noSearchResults,
-                );
-              }
-
-              return ListView.separated(
-                reverse: true,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _actionsController.actions.length,
-                separatorBuilder: (context, index) => const Divider(),
-                itemBuilder: (context, index) {
-                  final action = _actionsController.actions[index];
-
-                  return ListTile(
-                    contentPadding: const EdgeInsets.only(top: 2, bottom: 2, left: 0, right: 12),
-                    title: Text(
-                      action.shortTitle,
-                      maxLines: 1,
-                    ),
-                    trailing: AppIcons.arrowRightCircular(
-                      height: 24,
-                      width: 24,
-                      color: AppStyles.tertiaryColor,
-                    ),
-                    onTap: () {
-                      _onActionSelected(action);
-                    },
-                  );
-                },
+          Obx(() {
+            if (_actionsController.actions.isEmpty) {
+              return StateMessageWidget(
+                message: 'No se encontraron ${_actionsController.typeTitle}',
+                type: StateMessageType.noSearchResults,
               );
-            },
-          ),
+            }
+
+            return ListView.separated(
+              reverse: true,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _actionsController.actions.length,
+              separatorBuilder: (context, index) => const Divider(),
+              itemBuilder: (context, index) {
+                final action = _actionsController.actions[index];
+
+                return ListTile(
+                  contentPadding: const EdgeInsets.only(
+                    top: 2,
+                    bottom: 2,
+                    left: 0,
+                    right: 12,
+                  ),
+                  title: Text(action.shortTitle, maxLines: 1),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Eliminar',
+                        onPressed: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder:
+                                (ctx) => AlertDialog(
+                                  title: const Text('Eliminar'),
+                                  content: const Text(
+                                    '¿Deseas eliminar este elemento?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed:
+                                          () => Navigator.of(ctx).pop(false),
+                                      child: const Text('Cancelar'),
+                                    ),
+                                    FilledButton(
+                                      onPressed:
+                                          () => Navigator.of(ctx).pop(true),
+                                      child: const Text('Eliminar'),
+                                    ),
+                                  ],
+                                ),
+                          );
+                          if (confirmed == true) {
+                            if (action.type == ActionType.chat) {
+                              await _actionsController.deleteChat(
+                                action.itemId,
+                              );
+                            } else {
+                              await _actionsController.deleteAction(action);
+                            }
+                            _actionsController.loadActions(0);
+                          }
+                        },
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: Colors.redAccent,
+                        ),
+                      ),
+                      AppIcons.arrowRightCircular(
+                        height: 24,
+                        width: 24,
+                        color: AppStyles.tertiaryColor,
+                      ),
+                    ],
+                  ),
+                  onTap: () {
+                    _onActionSelected(action);
+                  },
+                );
+              },
+            );
+          }),
         ],
       ),
     );

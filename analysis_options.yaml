@@ -1,1 +1,14 @@
 include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - flutter/**
+    - build/**
+    - ios/**
+    - android/**
+    - macos/**
+    - linux/**
+    - windows/**
+    - web/**
+    - backend/**
+    - .dart_tool/**

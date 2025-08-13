@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:ema_educacion_medica_avanzada/app/subscriptions/subscriptions.dart';
+import 'package:ema_educacion_medica_avanzada/app/subscriptions/view/stripe_checkout_view.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'dart:convert';
 
@@ -22,10 +23,8 @@ class SubscriptionController extends GetxController {
     try {
       isLoading.value = true;
       final currentUser = _userService.getProfileData();
-      final fetchedSubscriptions =
-          await _apiSubscriptionService.fetchSubscriptions(
-        authToken: currentUser.authToken,
-      );
+      final fetchedSubscriptions = await _apiSubscriptionService
+          .fetchSubscriptions(authToken: currentUser.authToken);
       subscriptions.value = fetchedSubscriptions;
     } catch (e) {
       final errorMessage = _extractErrorMessage(e);
@@ -47,19 +46,14 @@ class SubscriptionController extends GetxController {
   }) async {
     try {
       final currentUser = _userService.getProfileData();
-      await _apiSubscriptionService.createSubscription(
+      // Ask backend for checkout URL (Stripe or fallback) and open WebView
+      final checkoutUrl = await _apiSubscriptionService.createCheckout(
         userId: currentUser.id,
         subscriptionPlanId: subscriptionPlanId,
         frequency: frequency,
         authToken: currentUser.authToken,
       );
-      Get.snackbar(
-        'Éxito',
-        'Suscripción creada correctamente',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.green.withAlpha((0.8 * 255).toInt()),
-        colorText: Colors.white,
-      );
+      Get.to(() => StripeCheckoutView(checkoutUrl: checkoutUrl));
     } catch (e) {
       final errorMessage = _extractErrorMessage(e);
       Get.snackbar(

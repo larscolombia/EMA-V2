@@ -31,5 +31,6 @@ abstract class IApiChatData {
     required PdfAttachment file,
     CancelToken? cancelToken,
     Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
   });
 }

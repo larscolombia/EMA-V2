@@ -11,7 +11,6 @@ import 'package:ema_educacion_medica_avanzada/config/styles/app_styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-
 class ActionsDrawerListWidget extends StatelessWidget {
   final _actionsController = Get.find<ActionsDrawerListController>();
   final _clinicalCaseController = Get.find<ClinicalCaseController>();
@@ -41,40 +40,83 @@ class ActionsDrawerListWidget extends StatelessWidget {
       child: Obx(() {
         if (_actionsController.actions.isEmpty) {
           return StateMessageWidget(
-            message: 'Aquí se mostrarán sus acciones.', 
+            message: 'Aquí se mostrarán sus acciones.',
             type: StateMessageType.noSearchResults,
           );
         }
         return ListView.separated(
-            reverse: true,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: _actionsController.actions.length,
-            separatorBuilder: (context, index) => const Divider(),
-            itemBuilder: (context, index) {
-              final action = _actionsController.actions[index];
-      
-              return ListTile(
-                tileColor: AppStyles.whiteColor,
-                contentPadding: const EdgeInsets.only(top: 2, bottom: 2, left: 4, right: 8),
-                title: Text(
-                  action.shortTitle,
-                  maxLines: 1,
-                ),
-                subtitle: Text(action.type.title),
-                trailing: AppIcons.arrowRightCircular(
-                  height: 24,
-                  width: 24,
-                  color: AppStyles.tertiaryColor,
-                ),
-                onTap: () {
-                  _onActionSelected(action);
-                },
-              );
-            },
-          );
-        }
-      ),
+          reverse: true,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: _actionsController.actions.length,
+          separatorBuilder: (context, index) => const Divider(),
+          itemBuilder: (context, index) {
+            final action = _actionsController.actions[index];
+
+            return ListTile(
+              tileColor: AppStyles.whiteColor,
+              contentPadding: const EdgeInsets.only(
+                top: 2,
+                bottom: 2,
+                left: 4,
+                right: 8,
+              ),
+              title: Text(action.shortTitle, maxLines: 1),
+              subtitle: Text(action.type.title),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Eliminar',
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder:
+                            (ctx) => AlertDialog(
+                              title: const Text('Eliminar'),
+                              content: const Text(
+                                '¿Deseas eliminar este elemento?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                  child: const Text('Cancelar'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                  child: const Text('Eliminar'),
+                                ),
+                              ],
+                            ),
+                      );
+                      if (confirmed == true) {
+                        if (action.type == ActionType.chat) {
+                          await _chatController.chatsService.deleteChat(
+                            action.itemId,
+                          );
+                        } else {
+                          await _actionsController.deleteAction(action);
+                        }
+                        // Reload list
+                        _actionsController.loadActions(0);
+                      }
+                    },
+                    icon: Icon(Icons.delete_outline, color: Colors.redAccent),
+                  ),
+                  AppIcons.arrowRightCircular(
+                    height: 24,
+                    width: 24,
+                    color: AppStyles.tertiaryColor,
+                  ),
+                ],
+              ),
+              onTap: () {
+                _onActionSelected(action);
+              },
+            );
+          },
+        );
+      }),
     );
   }
 }
