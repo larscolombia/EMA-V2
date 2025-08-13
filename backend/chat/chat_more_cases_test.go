@@ -226,3 +226,90 @@ func escapeJSON2(s string) string {
 	r := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n", "\r", "\\r")
 	return r.Replace(s)
 }
+
+// TestTextThenPdfFlow simula el caso: primero texto "Hola" sin archivo, luego PDF vacío en el mismo hilo.
+func TestTextThenPdfFlow(t *testing.T) {
+	if os.Getenv("OPENAI_API_KEY") == "" || !strings.HasPrefix(os.Getenv("CHAT_PRINCIPAL_ASSISTANT"), "asst_") {
+		t.Skip("requires real OpenAI env")
+	}
+	r := setupRouter(t)
+	// start
+	recStart := httptest.NewRecorder()
+	reqStart := httptest.NewRequest(http.MethodPost, "/asistente/start", strings.NewReader(`{"prompt":""}`))
+	reqStart.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(recStart, reqStart)
+	var startResp struct {
+		ThreadID string `json:"thread_id"`
+	}
+	_ = json.Unmarshal(recStart.Body.Bytes(), &startResp)
+	if startResp.ThreadID == "" {
+		t.Fatalf("no thread_id")
+	}
+
+	// 1) Texto sin archivo
+	first := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "/asistente/message", strings.NewReader(fmt.Sprintf(`{"thread_id":"%s","prompt":"Hola"}`, startResp.ThreadID)))
+	req1.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(first, req1)
+	if first.Code != http.StatusOK {
+		t.Fatalf("text-only status=%d body=%s", first.Code, first.Body.String())
+	}
+	if !strings.Contains(first.Body.String(), "data:") || !strings.Contains(first.Body.String(), "[DONE]") {
+		t.Fatalf("SSE malformed for text-only: %s", first.Body.String())
+	}
+
+	// 2) PDF vacío (prompt "") en el mismo hilo
+	pdf := filepath.FromSlash("backend/chat/docsprueba/Propuesta-405.pdf")
+	if _, err := os.Stat(pdf); err != nil {
+		t.Skip("pdf missing")
+	}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	fw, _ := w.CreateFormFile("file", filepath.Base(pdf))
+	f, _ := os.Open(pdf)
+	_, _ = io.Copy(fw, f)
+	_ = f.Close()
+	_ = w.WriteField("prompt", "")
+	_ = w.WriteField("thread_id", startResp.ThreadID)
+	_ = w.Close()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/asistente/message", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusOK {
+		t.Fatalf("expected 202 or 200 for pdf, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPdfWithoutThread validates that a PDF upload without thread_id does not 500 and returns a normal stream.
+func TestPdfWithoutThread(t *testing.T) {
+	// Run only if env is present; otherwise base client may emit placeholder empty string and handler may fall back
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		t.Skip("requires OpenAI env")
+	}
+	r := setupRouter(t)
+
+	pdf := filepath.FromSlash("backend/chat/docsprueba/Propuesta-405.pdf")
+	if _, err := os.Stat(pdf); err != nil {
+		t.Skip("pdf missing")
+	}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	fw, _ := w.CreateFormFile("file", filepath.Base(pdf))
+	f, _ := os.Open(pdf)
+	_, _ = io.Copy(fw, f)
+	_ = f.Close()
+	_ = w.WriteField("prompt", "")
+	// omit thread_id on purpose
+	_ = w.Close()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/asistente/message", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 without thread_id, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "data:") || !strings.Contains(rec.Body.String(), "[DONE]") {
+		t.Fatalf("SSE malformed without thread_id: %s", rec.Body.String())
+	}
+}

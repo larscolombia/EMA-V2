@@ -15,8 +15,8 @@ import 'package:get/get.dart';
 
 import '../../profiles/profiles.dart';
 
-
-class ClinicalCaseController extends GetxController with StateMixin<ClinicalCaseModel> {
+class ClinicalCaseController extends GetxController
+    with StateMixin<ClinicalCaseModel> {
   ScrollController? scrollController;
   final clinicalCaseServive = Get.find<ClinicalCasesServices>();
   final uiObserverService = Get.find<UiObserverService>();
@@ -44,7 +44,19 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
     });
   }
 
-  void generateCase({required ClinicalCaseType type, required LifeStage lifeStage, required SexAndStatus sexAndStatus,}) async {
+  void generateCase({
+    required ClinicalCaseType type,
+    required LifeStage lifeStage,
+    required SexAndStatus sexAndStatus,
+  }) async {
+    // Prevent multiple simultaneous calls
+    if (isTyping.value) {
+      print(
+        '⚠️ [ClinicalCaseController] generateCase already in progress, ignoring duplicate call',
+      );
+      return;
+    }
+
     try {
       if (!profileController.canCreateMoreClinicalCases()) {
         Get.snackbar(
@@ -67,6 +79,9 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
       }
 
       isTyping.value = true; // Lock navigation while generating the case
+      print(
+        '🎯 [ClinicalCaseController] Starting case generation: ${type.name}',
+      );
 
       final userId = userService.currentUser.value.id;
 
@@ -83,9 +98,10 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
 
       change(temporalCase, status: RxStatus.loading());
 
-      final route = type == ClinicalCaseType.analytical
-        ? Routes.clinicalCaseAnalytical.path(temporalCase.uid)
-        : Routes.clinicalCaseInteractive.path(temporalCase.uid);
+      final route =
+          type == ClinicalCaseType.analytical
+              ? Routes.clinicalCaseAnalytical.path(temporalCase.uid)
+              : Routes.clinicalCaseInteractive.path(temporalCase.uid);
 
       Get.offAndToNamed(route);
 
@@ -97,6 +113,7 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
         profileController.refreshClinicalCaseQuota();
       }
     } catch (e) {
+      print('❌ [ClinicalCaseController] Error in generateCase: $e');
       change(
         null,
         status: RxStatus.error('No se pudo generar el caso clínico'),
@@ -143,7 +160,10 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
           parentType: 'clinical_case',
         );
 
-        Logger.objectValue('questionFromMessage', questionFromMessage.toString());
+        Logger.objectValue(
+          'questionFromMessage',
+          questionFromMessage.toString(),
+        );
 
         // actualizar los rx de pregunta actual y pregunta pendiente
         currentQuestion.value = questionFromMessage;
@@ -209,7 +229,10 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
     }
   }
 
-  Future<void> sendAnswer({required QuestionResponseModel question, required AnswerModel userAnswer,}) async {
+  Future<void> sendAnswer({
+    required QuestionResponseModel question,
+    required AnswerModel userAnswer,
+  }) async {
     try {
       isTyping.value = true; // Set typing to true at the beginning
 
@@ -256,7 +279,10 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
         questionWithMessage,
       );
 
-      Logger.objectValue('feedBackAndNewQuestion', feedBackAndNewQuestion.toString());
+      Logger.objectValue(
+        'feedBackAndNewQuestion',
+        feedBackAndNewQuestion.toString(),
+      );
 
       // Generar un mensaje de ia a partir de la respuesta de la ia
       final aiFeedBackMessage = ChatMessageModel.ai(
@@ -390,7 +416,8 @@ class ClinicalCaseController extends GetxController with StateMixin<ClinicalCase
     try {
       final clinicalCase = await clinicalCaseServive.getCaseById(caseId);
 
-      if (clinicalCase != null && clinicalCase.type == ClinicalCaseType.analytical) {
+      if (clinicalCase != null &&
+          clinicalCase.type == ClinicalCaseType.analytical) {
         Get.offAndToNamed(Routes.clinicalCaseAnalytical.path(caseId));
       } else {
         Get.offAndToNamed(Routes.clinicalCaseInteractive.path(caseId));

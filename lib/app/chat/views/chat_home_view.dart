@@ -110,10 +110,71 @@ class _ChatHomeViewState extends State<ChatHomeView>
               ),
             );
           } else {
-            return const Padding(
-              padding: EdgeInsets.only(top: 8.0),
-              child: ChatTypingIndicator(),
-            );
+            // Show typing indicator with timeout detection
+            return Obx(() {
+              final timeSinceLastSend = DateTime.now().difference(
+                chatController.lastSendTime.value,
+              );
+              final isLongRunning = timeSinceLastSend.inSeconds > 30;
+
+              return Padding(
+                padding: EdgeInsets.only(top: 8.0),
+                child: Column(
+                  children: [
+                    const ChatTypingIndicator(),
+                    if (isLongRunning) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.warning_amber,
+                              color: Colors.orange.shade600,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'La respuesta está tomando más tiempo del esperado...',
+                                style: TextStyle(
+                                  color: Colors.orange.shade700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed:
+                                  () => chatController.forceStopAndReset(),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                minimumSize: const Size(0, 32),
+                              ),
+                              child: Text(
+                                'Detener',
+                                style: TextStyle(
+                                  color: Colors.orange.shade700,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            });
           }
         },
       );

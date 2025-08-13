@@ -6,8 +6,6 @@ import 'package:ema_educacion_medica_avanzada/config/styles/app_styles.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-
-
 class ClinicalCaseOptions extends StatelessWidget {
   final clinicalCaseController = Get.find<ClinicalCaseController>();
   // final keyboardService = Get.find<KeyboardService>();
@@ -19,10 +17,7 @@ class ClinicalCaseOptions extends StatelessWidget {
 
   final ClinicalCaseType type;
 
-  ClinicalCaseOptions({
-    super.key,
-    required this.type,
-  });
+  ClinicalCaseOptions({super.key, required this.type});
 
   void updateLifeStage(double value) {
     final newLifeStage = LifeStage.fromValue(value);
@@ -51,8 +46,9 @@ class ClinicalCaseOptions extends StatelessWidget {
       lifeStage.value = LifeStage.joven;
     }
   }
-  
+
   void _generateClinicalCase() {
+    print('🔘 [ClinicalCaseOptions] Generate case button pressed');
     clinicalCaseController.generateCase(
       type: type,
       lifeStage: lifeStage.value,
@@ -67,7 +63,9 @@ class ClinicalCaseOptions extends StatelessWidget {
         children: [
           Expanded(
             flex: 2,
-            child: Text('${lifeStage.value.name}\n${lifeStage.value.description}'),
+            child: Text(
+              '${lifeStage.value.name}\n${lifeStage.value.description}',
+            ),
           ),
           Expanded(
             flex: 3,
@@ -75,7 +73,9 @@ class ClinicalCaseOptions extends StatelessWidget {
               value: lifeStage.value.value,
               min: LifeStage.prenatal.value,
               max: LifeStage.anciano.value,
-              divisions: LifeStage.values.length -1, // Número de divisiones entre cada valor
+              divisions:
+                  LifeStage.values.length -
+                  1, // Número de divisiones entre cada valor
               onChanged: (value) {
                 updateLifeStage(value);
               },
@@ -90,10 +90,7 @@ class ClinicalCaseOptions extends StatelessWidget {
         children: [
           Expanded(
             flex: 2,
-            child: Text(
-              sexAndStatus.value.description,
-              softWrap: false,
-            ),
+            child: Text(sexAndStatus.value.description, softWrap: false),
           ),
           Expanded(
             flex: 3,
@@ -119,9 +116,12 @@ class ClinicalCaseOptions extends StatelessWidget {
         Obx(() => buildSexAndStatusSlider()),
         Obx(() => buildLifeStageSlider()),
         SizedBox(height: 8),
-        OutlineAiButton(
-          text: 'Dame un caso',
-          onPressed: _generateClinicalCase
+        Obx(
+          () => OutlineAiButton(
+            text: 'Dame un caso',
+            onPressed: _generateClinicalCase,
+            enabled: !clinicalCaseController.isTyping.value,
+          ),
         ),
       ],
     );

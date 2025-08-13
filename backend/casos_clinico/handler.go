@@ -218,6 +218,10 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
 		"Mantén un tono docente, breve y conversacional acorde a un caso clínico analítico en 10 turnos máximo.",
+		"OBLIGATORIO: Tu respuesta DEBE terminar con una pregunta específica y clara para continuar el análisis del caso clínico.",
+		"Si es el mensaje final del caso (después de 8-10 turnos), incluye: 1) Conclusión/cierre del caso, 2) Bibliografía con 2-3 referencias médicas relevantes.",
+		"Ejemplos de preguntas de cierre: '¿Cuál sería tu diagnóstico diferencial?', '¿Qué exámenes complementarios solicitarías?', '¿Cuál sería tu plan terapéutico?'",
+		"Formato de bibliografía: 'Referencias: 1. Autor et al. Título. Revista. Año;Vol(No):páginas. 2. [...]'",
 		"No incluyas títulos, enumeraciones rígidas ni markdown.",
 		"Idioma: español.",
 	}, " ")

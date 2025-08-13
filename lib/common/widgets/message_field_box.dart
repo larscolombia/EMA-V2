@@ -53,6 +53,9 @@ class _MessageFieldBoxState extends State<MessageFieldBox> {
   Widget build(BuildContext context) {
     return Obx(() {
       final sending = widget.chatController.isSending.value;
+      final pendingPdf = widget.chatController.pendingPdf.value;
+      final hasText = _textController.text.trim().isNotEmpty;
+      final canSend = !sending && (hasText || pendingPdf != null);
 
       final buttons = Padding(
         padding: const EdgeInsets.only(right: 6),
@@ -76,15 +79,15 @@ class _MessageFieldBoxState extends State<MessageFieldBox> {
             ),
             IconButton.filled(
               onPressed:
-                  sending
-                      ? null
-                      : () {
+                  canSend
+                      ? () {
                         widget.chatController.sendMessage(
                           _textController.value.text,
                         );
                         _textController.clear();
                         _focusNode.requestFocus();
-                      },
+                      }
+                      : null,
               padding: const EdgeInsets.all(8),
               style: ButtonStyle(
                 backgroundColor: const WidgetStatePropertyAll(
@@ -134,13 +137,13 @@ class _MessageFieldBoxState extends State<MessageFieldBox> {
         keyboardType: TextInputType.text,
         maxLines: null,
         onFieldSubmitted:
-            sending
-                ? null
-                : (value) {
+            canSend
+                ? (value) {
                   widget.chatController.sendMessage(value);
                   _textController.clear();
                   _focusNode.requestFocus();
-                },
+                }
+                : null,
       );
     });
   }

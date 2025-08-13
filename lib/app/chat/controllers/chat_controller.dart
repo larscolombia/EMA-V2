@@ -50,6 +50,10 @@ class ChatController extends GetxService {
   ChatMessageModel? _lastFailedUserMessage;
   PdfAttachment? _lastFailedPdf;
 
+  // App lifecycle tracking for recovery
+  final isAppResumed = false.obs;
+  final lastSendTime = DateTime.now().obs;
+
   @override
   void onInit() {
     super.onInit();
@@ -69,6 +73,65 @@ class ChatController extends GetxService {
         });
       }
     });
+
+    // Listen for app lifecycle changes to detect when app resumes
+    _setupAppLifecycleListener();
+  }
+
+  void _setupAppLifecycleListener() {
+    // TODO: Implement with WidgetsBindingObserver if needed
+    // For now, we'll detect stuck states in sendMessage
+  }
+
+  void _checkForStuckState() {
+    // If we're "sending" for more than 60 seconds, something went wrong
+    if (isSending.value || isTyping.value) {
+      final timeSinceLastSend = DateTime.now().difference(lastSendTime.value);
+      if (timeSinceLastSend.inSeconds > 60) {
+        print('⚠️ [ChatController] Detected stuck state, resetting...');
+        _resetSendingState();
+
+        // Show retry option to user
+        if (_lastFailedUserMessage != null) {
+          messages.add(
+            ChatMessageModel.temporal(
+              '¡Ups! Parece que la respuesta se quedó pendiente. '
+              'Puedes intentar nuevamente.',
+              true,
+            ),
+          );
+          scrollToBottom();
+        }
+      }
+    }
+  }
+
+  /// Force stop current operation and reset state
+  void forceStopAndReset() {
+    print('🛑 [ChatController] Force stopping current operation');
+    _resetSendingState();
+
+    // Remove any loading/typing indicators from messages
+    if (messages.isNotEmpty &&
+        messages.last.aiMessage &&
+        messages.last.text.isEmpty) {
+      messages.removeLast();
+    }
+
+    // Show user they can retry
+    messages.add(
+      ChatMessageModel.temporal(
+        'Operación detenida. Puedes intentar enviar tu mensaje nuevamente.',
+        true,
+      ),
+    );
+    scrollToBottom();
+  }
+
+  void _resetSendingState() {
+    isSending.value = false;
+    isTyping.value = false;
+    isUploadingPdf.value = false;
   }
 
   void cleanChat() async {
@@ -200,13 +263,20 @@ class ChatController extends GetxService {
     final PdfAttachment? currentPdf = pendingPdf.value;
 
     if (cleanUserText.isEmpty && currentPdf == null) return;
-    if (isSending.value) return;
+    if (isSending.value) {
+      // Check if we're stuck before rejecting
+      _checkForStuckState();
+      return;
+    }
 
     print('🔄 [ChatController] Iniciando envío de mensaje');
     print(
       '📄 [ChatController] Documento adjunto: ${currentPdf != null ? "Sí" : "No"}',
     );
     print('💬 [ChatController] Texto: "$cleanUserText"');
+
+    // Update last send time for stuck detection
+    lastSendTime.value = DateTime.now();
 
     // Validar cuota de chats antes de proceder, pero con política "permitir primero".
     // Consideramos nuevo hilo si no hay threadId o si no hay mensajes (threadId persistido podría ser viejo).
@@ -482,22 +552,33 @@ class ChatController extends GetxService {
           text: '',
         );
         var hasFirstToken = false;
-        final response = await chatsService.sendMessage(
-          threadId: threadId,
-          userMessage: userMessage,
-          file: currentPdf,
-          onStream: (token) {
-            if (!hasFirstToken) {
-              hasFirstToken = true;
-              aiMessage.text = token;
-              messages.add(aiMessage);
-            } else {
-              aiMessage.text += token;
-            }
-            messages.refresh();
-            scrollToBottom();
-          },
-        );
+
+        // Add timeout wrapper for the streaming request
+        final response = await Future.any([
+          chatsService.sendMessage(
+            threadId: threadId,
+            userMessage: userMessage,
+            file: currentPdf,
+            onStream: (token) {
+              // Update last activity time on each token
+              lastSendTime.value = DateTime.now();
+              if (!hasFirstToken) {
+                hasFirstToken = true;
+                aiMessage.text = token;
+                messages.add(aiMessage);
+              } else {
+                aiMessage.text += token;
+              }
+              messages.refresh();
+              scrollToBottom();
+            },
+          ),
+          // Timeout after 3 minutes
+          Future.delayed(
+            const Duration(minutes: 3),
+          ).then((_) => throw Exception('Request timeout after 3 minutes')),
+        ]);
+
         if (!hasFirstToken) {
           aiMessage.text = response.text;
           messages.add(aiMessage);
