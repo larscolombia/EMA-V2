@@ -385,6 +385,10 @@ class ClinicalCaseController extends GetxController
         if (analyticalAiTurns.value >= maxAnalyticalAiTurns && !isComplete.value) {
           await _finalizeAnalyticalCase(clinicalCase);
         }
+        // Heurística: si el modelo ya entregó retroalimentación completa (bibliografía / resumen / diagnóstico) antes del máximo
+        else if (!isComplete.value && _looksLikeAnalyticalClosure(aiMessage.text)) {
+          _completeAnalyticalEarly(clinicalCase, aiMessage.text);
+        }
       }
 
       _scrollToBottom();
@@ -399,6 +403,35 @@ class ClinicalCaseController extends GetxController
         meta: 'userText: $userText',
       );
       isTyping.value = false; // Ensure indicator is hidden on error
+    }
+  }
+
+  bool _looksLikeAnalyticalClosure(String text) {
+    final lower = text.toLowerCase();
+    final hasBibliography = lower.contains('bibliograf');
+    final hasSummary = lower.contains('resumen') || lower.contains('conclusión') || lower.contains('conclusion');
+    final hasDiagnosis = lower.contains('diagnóstico') || lower.contains('diagnostico');
+    final mentionsPlan = lower.contains('plan') || lower.contains('manejo');
+    final looksFinalPhrase = lower.contains('fin del caso') || lower.contains('caso finalizado');
+    // No parece estar solicitando más (ausencia de signo de interrogación múltiple y palabras de pregunta al final)
+    final questionMarks = RegExp(r'[?¿]').allMatches(lower).length;
+    final endsWithQuestion = lower.trim().endsWith('?') || lower.trim().endsWith('¿');
+    final hasPromptForMore = lower.contains('otra pregunta') || lower.contains('algo más') || lower.contains('algo mas');
+    final closureSignals = (hasBibliography && hasDiagnosis) || looksFinalPhrase || (hasSummary && hasDiagnosis && mentionsPlan);
+    return closureSignals && questionMarks < 2 && !endsWithQuestion && !hasPromptForMore;
+  }
+
+  void _completeAnalyticalEarly(ClinicalCaseModel clinicalCase, String aiText) {
+    isComplete.value = true;
+    // Añadir mensaje explícito de cierre si el texto del modelo no contiene una marca clara
+    final lower = aiText.toLowerCase();
+    if (!lower.contains('fin del caso')) {
+      messages.add(
+        ChatMessageModel.ai(
+          chatId: clinicalCase.uid,
+          text: 'Fin del caso clínico. Si deseas, puedes iniciar un nuevo caso para continuar practicando.',
+        ),
+      );
     }
   }
 
