@@ -3,6 +3,7 @@ package casos_interactivos
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -23,11 +24,12 @@ type Assistant interface {
 }
 
 type Handler struct {
-	ai             Assistant
-	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
-	maxQuestions   int
-	mu             sync.Mutex
-	turnCount      map[string]int // thread_id -> number of questions already asked
+	ai                 Assistant
+	quotaValidator     func(ctx context.Context, c *gin.Context, flow string) error
+	maxQuestions       int
+	mu                 sync.Mutex
+	turnCount          map[string]int // thread_id -> number of questions already asked
+	threadMaxQuestions map[string]int // thread_id -> max questions for this specific thread
 }
 
 // DefaultHandler builds the assistant client from env
@@ -44,7 +46,12 @@ func DefaultHandler() *Handler {
 			maxQ = v
 		}
 	}
-	return &Handler{ai: cli, maxQuestions: maxQ, turnCount: make(map[string]int)}
+	return &Handler{
+		ai:                 cli,
+		maxQuestions:       maxQ,
+		turnCount:          make(map[string]int),
+		threadMaxQuestions: make(map[string]int),
+	}
 }
 
 // RegisterRoutes wires only interactive endpoints for the new interactive flow contract
@@ -62,10 +69,11 @@ func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context,
 // --- Models --- //
 
 type startReq struct {
-	Age      string `json:"age"`
-	Sex      string `json:"sex"`
-	Type     string `json:"type"`
-	Pregnant bool   `json:"pregnant"`
+	Age             string `json:"age"`
+	Sex             string `json:"sex"`
+	Type            string `json:"type"`
+	Pregnant        bool   `json:"pregnant"`
+	MaxInteractions int    `json:"max_interactions,omitempty"`
 }
 
 type messageReq struct {
@@ -92,6 +100,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 	if h.turnCount == nil {
 		h.turnCount = make(map[string]int)
 	}
+	if h.threadMaxQuestions == nil {
+		h.threadMaxQuestions = make(map[string]int)
+	}
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "interactive_strict_start"); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "interactive clinical cases quota exceeded"})
@@ -106,20 +117,36 @@ func (h *Handler) StartCase(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 
+	// Use user's max interactions preference if provided, otherwise use default
+	currentMaxQuestions := h.maxQuestions
+	if req.MaxInteractions > 0 && req.MaxInteractions >= 3 && req.MaxInteractions <= 10 {
+		currentMaxQuestions = req.MaxInteractions
+	}
+
 	threadID, err := h.ai.CreateThread(ctx)
 	if err != nil {
 		c.JSON(http.StatusOK, h.fallbackStart(req, ""))
 		return
 	}
 
+	// Store the max questions for this specific thread
+	if threadID != "" {
+		h.mu.Lock()
+		h.threadMaxQuestions[threadID] = currentMaxQuestions
+		h.mu.Unlock()
+	}
+
 	userPrompt := strings.Join([]string{
 		"INICIO DE SESIÓN (rol system): Recibirás el caso clínico completo y NO comentarás. Guarda para usar más adelante.",
-		"FASE DE ANAMNESIS: Muestra historia clínica (síntomas, antecedentes, contexto) y formula una primera pregunta de opción única sobre aproximación diagnóstica.",
+		"FASE DE ANAMNESIS: En 'feedback' muestra la historia clínica completa (síntomas, antecedentes, contexto social/familiar, evolución)",
+		"con al menos 3-4 párrafos detallados. Después formula una primera pregunta de opción única sobre aproximación diagnóstica.",
+		"El feedback debe incluir: motivo de consulta, historia de la enfermedad actual, antecedentes médicos relevantes, examen físico inicial.",
 		"Formato estricto: JSON con keys: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones[4]}}, finish:0. Sin texto fuera del JSON.",
 		"Paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
 	}, " ")
 	instr := strings.Join([]string{
 		"Responde SOLO en JSON válido con claves: feedback, next{hallazgos, pregunta{tipo, texto, opciones}}, finish.",
+		"'feedback' debe contener la historia clínica completa y detallada del paciente (200-300 palabras mínimo).",
 		"No omitas claves ni uses nombres distintos. Sin null ni cadenas vacías. Usa {} si no hay hallazgos. finish=0.",
 		"Cada pregunta debe ser única y coherente con el caso.",
 		"Fuentes: Vector (cita solo el libro) o PubMed con referencia completa. Alterna fuentes entre respuestas.",
@@ -158,6 +185,12 @@ func (h *Handler) StartCase(c *gin.Context) {
 		h.mu.Unlock()
 	}
 
+	// Extract clinical history from the AI feedback
+	clinicalHistory := "Historia clínica inicial proporcionada por el sistema."
+	if feedback, ok := data["feedback"].(string); ok && strings.TrimSpace(feedback) != "" {
+		clinicalHistory = feedback
+	}
+
 	resp := map[string]any{
 		"case": map[string]any{
 			"id":                   0,
@@ -167,7 +200,7 @@ func (h *Handler) StartCase(c *gin.Context) {
 			"sex":                  strings.TrimSpace(req.Sex),
 			"gestante":             boolToInt(req.Pregnant),
 			"is_real":              1,
-			"anamnesis":            "Historia clínica inicial proporcionada por el sistema.",
+			"anamnesis":            clinicalHistory,
 			"physical_examination": "",
 			"diagnostic_tests":     "",
 			"final_diagnosis":      "",
@@ -176,6 +209,16 @@ func (h *Handler) StartCase(c *gin.Context) {
 		"data":      data,
 		"thread_id": threadID,
 	}
+	// Count the very first question delivered in StartCase as one interaction
+	if threadID != "" {
+		h.mu.Lock()
+		if h.turnCount == nil { // safety
+			h.turnCount = make(map[string]int)
+		}
+		h.turnCount[threadID] = 1
+		h.mu.Unlock()
+	}
+	log.Printf("[InteractiveCase][Start] thread=%s max=%d turn=%d", threadID, currentMaxQuestions, 1)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -186,6 +229,9 @@ func (h *Handler) Message(c *gin.Context) {
 	// Ensure counters map exists
 	if h.turnCount == nil {
 		h.turnCount = make(map[string]int)
+	}
+	if h.threadMaxQuestions == nil {
+		h.threadMaxQuestions = make(map[string]int)
 	}
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "interactive_strict_message"); err != nil {
@@ -209,7 +255,9 @@ func (h *Handler) Message(c *gin.Context) {
 
 	// Enforce max questions policy using per-thread counters
 	curr := h.getCount(threadID)
-	if curr >= h.maxQuestions {
+	maxQuestions := h.getMaxQuestions(threadID)
+	if curr >= maxQuestions {
+		log.Printf("[InteractiveCase][Message][CloseEarly] thread=%s curr=%d max=%d (>= max)", threadID, curr, maxQuestions)
 		// Already at or over the limit: return final closure turn
 		final := h.minTurn()
 		final["finish"] = 1
@@ -218,18 +266,17 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(http.StatusOK, map[string]any{"data": withThread(final, threadID)})
 		return
 	}
+	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d", threadID, curr, maxQuestions)
 
 	userPrompt := req.Mensaje
-	closeHint := ""
-	if curr == h.maxQuestions-1 {
-		closeHint = " Esta es la pregunta de cierre (cuarta)."
-	}
+	// Nueva lógica: no forzamos el cierre antes de tiempo; el handler controla el cierre cuando se alcanza el límite.
 	instr := strings.Join([]string{
 		"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones}}, finish(0|1).",
-		"No repitas preguntas previas, progresa lógicamente; cierra en la cuarta con finish=1 y pregunta/hallazgos vacíos.",
-		closeHint,
-		"Fuentes: Vector o PubMed (varía la referencia). Sin texto fuera del JSON.",
-		"Idioma: español.",
+		"'feedback' conciso (máx 50 palabras) evaluando SOLO la respuesta previa y dando explicación breve.",
+		"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
+		"Si el sistema ya alcanzó el límite de preguntas NO generes nueva pregunta (el handler lo indicará).",
+		"Cuando recibas una instrucción implícita de cierre (no habrá nueva pregunta) pon finish=1 y deja hallazgos y pregunta vacíos.",
+		"Fuentes: Vector o PubMed (variar). Sin texto fuera del JSON. Idioma: español.",
 	}, " ")
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
@@ -255,10 +302,59 @@ func (h *Handler) Message(c *gin.Context) {
 	if !validInteractiveTurn(data) {
 		data = h.minTurn()
 	}
+	// If the assistant closed early but we haven't reached the limit, force a placeholder question
+	if curr < maxQuestions {
+		preguntaValid := func() bool {
+			next, ok := data["next"].(map[string]any)
+			if !ok {
+				return false
+			}
+			preg, ok := next["pregunta"].(map[string]any)
+			if !ok {
+				return false
+			}
+			texto, _ := preg["texto"].(string)
+			opcionesAny, okAny := preg["opciones"].([]any)
+			if !okAny {
+				// try []string
+				if arr, ok := preg["opciones"].([]string); ok {
+					for _, v := range arr {
+						_ = v
+					}
+					// convert to []any for length check
+					opcionesAny = make([]any, len(arr))
+					for i, v := range arr {
+						opcionesAny[i] = v
+					}
+				}
+			}
+			tipo, _ := preg["tipo"].(string)
+			if strings.TrimSpace(texto) == "" {
+				return false
+			}
+			if strings.Contains(strings.ToLower(tipo), "single") && len(opcionesAny) < 2 {
+				return false
+			}
+			return true
+		}()
+		if finF, ok := data["finish"].(float64); ok && finF == 1 && curr < maxQuestions {
+			data["finish"] = 0.0
+		}
+		if !preguntaValid {
+			mt := h.minTurn()
+			if nx, ok := data["next"].(map[string]any); ok {
+				nx["pregunta"] = mt["next"].(map[string]any)["pregunta"]
+			} else {
+				data["next"] = mt["next"]
+			}
+			log.Printf("[InteractiveCase][Message][RepairedQuestion] thread=%s curr=%d max=%d", threadID, curr, maxQuestions)
+		}
+	}
 	// Increment counter after generating the next question/turn
 	h.incrementCount(threadID)
 	// If we've reached the limit now, enforce closure on this returned turn
-	if h.getCount(threadID) > h.maxQuestions {
+	maxQuestions = h.getMaxQuestions(threadID)
+	if h.getCount(threadID) > maxQuestions {
 		data["finish"] = 1
 		if nx, ok := data["next"].(map[string]any); ok {
 			nx["hallazgos"] = map[string]any{}
@@ -266,7 +362,9 @@ func (h *Handler) Message(c *gin.Context) {
 		} else {
 			data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{}}
 		}
+		log.Printf("[InteractiveCase][Message][ClosePostGen] thread=%s count=%d max=%d", threadID, h.getCount(threadID), maxQuestions)
 	}
+	log.Printf("[InteractiveCase][Message][Return] thread=%s count=%d max=%d finish=%v", threadID, h.getCount(threadID), maxQuestions, data["finish"])
 	c.JSON(http.StatusOK, map[string]any{"data": withThread(data, threadID)})
 }
 
@@ -283,7 +381,7 @@ func (h *Handler) fallbackStart(req startReq, threadID string) map[string]any {
 			"sex":                  strings.TrimSpace(req.Sex),
 			"gestante":             boolToInt(req.Pregnant),
 			"is_real":              1,
-			"anamnesis":            "Historia clínica inicial no disponible.",
+			"anamnesis":            "Caso clínico básico generado por el sistema de respaldo.",
 			"physical_examination": "",
 			"diagnostic_tests":     "",
 			"final_diagnosis":      "",
@@ -370,6 +468,18 @@ func (h *Handler) incrementCount(threadID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.turnCount[threadID] = h.turnCount[threadID] + 1
+}
+
+func (h *Handler) getMaxQuestions(threadID string) int {
+	if threadID == "" {
+		return h.maxQuestions
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if max, exists := h.threadMaxQuestions[threadID]; exists {
+		return max
+	}
+	return h.maxQuestions
 }
 
 func boolToStr(b bool) string {
