@@ -33,6 +33,10 @@ class ClinicalCaseController extends GetxController
   final isTyping = false.obs; // New observable
   final analyticalAiTurns = 0.obs; // Cuenta respuestas IA en modo analítico
   static const int maxAnalyticalAiTurns = 15;
+  final evaluationGenerated = false.obs; // Evita duplicar evaluación final
+  final interactiveEvaluationGenerated = false.obs; // Para casos interactivos
+  final evaluationInProgress = false.obs; // Evita dobles llamadas
+  static const int maxInteractiveQuestions = 15; // Límite de preguntas en modo interactivo
 
   @override
   void onInit() {
@@ -60,6 +64,11 @@ class ClinicalCaseController extends GetxController
     }
 
     try {
+  // Reset state flags to avoid leftover completion blocking input
+  isComplete.value = false;
+  evaluationGenerated.value = false;
+  interactiveEvaluationGenerated.value = false;
+  analyticalAiTurns.value = 0;
       if (!profileController.canCreateMoreClinicalCases()) {
         Get.snackbar(
           'Límite alcanzado',
@@ -302,9 +311,42 @@ class ClinicalCaseController extends GetxController
       // para cerrar el caso clínico.
       if (feedBackAndNewQuestion.question == '') {
         isComplete.value = true;
+        // Generar evaluación final interactiva y navegar
+        final caseModel = currentCase.value;
+        if (caseModel != null && !interactiveEvaluationGenerated.value && caseModel.type == ClinicalCaseType.interactive) {
+          try {
+            final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
+            messages.add(evalMsg);
+            interactiveEvaluationGenerated.value = true;
+            // Reutilizamos vista de evaluación (puede detectar tipo)
+            Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
+          } catch (e) {
+            Logger.error('Error generando evaluación interactiva: $e');
+          }
+        }
         isTyping.value = false; // Make sure to set typing to false
         return;
       } else {
+        // Chequear límite antes de agregar una nueva pregunta
+        final totalQuestionsBefore = questions.length; // ya incluye la actual respondida
+        if (totalQuestionsBefore >= maxInteractiveQuestions) {
+          // Marcar fin forzado: no se agrega nueva pregunta
+          isComplete.value = true;
+          final caseModel = currentCase.value;
+            if (caseModel != null && !interactiveEvaluationGenerated.value && caseModel.type == ClinicalCaseType.interactive) {
+              try {
+                final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
+                messages.add(evalMsg);
+                interactiveEvaluationGenerated.value = true;
+                Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
+              } catch (e) {
+                Logger.error('Error generando evaluación interactiva (límite): $e');
+              }
+            }
+          isTyping.value = false;
+          _scrollToBottom();
+          return;
+        }
         final aiQuestionMessage = ChatMessageModel.ai(
           chatId: questionWithAnswer.quizId,
           text: feedBackAndNewQuestion.toAiQuestionMessage(),
@@ -386,7 +428,7 @@ class ClinicalCaseController extends GetxController
           await _finalizeAnalyticalCase(clinicalCase);
         }
         // Heurística: si el modelo ya entregó retroalimentación completa (bibliografía / resumen / diagnóstico) antes del máximo
-        else if (!isComplete.value && _looksLikeAnalyticalClosure(aiMessage.text)) {
+  else if (!isComplete.value && analyticalAiTurns.value > 1 && _looksLikeAnalyticalClosure(aiMessage.text)) {
           _completeAnalyticalEarly(clinicalCase, aiMessage.text);
         }
       }
@@ -406,6 +448,35 @@ class ClinicalCaseController extends GetxController
     }
   }
 
+  /// Genera un mensaje de evaluación final explícita en modo analítico
+  /// incluso después de haber marcado el caso como completo.
+  Future<void> generateFinalEvaluation() async {
+    final clinicalCase = currentCase.value;
+    if (clinicalCase == null || clinicalCase.type != ClinicalCaseType.analytical) {
+      return;
+    }
+    if (evaluationInProgress.value || evaluationGenerated.value) {
+      return;
+    }
+    try {
+      evaluationInProgress.value = true;
+      isTyping.value = true;
+      // Navegar primero para mostrar loader blanco
+      Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
+      // Generar evaluación (puede tardar, la vista muestra loader)
+      final evaluationMessage = await clinicalCaseServive.generateAnalyticalEvaluation(clinicalCase);
+      messages.add(evaluationMessage);
+      _scrollToBottom();
+      evaluationGenerated.value = true;
+    } catch (e) {
+      Logger.error('Error al generar evaluación analítica: $e');
+      Notify.snackbar('Casos clínicos', 'No se pudo generar la evaluación final.', NotifyType.error);
+    } finally {
+      evaluationInProgress.value = false;
+      isTyping.value = false;
+    }
+  }
+
   bool _looksLikeAnalyticalClosure(String text) {
     final lower = text.toLowerCase();
     final hasBibliography = lower.contains('bibliograf');
@@ -421,6 +492,30 @@ class ClinicalCaseController extends GetxController
     return closureSignals && questionMarks < 2 && !endsWithQuestion && !hasPromptForMore;
   }
 
+  /// Indica si debemos ofrecer al usuario un botón para finalizar el caso analítico.
+  bool get shouldOfferAnalyticalFinalize {
+    final caseModel = currentCase.value;
+    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical) return false;
+    if (isComplete.value || evaluationInProgress.value || evaluationGenerated.value) return false;
+    // Si ya hubo suficientes turnos de la IA
+    if (analyticalAiTurns.value >= 4) return true; // umbral configurable
+    // O si el último mensaje AI parece de cierre
+    for (final m in messages.reversed) {
+      if (m.aiMessage) {
+        return _looksLikeAnalyticalClosure(m.text);
+      }
+    }
+    return false;
+  }
+
+  /// Finaliza caso analítico desde la UI (botón del usuario)
+  Future<void> finalizeAnalyticalFromUser() async {
+    final caseModel = currentCase.value;
+    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical) return;
+    if (isComplete.value || evaluationInProgress.value) return;
+    await _finalizeAnalyticalCase(caseModel);
+  }
+
   void _completeAnalyticalEarly(ClinicalCaseModel clinicalCase, String aiText) {
     isComplete.value = true;
     // Añadir mensaje explícito de cierre si el texto del modelo no contiene una marca clara
@@ -433,6 +528,7 @@ class ClinicalCaseController extends GetxController
         ),
       );
     }
+  generateFinalEvaluation();
   }
 
   Future<void> _finalizeAnalyticalCase(ClinicalCaseModel clinicalCase) async {
@@ -454,6 +550,7 @@ class ClinicalCaseController extends GetxController
       final aiClosing = await clinicalCaseServive.sendMessage(userClosingMessage);
       messages.add(aiClosing);
       isComplete.value = true;
+  await generateFinalEvaluation();
     } catch (e) {
       // Si falla el cierre, no bloquear al usuario (podría intentar nuevamente manualmente)
       Logger.error('Error al generar cierre analítico: $e');

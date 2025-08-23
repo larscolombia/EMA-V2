@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'animations/slide_in_left.dart';
+import 'chat_markdown_wrapper.dart';
 
 class ChatMessageAi extends StatefulWidget {
   final ChatMessageModel message;
@@ -45,6 +46,15 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   @override
   Widget build(BuildContext context) {
     final String timeStr = DateFormat('HH:mm').format(widget.message.createdAt);
+    
+    // Debug: imprimir la longitud del texto del mensaje
+    print('🔍 [ChatMessageAi] Mensaje recibido - Longitud: ${widget.message.text.length}');
+    print('🔍 [ChatMessageAi] Primeros 200 caracteres: ${widget.message.text.length > 200 ? widget.message.text.substring(0, 200) + "..." : widget.message.text}');
+
+    // Si no hay texto útil, no renderizar la burbuja para evitar espacios en blanco y overflows innecesarios
+    if (widget.message.text.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -70,24 +80,14 @@ class _ChatMessageAiState extends State<ChatMessageAi>
               children: [
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: GptMarkdown(
-                    widget.message.text,
-                    // Parámetros adicionales para personalizar la renderización:
-                    textAlign: TextAlign.justify,
-                    textScaler: const TextScaler.linear(1),
-                    style: const TextStyle(fontSize: 15, color: Colors.white),
-
-                    // onLinkTab eliminado por incompatibilidad con la versión actual de gpt_markdown
-                    // Además, puedes sobreescribir la forma en que se muestra el enlace utilizando linkBuilder
-                    linkBuilder: (context, label, path, style) {
-                      return Text(
-                        label.toString(),
-                        style: style.copyWith(
-                          color: Colors.blue,
-                          decoration: TextDecoration.underline,
-                        ),
-                      );
-                    },
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      minHeight: 50, // Asegurar altura mínima
+                    ),
+                    child: ChatMarkdownWrapper(
+                      text: widget.message.text,
+                      style: const TextStyle(fontSize: 15, color: Colors.white),
+                    ),
                   ),
                 ),
                 // Muestra la hora del mensaje

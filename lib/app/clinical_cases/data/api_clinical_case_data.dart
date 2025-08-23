@@ -3,6 +3,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/clinical_case_generate_data.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/models/question_response_model.dart';
+import 'package:ema_educacion_medica_avanzada/app/subscriptions/controllers/subscription_controller.dart';
 import 'package:ema_educacion_medica_avanzada/core/api/api_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/logger/logger.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -77,7 +78,16 @@ class ApiClinicalCaseData {
         question: firstQuestion,
       );
     } catch (e) {
-      Logger.error(e.toString());
+      final msg = e.toString();
+      Logger.error(msg);
+      // Detección básica de cuota agotada (mensaje backend 403)
+      if (msg.contains('clinical cases quota exceeded') || msg.contains('quota') || msg.contains('403')) {
+        // Intentar notificar y redirigir a planes
+        try {
+          final subController = Get.isRegistered<SubscriptionController>() ? Get.find<SubscriptionController>() : null;
+          subController?.handleQuotaExceeded();
+        } catch (_) {}
+      }
       throw Exception('No fue posible crear el caso clínico.');
     }
   }
@@ -106,6 +116,7 @@ class ApiClinicalCaseData {
       final pregunta =
           (next['pregunta'] ?? const <String, dynamic>{})
               as Map<String, dynamic>;
+      final isFinished = data['finish'] == 1;
       final questionMap = {
         'id': 0,
         'question': pregunta['texto'] ?? '',
@@ -115,6 +126,7 @@ class ApiClinicalCaseData {
           '_',
         ),
         'options': pregunta['opciones'] ?? [],
+        'finished': isFinished, // Add the finished flag
       };
 
       final newThreadId = data['thread_id'];

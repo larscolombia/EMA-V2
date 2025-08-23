@@ -19,8 +19,10 @@ class ApiSubscriptionService extends SubscriptionService {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body)['data'] as List;
-        return data.map((item) => Subscription.fromJson(item)).toList();
+  final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+  final data = decoded['data'] as List;
+  // active flag is per-plan already; just parse
+  return data.map((item) => Subscription.fromJson(item)).toList();
       } else {
         throw Exception(
           'Error al obtener las suscripciones: ${response.statusCode}',
@@ -155,4 +157,61 @@ class ApiSubscriptionService extends SubscriptionService {
     }
     return checkoutUrl;
   }
+
+  // Nuevo: devuelve estructura completa (url, sessionId, autoSubscribed)
+  Future<_CheckoutResult> createCheckoutFull({
+    required int userId,
+    required int subscriptionPlanId,
+    required int frequency,
+    required String authToken,
+  }) async {
+    final url = Uri.parse('$apiUrl/checkout');
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $authToken',
+      },
+      body: jsonEncode({
+        'user_id': userId,
+        'plan_id': subscriptionPlanId,
+        'frequency': frequency,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Error en checkout: ${response.statusCode}');
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return _CheckoutResult(
+      url: data['checkout_url']?.toString() ?? '',
+      sessionId: data['session_id']?.toString() ?? '',
+      autoSubscribed: data['auto_subscribed'] == true,
+    );
+  }
+
+  // Dev helper: force subscription without waiting for webhook (APP_ENV=dev in backend)
+  Future<bool> forceSubscribe({
+    required int planId,
+    required int frequency,
+    required String authToken,
+  }) async {
+    final url = Uri.parse('$apiUrl/dev/force-subscribe');
+    final resp = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $authToken',
+      },
+      body: jsonEncode({'plan_id': planId, 'frequency': frequency}),
+    );
+    if (resp.statusCode == 200) return true;
+    return false;
+  }
+}
+
+class _CheckoutResult {
+  final String url;
+  final String sessionId;
+  final bool autoSubscribed;
+  _CheckoutResult({required this.url, required this.sessionId, required this.autoSubscribed});
 }

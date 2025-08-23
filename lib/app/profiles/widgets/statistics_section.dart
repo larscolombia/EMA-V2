@@ -54,6 +54,11 @@ class StatisticsSection extends StatelessWidget {
           const SizedBox(height: 16),
           if (hasStatistics)
             Obx(() {
+              final profileController = Get.find<ProfileController>();
+              final sub = profileController.currentProfile.value.activeSubscription;
+              final totalChatsQuota = sub?.consultations ?? 0;
+              final totalTestsQuota = sub?.questionnaires ?? 0;
+              final totalClinicalQuota = sub?.clinicalCases ?? 0;
               return Row(
                 children: [
                   Expanded(
@@ -62,6 +67,7 @@ class StatisticsSection extends StatelessWidget {
                       'Chats',
                       progressController.totalChats.value,
                       AppIcons.chats(height: 32, width: 32),
+                      total: totalChatsQuota,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -71,6 +77,7 @@ class StatisticsSection extends StatelessWidget {
                       'Cuestionarios',
                       progressController.totalTests.value,
                       AppIcons.quizzesGeneral(height: 32, width: 32),
+                      total: totalTestsQuota,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -80,6 +87,7 @@ class StatisticsSection extends StatelessWidget {
                       'Casos Clínicos',
                       progressController.totalClinicalCases.value,
                       AppIcons.clinicalCaseAnalytical(height: 32, width: 32),
+                      total: totalClinicalQuota,
                     ),
                   ),
                 ],
@@ -557,40 +565,55 @@ class StatisticsSection extends StatelessWidget {
   }
 
   Widget _buildStatisticCard(
-      BuildContext context, String label, int count, Widget icon) {
+      BuildContext context, String label, int count, Widget icon, {
+      int? total,
+    }) {
+  final showTotal = total != null && total > 0;
+  final double progress = showTotal && total != 0
+    ? (count / total!).clamp(0.0, 1.0).toDouble()
+    : 0.0;
     return Container(
-      height: 100,
-      padding: const EdgeInsets.all(10),
+      constraints: const BoxConstraints(minHeight: 100),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppStyles.grey220.withAlpha((0.5 * 255).toInt()),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          FittedBox(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                icon,
-                const SizedBox(width: 5),
-                Text(
-                  '$count',
-                  style: _countStyle(context),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              icon,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: _labelStyle(context).copyWith(fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: _labelStyle(context).copyWith(fontSize: 13),
-              maxLines: 1,
+          const SizedBox(height: 8),
+            Text(
+              showTotal ? '$count / $total' : '$count',
+              style: _countStyle(context),
             ),
-          ),
+          if (showTotal) ...[
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress.isNaN ? 0.0 : progress,
+                minHeight: 5,
+                backgroundColor: AppStyles.grey200,
+                color: AppStyles.primaryColor,
+              ),
+            ),
+          ],
         ],
       ),
     );

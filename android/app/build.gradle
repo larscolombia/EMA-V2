@@ -8,7 +8,9 @@ plugins {
 android {
     namespace = "com.example.ema"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Pin to a locally installed NDK version with a valid source.properties.
+    // Previous value (flutter.ndkVersion -> 26.3.11579264) was partially installed and broke release builds.
+    ndkVersion = "26.1.10909125"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8

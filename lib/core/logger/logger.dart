@@ -30,4 +30,13 @@ class Logger {
     // print('END OF CONTENT');
     // print(':::::::::::::::::::::::::::::::::::::::::::::::::::::::');
   }
+
+  // Simple warning logger (yellow)
+  static void warn(String message, {String? className, String? methodName}) {
+    const String yellow = '\x1B[33m';
+    const String reset = '\x1B[0m';
+    if (className != null) print('::::: $yellow$className$reset :::::');
+    if (methodName != null) print('::::: $yellow$methodName$reset :::::');
+    print('::::: ${yellow}WARN: $message$reset :::::');
+  }
 }

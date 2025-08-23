@@ -7,34 +7,48 @@ import 'package:http/http.dart' as http;
 import '../../../config/constants/constants.dart';
 
 class ApiUserTestProgressService extends UserTestProgressService {
+  Map<int, Map<String, dynamic>> _overviewCache = {}; // userId -> overview data
+
+  Future<Map<String, dynamic>> _fetchOverview({required int userId, required String authToken, bool forceRefresh = false}) async {
+    if (!forceRefresh && _overviewCache.containsKey(userId)) {
+      return _overviewCache[userId]!;
+    }
+    final url = Uri.parse('$apiUrl/user-overview/$userId');
+    final response = await http.get(url, headers: {
+      'Authorization': 'Bearer $authToken',
+      'Accept': 'application/json',
+    });
+    if (response.statusCode == 200) {
+      final jsonResponse = jsonDecode(response.body);
+      final data = jsonResponse['data'] as Map<String, dynamic>;
+      try {
+        final profile = data['profile'] as Map<String, dynamic>?;
+        final active = profile?['active_subscription'] as Map<String, dynamic>?;
+        if (active != null) {
+          final plan = (active['subscription_plan'] as Map<String, dynamic>?)?['name'];
+          final cons = active['consultations'];
+          final quest = active['questionnaires'];
+            final clin = active['clinical_cases'];
+            final files = active['files'];
+          // Debug print visible in Flutter console
+          // ignore: avoid_print
+          print('[QUOTA] plan=$plan consultations=$cons questionnaires=$quest clinical_cases=$clin files=$files');
+        }
+      } catch (_) {}
+      _overviewCache[userId] = data; // cache entire overview
+      return data;
+    }
+    throw Exception('Error overview: ${response.statusCode}');
+  }
   @override
   Future<TestProgressData> fetchTestScores({
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/user/$userId/test-progress');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      final resumen = jsonResponse['data']['resumen'];
-      // print(resumen);
-      return TestProgressData.fromJson({
-        'data': {'resumen': resumen}
-      });
-    } else if (response.statusCode == 404) {
-      final jsonResponse = jsonDecode(response.body);
-      throw Exception(jsonResponse['message'] ?? 'Usuario no encontrado.');
-    } else {
-      throw Exception(
-          'Error al obtener los puntos de evaluación: ${response.statusCode}');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  // Stubs currently empty; adapt when backend adds real fields
+  final resumen = (data['stats']?['test_progress'] ?? []);
+  return TestProgressData.fromJson({'data': {'resumen': resumen}});
   }
 
   @override
@@ -42,28 +56,9 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/user/$userId/test-progress');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      final data = jsonResponse['data'];
-      // Se extrae la lista de puntos mensuales del campo "puntos_meses"
-      final List<dynamic> puntosMeses = data['puntos_meses'];
-      return puntosMeses.map((item) => MonthlyScore.fromJson(item)).toList();
-    } else if (response.statusCode == 404) {
-      final jsonResponse = jsonDecode(response.body);
-      throw Exception(jsonResponse['message'] ?? 'Usuario no encontrado.');
-    } else {
-      throw Exception(
-          'Error al obtener los puntos mensuales: ${response.statusCode}');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  final List<dynamic> puntosMeses = data['stats']?['test_progress'] ?? [];
+  return puntosMeses.map((item) => MonthlyScore.fromJson(item)).toList();
   }
 
   @override
@@ -71,25 +66,9 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/user/$userId/most-studied-category');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      final data = jsonResponse['data'];
-
-      return MostStudiedCategory.fromJson(data);
-    } else {
-      final jsonResponse = jsonDecode(response.body);
-      throw Exception(
-          jsonResponse['message'] ?? 'Error fetching premium data.');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  // Stubbed -> returns empty/placeholder
+  return MostStudiedCategory.fromJson(data['stats'] ?? {});
   }
 
   @override
@@ -97,21 +76,8 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/user/$userId/total-tests');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      return jsonResponse['data']['total_tests'] as int;
-    } else {
-      throw Exception(
-          'Error al obtener total de cuestionarios: ${response.statusCode}');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  return (data['stats']?['total_tests'] ?? 0) as int;
   }
 
   @override
@@ -119,21 +85,9 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/chats/$userId');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      return int.parse(jsonResponse['total_chats'].toString());
-    } else {
-      throw Exception(
-          'Error al obtener total de chats: ${response.statusCode}');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  final chats = data['stats']?['chats'] as List<dynamic>?;
+  return chats?.length ?? 0;
   }
 
   @override
@@ -141,20 +95,7 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final url = Uri.parse('$apiUrl/users/$userId/clinical-cases-count');
-    final response = await http.get(
-      url,
-      headers: {
-        'Authorization': 'Bearer $authToken',
-        'Accept': 'application/json',
-      },
-    );
-    if (response.statusCode == 200) {
-      final jsonResponse = jsonDecode(response.body);
-      return jsonResponse['clinical_cases_count'] as int;
-    } else {
-      throw Exception(
-          'Error al obtener casos clínicos: ${response.statusCode}');
-    }
+  final data = await _fetchOverview(userId: userId, authToken: authToken);
+  return (data['stats']?['clinical_cases_count'] ?? 0) as int;
   }
 }

@@ -64,7 +64,8 @@ class SubscriptionsView extends StatelessWidget {
 
   Widget _buildSubscriptionCard(
       Subscription subscription, SubscriptionController controller) {
-    bool isFreePlan = subscription.name == 'Free';
+  bool isFreePlan = subscription.name == 'Free';
+  bool isActive = subscription.active; // backend-driven
 
     return Container(
       decoration: BoxDecoration(
@@ -78,8 +79,8 @@ class SubscriptionsView extends StatelessWidget {
           ),
         ],
         border: Border.all(
-          color: isFreePlan ? Colors.green : AppStyles.primaryColor,
-          width: 2,
+          color: isActive ? Colors.green : AppStyles.primaryColor,
+          width: isActive ? 3 : 1.5,
         ),
       ),
       padding: const EdgeInsets.all(16),
@@ -104,7 +105,7 @@ class SubscriptionsView extends StatelessWidget {
                   ),
                 ),
               ),
-              if (isFreePlan)
+      if (isActive)
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -113,14 +114,15 @@ class SubscriptionsView extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    'Gratis',
+        isFreePlan ? 'Gratis' : 'Activo',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                ),
+                )
+      ,
             ],
           ),
           const SizedBox(height: 12),
@@ -168,18 +170,21 @@ class SubscriptionsView extends StatelessWidget {
           // Botón para seleccionar plan
           Center(
             child: ElevatedButton(
-              onPressed: () async {
-                try {
-                  await controller.createSubscription(
-                    subscriptionPlanId: subscription.id,
-                    frequency: subscription.frequency ?? 0,
-                  );
-                } catch (e) {
-                  Get.snackbar('Error', e.toString());
-                }
-              },
+              onPressed: isActive
+                  ? null
+                  : () async {
+                      try {
+                        await controller.createSubscription(
+                          subscriptionPlanId: subscription.id,
+                          frequency: subscription.frequency ?? 0,
+                        );
+                      } catch (e) {
+                        Get.snackbar('Error', e.toString());
+                      }
+                    },
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppStyles.primary900,
+                backgroundColor:
+                    isActive ? Colors.grey : AppStyles.primary900,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -187,10 +192,10 @@ class SubscriptionsView extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               ),
               child: Center(
-                child: const Text(
-                  'Seleccionar Plan',
+                child: Text(
+                  isActive ? 'Tu Plan Actual' : 'Seleccionar Plan',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,

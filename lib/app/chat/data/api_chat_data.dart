@@ -95,7 +95,9 @@ class ApiChatData implements IApiChatData {
             // remove only the single space after the colon to restore the exact token from OpenAI.
             var content = line.substring(5); // " <msg>" or " [DONE]"
             if (content.startsWith(' ')) content = content.substring(1);
+            print('📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)');
             if (content == '[DONE]') {
+              print('📡 [API] Received DONE marker, ending stream');
               break;
             }
             buffer.write(content);
@@ -104,7 +106,10 @@ class ApiChatData implements IApiChatData {
         }
       }
 
-      return ChatMessageModel.ai(chatId: threadId, text: buffer.toString());
+      final finalText = buffer.toString();
+      print('📡 [API] Final buffer length: ${finalText.length} characters');
+      print('📡 [API] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"');
+      return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation
@@ -178,7 +183,9 @@ class ApiChatData implements IApiChatData {
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
+            print('📡 [API2] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)');
             if (content == '[DONE]') {
+              print('📡 [API2] Received DONE marker, ending stream');
               break;
             }
             buffer.write(content);
@@ -186,7 +193,10 @@ class ApiChatData implements IApiChatData {
           }
         }
       }
-      return ChatMessageModel.ai(chatId: threadId, text: buffer.toString());
+      final finalText = buffer.toString();
+      print('📡 [API2] Final buffer length: ${finalText.length} characters');
+      print('📡 [API2] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"');
+      return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation

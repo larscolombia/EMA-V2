@@ -33,6 +33,9 @@ class ChatController extends GetxService {
   final isTyping = false.obs;
   final isSending = false.obs;
 
+  // Evita llamadas duplicadas a /asistente/start durante la creación del primer mensaje
+  bool _startingNewChat = false;
+
   String threadId = '';
   final threadPref = StringPreference(
     key: 'current_thread_id',
@@ -175,6 +178,8 @@ class ChatController extends GetxService {
     try {
       cleanChat();
       isTyping.value = true;
+  _startingNewChat = true;
+  print('🧪 [ChatController] startNewChat -> llamando a startChat (prompt vacío)');
   final start = await chatsService.startChat('');
   // En modo test forzamos un threadId estable para validar persistencia
   threadId = Get.testMode ? (start.threadId.isNotEmpty ? start.threadId : 'test-thread') : start.threadId;
@@ -186,6 +191,7 @@ class ChatController extends GetxService {
     } catch (e) {
       error.value = 'Error al iniciar conversación';
     } finally {
+  _startingNewChat = false;
       isTyping.value = false;
     }
   }
@@ -234,7 +240,8 @@ class ChatController extends GetxService {
         aiMessage.text = response.text;
         messages.add(aiMessage);
       } else {
-        aiMessage.text = response.text;
+        // Don't overwrite the streamed content with response.text!
+        // aiMessage.text = response.text;
       }
       // Success: clear snapshot
       _lastFailedUserMessage = null;
@@ -371,6 +378,8 @@ class ChatController extends GetxService {
       if (threadId.isEmpty) {
         print('🆕 [ChatController] Iniciando nuevo chat');
         try {
+          _startingNewChat = true;
+          print('➡️ [ChatController] startChat(cleanUserText)');
           final start = await chatsService.startChat(cleanUserText);
           threadId = start.threadId;
           threadPref.setValue(threadId);
@@ -417,18 +426,28 @@ class ChatController extends GetxService {
                   hasFirstToken = true;
                   aiMessage.text = token;
                   messages.add(aiMessage);
+                  print('🎯 [Controller] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)');
                 } else {
                   aiMessage.text += token;
+                  print('🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}');
                 }
                 messages.refresh();
                 scrollToBottom();
               },
             );
+            print('🎯 [Controller] Stream completed. Response.text length: ${response.text.length}');
+            print('🎯 [Controller] Current aiMessage.text length: ${aiMessage.text.length}');
+            print('🎯 [Controller] Response.text preview: "${response.text.substring(0, response.text.length > 200 ? 200 : response.text.length)}${response.text.length > 200 ? "..." : ""}"');
+            print('🎯 [Controller] Current aiMessage.text preview: "${aiMessage.text.substring(0, aiMessage.text.length > 200 ? 200 : aiMessage.text.length)}${aiMessage.text.length > 200 ? "..." : ""}"');
+            
             if (!hasFirstToken) {
               aiMessage.text = response.text;
               messages.add(aiMessage);
+              print('🎯 [Controller] No first token - set aiMessage.text to response.text');
             } else {
-              aiMessage.text = response.text;
+              // Don't overwrite the streamed content with response.text!
+              // aiMessage.text = response.text;
+              print('🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}');
             }
             chatsService.chatMessagesLocalData.insertOne(aiMessage);
             pendingPdf.value = null;
@@ -441,6 +460,25 @@ class ChatController extends GetxService {
         } catch (e) {
           // Fallback: crear thread con prompt vacío y luego enviar el mensaje del usuario vía streaming
           print('⚠️ [ChatController] Fallback: start vacío tras error: $e');
+          // Si ya teníamos un threadId (el Start inicial sí funcionó) entonces NO debemos volver a llamar a /asistente/start
+          // La excepción casi siempre proviene del primer sendMessage (p.ej. 403 de quota u otro error de red)
+          // Reintentar start provoca duplicación de hilos y doble tarjeta de PDF.
+          if (threadId.isNotEmpty) {
+            _startingNewChat = false;
+            print('🛑 [ChatController] Abortando re-intento de startChat: threadId ya existe=$threadId');
+            messages.add(
+              ChatMessageModel.temporal(
+                'No se pudo enviar el mensaje (posible límite de cuota o error de red). Intenta de nuevo.',
+                true,
+              ),
+            );
+            scrollToBottom();
+            return; // salimos sin crear un nuevo thread duplicado
+          }
+          if (_startingNewChat) {
+            print('🛑 [ChatController] _startingNewChat=true y threadId vacío: evitando duplicación.');
+            _startingNewChat = false;
+          }
           final start = await chatsService.startChat('');
           threadId = start.threadId;
           threadPref.setValue(threadId);
@@ -500,7 +538,8 @@ class ChatController extends GetxService {
             aiMessage.text = response.text;
             messages.add(aiMessage);
           } else {
-            aiMessage.text = response.text;
+            // Don't overwrite the streamed content with response.text!
+            // aiMessage.text = response.text;
           }
 
           // Descontar cuota después de enviar en fallback
@@ -516,6 +555,8 @@ class ChatController extends GetxService {
           return;
         }
       }
+  // Resetea flag de inicio si se completó este bloque
+  _startingNewChat = false;
 
       // Solo generar registro de chat si aún no existe uno persistido (currentChat.shortTitle vacío indica nuevo)
       if (currentChat.value.shortTitle.isEmpty) {
@@ -570,66 +611,78 @@ class ChatController extends GetxService {
       }
 
       try {
-        print('🚀 [ChatController] Enviando mensaje al servidor...');
-        final aiMessage = ChatMessageModel.ai(
-          chatId: currentChat.value.uid,
-          text: '',
-        );
+        print('🚀 [ChatController] Enviando mensaje al servidor (con reintentos)...');
+        final aiMessage = ChatMessageModel.ai(chatId: currentChat.value.uid, text: '');
         var hasFirstToken = false;
 
-        // Add timeout wrapper for the streaming request
-        final response = await Future.any([
-          chatsService.sendMessage(
-            threadId: threadId,
-            userMessage: userMessage,
-            file: currentPdf,
-            onStream: (token) {
-              // Update last activity time on each token
-              lastSendTime.value = DateTime.now();
-              if (!hasFirstToken) {
-                hasFirstToken = true;
-                aiMessage.text = token;
-                messages.add(aiMessage);
-              } else {
-                aiMessage.text += token;
-              }
-              messages.refresh();
+        Future<ChatMessageModel> attemptSend() => chatsService.sendMessage(
+              threadId: threadId,
+              userMessage: userMessage,
+              file: currentPdf,
+              onStream: (token) {
+                lastSendTime.value = DateTime.now();
+                if (!hasFirstToken) {
+                  hasFirstToken = true;
+                  aiMessage.text = token;
+                  messages.add(aiMessage);
+                } else {
+                  aiMessage.text += token;
+                }
+                messages.refresh();
+                scrollToBottom();
+              },
+            );
+        ChatMessageModel response;
+        const maxPdfPollRetries = 4;
+        int tries = 0;
+        while (true) {
+          tries++;
+          try {
+            response = await Future.any([
+              attemptSend(),
+              Future.delayed(const Duration(minutes: 3)).then((_) => throw Exception('Request timeout after 3 minutes')),
+            ]);
+            break; // éxito
+          } catch (err) {
+            final msg = err.toString();
+            if (msg.contains('PDF_PROCESSING') && tries <= maxPdfPollRetries) {
+              messages.add(ChatMessageModel.temporal('Procesando el PDF... reintentando (#$tries)', true));
               scrollToBottom();
-            },
-          ),
-          // Timeout after 3 minutes
-          Future.delayed(
-            const Duration(minutes: 3),
-          ).then((_) => throw Exception('Request timeout after 3 minutes')),
-        ]);
-
+              await Future.delayed(Duration(seconds: 3 * tries));
+              continue;
+            }
+            if (msg.contains('QUOTA_EXCEEDED')) {
+              messages.add(ChatMessageModel.temporal('Límite alcanzado para este tipo de mensaje. Actualiza tu plan.', true));
+              scrollToBottom();
+              return;
+            }
+            rethrow;
+          }
+        }
         if (!hasFirstToken) {
           aiMessage.text = response.text;
           messages.add(aiMessage);
         } else {
-          aiMessage.text = response.text;
+          // Don't overwrite the streamed content with response.text!
+          // aiMessage.text = response.text;
         }
         print('✅ [ChatController] Respuesta del servidor recibida');
-
-        // Descontar la cuota después de enviar el archivo
+        
+        // Ensure proper scrolling for structured content with multiple delayed attempts
+        scrollToBottom();
+        // Schedule additional scrolls for complex markdown content
+        Future.delayed(const Duration(milliseconds: 800), scrollToBottom);
+        Future.delayed(const Duration(seconds: 1), scrollToBottom);
+        
         if (currentPdf != null) {
           final success = await profileController.decrementFileQuota();
-          if (success) {
-            profileController.refreshFileQuota();
-          }
+          if (success) profileController.refreshFileQuota();
         }
       } catch (error) {
         print('❌ [ChatController] Error al enviar mensaje: $error');
-        // Keep snapshot for retry
         _lastFailedUserMessage = userMessage;
         _lastFailedPdf = currentPdf;
-        messages.add(
-          ChatMessageModel.temporal(
-            '¡Ups! Parece que hubo un problema al procesar tu mensaje. '
-            'Por favor, intenta nuevamente en unos momentos.',
-            true,
-          ),
-        );
+        messages.add(ChatMessageModel.temporal('¡Ups! Parece que hubo un problema al procesar tu mensaje. Por favor, intenta nuevamente en unos momentos.', true));
         scrollToBottom();
       }
     } catch (e) {
@@ -651,12 +704,10 @@ class ChatController extends GetxService {
       return;
     }
 
+    // First immediate scroll to current max extent
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
         final position = _chatScrollController!.position;
-
-        // Skip if we're already at bottom
-        if (position.pixels == position.maxScrollExtent) return;
 
         // Skip if user manually scrolled and we're not forcing scroll
         if (userManuallyScrolled.value && !autoScrollEnabled.value) return;
@@ -672,6 +723,28 @@ class ChatController extends GetxService {
           duration: duration,
           curve: Curves.easeOutCubic,
         );
+        
+        // Add a second delayed scroll to handle dynamically rendered content
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (_chatScrollController == null || !_chatScrollController!.hasClients) return;
+          
+          try {
+            // Recheck maxScrollExtent after layout is complete
+            final updatedPosition = _chatScrollController!.position;
+            
+            // Only scroll if we're not already at the bottom and auto-scroll is enabled
+            if (updatedPosition.pixels < updatedPosition.maxScrollExtent && 
+                (autoScrollEnabled.value || !userManuallyScrolled.value)) {
+              _chatScrollController?.animateTo(
+                updatedPosition.maxScrollExtent,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+              );
+            }
+          } catch (e) {
+            // Ignore scroll errors
+          }
+        });
       } catch (e) {
         // Ignore scroll errors
       }

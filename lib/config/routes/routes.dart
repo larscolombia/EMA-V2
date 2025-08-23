@@ -4,6 +4,7 @@ enum Routes {
   actionsList,
   clinicalCaseAnalytical,
   clinicalCaseInteractive,
+  clinicalCaseEvaluation,
   // clinicalCasesHome,
   home,
   login,
@@ -27,6 +28,8 @@ enum Routes {
 
       case clinicalCaseInteractive:
         return '/clinical-case-interactive/:uid';
+      case clinicalCaseEvaluation:
+        return '/clinical-case-evaluation/:uid';
 
       // case clinicalCasesHome:
       //   return '/clinical-cases';

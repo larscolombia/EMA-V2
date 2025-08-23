@@ -97,10 +97,19 @@ class _ProfileHeaderState extends State<ProfileHeader> {
           Stack(
             children: [
               Obx(() {
-                final profileImage = Get.find<ProfileController>()
+                String profileImage = Get.find<ProfileController>()
                     .currentProfile
                     .value
                     .profileImage;
+                if (profileImage.isNotEmpty && !profileImage.startsWith('http')) {
+                  // Asegurar URL absoluta para evitar "No host specified".
+                  final base = ApiConstants.apiUrl;
+                  if (profileImage.startsWith('media/')) {
+                    profileImage = '$base/$profileImage';
+                  } else if (profileImage.startsWith('/media/')) {
+                    profileImage = '$base${profileImage.startsWith('/') ? profileImage : '/$profileImage'}';
+                  }
+                }
                 return Container(
                   width: 100,
                   height: 100,

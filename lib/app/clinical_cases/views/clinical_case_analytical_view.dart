@@ -237,6 +237,15 @@ class _ClinicalCaseAnalyticalViewState
                       Obx(
                         () => Column(
                           children: [
+                            // Trigger para navegación a evaluación cuando el caso se marca completo
+                            if (controller.isComplete.value && !controller.evaluationGenerated.value && !controller.evaluationInProgress.value)
+                              FutureBuilder(
+                                future: (() async {
+                                  controller.generateFinalEvaluation();
+                                  return true;
+                                })(),
+                                builder: (_, __) => const SizedBox.shrink(),
+                              ),
                             ...controller.messages.map((message) {
                               return message.aiMessage
                                   ? ChatMessageAi(message: message)
@@ -256,6 +265,20 @@ class _ClinicalCaseAnalyticalViewState
                 ),
               ),
               ClinicalCaseChatFieldBox(controller: controller),
+              // Botón de finalizar caso analítico (antes de cierre automático)
+              Obx(() {
+                if (controller.shouldOfferAnalyticalFinalize) {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+                    child: FilledButton.icon(
+                      onPressed: () => controller.finalizeAnalyticalFromUser(),
+                      icon: const Icon(Icons.flag),
+                      label: const Text('Finalizar Caso'),
+                    ),
+                  );
+                }
+                return const SizedBox(height: 8);
+              }),
             ],
           );
         },

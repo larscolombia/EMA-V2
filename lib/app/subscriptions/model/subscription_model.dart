@@ -11,6 +11,7 @@ class Subscription {
   final int? frequency;
   final DateTime? endDate;
   final int statistics;
+  final bool active; // indicates if this plan is the currently active one for the user
 
   Subscription({
     required this.id,
@@ -24,7 +25,8 @@ class Subscription {
     required this.files,
     this.frequency,
     this.endDate,
-    this.statistics = 0, // valor por defecto
+  this.statistics = 0, // valor por defecto
+  this.active = false,
   });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
@@ -58,6 +60,39 @@ class Subscription {
     final price =
         plan != null ? _asDouble(plan['price']) : _asDouble(json['price']);
     final billing = plan != null ? 'Mensual' : _asString(json['billing']);
+    // Parse raw values
+    int consultations = _asInt(
+      json['consultations'],
+      def: plan != null ? _asInt(plan['consultations']) : 0,
+    );
+    int questionnaires = _asInt(
+      json['questionnaires'],
+      def: plan != null ? _asInt(plan['questionnaires']) : 0,
+    );
+    int clinicalCases = _asInt(
+      json['clinical_cases'],
+      def: plan != null ? _asInt(plan['clinical_cases']) : 0,
+    );
+    int files = _asInt(
+      json['files'],
+      def: plan != null ? _asInt(plan['files']) : 0,
+    );
+
+    // Fallback: si viene 0 pero el plan tiene un valor positivo, usar el del plan
+    if (plan != null) {
+      if (consultations == 0 && _asInt(plan['consultations']) > 0) {
+        consultations = _asInt(plan['consultations']);
+      }
+      if (questionnaires == 0 && _asInt(plan['questionnaires']) > 0) {
+        questionnaires = _asInt(plan['questionnaires']);
+      }
+      if (clinicalCases == 0 && _asInt(plan['clinical_cases']) > 0) {
+        clinicalCases = _asInt(plan['clinical_cases']);
+      }
+      if (files == 0 && _asInt(plan['files']) > 0) {
+        files = _asInt(plan['files']);
+      }
+    }
 
     return Subscription(
       id: _asInt(json['id']), // Defaults to 0 if missing/null
@@ -65,22 +100,10 @@ class Subscription {
       currency: currency,
       price: price,
       billing: billing,
-      consultations: _asInt(
-        json['consultations'],
-        def: plan != null ? _asInt(plan['consultations']) : 0,
-      ),
-      questionnaires: _asInt(
-        json['questionnaires'],
-        def: plan != null ? _asInt(plan['questionnaires']) : 0,
-      ),
-      clinicalCases: _asInt(
-        json['clinical_cases'],
-        def: plan != null ? _asInt(plan['clinical_cases']) : 0,
-      ),
-      files: _asInt(
-        json['files'],
-        def: plan != null ? _asInt(plan['files']) : 0,
-      ),
+      consultations: consultations,
+      questionnaires: questionnaires,
+      clinicalCases: clinicalCases,
+      files: files,
       frequency:
           json.containsKey('frequency')
               ? _asInt(json['frequency'])
@@ -93,6 +116,7 @@ class Subscription {
         json['statistics'],
         def: plan != null ? _asInt(plan['statistics']) : 0,
       ),
+      active: json['active'] == true || json['active'] == 1 || json['active'] == 'true',
     );
   }
 
@@ -110,6 +134,7 @@ class Subscription {
       'frequency': frequency,
       'end_date': endDate?.toIso8601String(),
       'statistics': statistics,
+  'active': active,
     };
   }
 
@@ -126,6 +151,7 @@ class Subscription {
     int? frequency,
     DateTime? endDate,
     int? statistics,
+    bool? active,
   }) {
     return Subscription(
       id: id ?? this.id,
@@ -140,6 +166,7 @@ class Subscription {
       frequency: frequency ?? this.frequency,
       endDate: endDate ?? this.endDate,
       statistics: statistics ?? this.statistics,
+      active: active ?? this.active,
     );
   }
 }

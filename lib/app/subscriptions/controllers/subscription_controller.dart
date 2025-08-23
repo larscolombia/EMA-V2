@@ -7,6 +7,7 @@ import 'dart:convert';
 
 class SubscriptionController extends GetxController {
   final RxList<Subscription> subscriptions = <Subscription>[].obs;
+  final RxInt activePlanId = 0.obs;
   final ApiSubscriptionService _apiSubscriptionService =
       ApiSubscriptionService();
   final UserService _userService = Get.find<UserService>();
@@ -25,7 +26,10 @@ class SubscriptionController extends GetxController {
       final currentUser = _userService.getProfileData();
       final fetchedSubscriptions = await _apiSubscriptionService
           .fetchSubscriptions(authToken: currentUser.authToken);
-      subscriptions.value = fetchedSubscriptions;
+  subscriptions.value = fetchedSubscriptions;
+  // Detect active plan
+  final active = fetchedSubscriptions.firstWhereOrNull((s) => s.active);
+  activePlanId.value = active?.id ?? 0;
     } catch (e) {
       final errorMessage = _extractErrorMessage(e);
       Get.snackbar(
@@ -45,15 +49,38 @@ class SubscriptionController extends GetxController {
     required int frequency,
   }) async {
     try {
+      if (activePlanId.value != 0 && activePlanId.value == subscriptionPlanId) {
+        Get.snackbar(
+          'Plan activo',
+          'Este ya es tu plan actual.',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.blue.withAlpha((0.85 * 255).toInt()),
+          colorText: Colors.white,
+        );
+        return;
+      }
       final currentUser = _userService.getProfileData();
-      // Ask backend for checkout URL (Stripe or fallback) and open WebView
-      final checkoutUrl = await _apiSubscriptionService.createCheckout(
+  final result = await _apiSubscriptionService.createCheckoutFull(
         userId: currentUser.id,
         subscriptionPlanId: subscriptionPlanId,
         frequency: frequency,
         authToken: currentUser.authToken,
       );
-      Get.to(() => StripeCheckoutView(checkoutUrl: checkoutUrl));
+  final checkoutUrl = result.url;
+  final sessionId = result.sessionId;
+  final autoSubscribed = result.autoSubscribed;
+  if (autoSubscribed) {
+        await fetchSubscriptions();
+        Get.snackbar(
+          'Éxito',
+          'Suscripción actualizada',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.green.withAlpha((0.85 * 255).toInt()),
+          colorText: Colors.white,
+        );
+        return;
+      }
+  Get.to(() => StripeCheckoutView(checkoutUrl: checkoutUrl, sessionId: sessionId));
     } catch (e) {
       final errorMessage = _extractErrorMessage(e);
       Get.snackbar(
@@ -64,6 +91,28 @@ class SubscriptionController extends GetxController {
         colorText: Colors.white,
       );
       throw Exception(errorMessage);
+    }
+  }
+
+
+  // Centralizado para manejar errores de cuota agotada (403) en otras capas.
+  void handleQuotaExceeded() {
+    Get.snackbar(
+      'Plan agotado',
+      'Has alcanzado el límite de tu plan. Elige un plan superior.',
+      snackPosition: SnackPosition.TOP,
+      backgroundColor: Colors.orange.withAlpha((0.9 * 255).toInt()),
+      colorText: Colors.white,
+      duration: const Duration(seconds: 4),
+    );
+    // Navega a la vista de planes si está registrada
+    if (Get.isRegistered<SubscriptionController>()) {
+      // Si ya estamos en esta vista no duplicar navegación
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (Get.currentRoute != '/subscriptions') {
+          Get.toNamed('/subscriptions');
+        }
+      });
     }
   }
 

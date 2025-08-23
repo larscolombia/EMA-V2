@@ -90,7 +90,11 @@ class ClinicalCaseOptions extends StatelessWidget {
         children: [
           Expanded(
             flex: 2,
-            child: Text(sexAndStatus.value.description, softWrap: false),
+            child: Text(
+              sexAndStatus.value.description,
+              softWrap: true,
+              overflow: TextOverflow.visible,
+            ),
           ),
           Expanded(
             flex: 3,

@@ -96,7 +96,10 @@ class ProfileController extends GetxController {
   }
 
   bool canCreateMoreClinicalCases() {
-    return remainingClinicalCases.value > 0 || useAllFeatures;
+  if (useAllFeatures) return true;
+  if (remainingClinicalCases.value > 0) return true;
+  final sub = currentProfile.value.activeSubscription;
+  return (sub?.clinicalCases ?? 0) > 0;
   }
 
   bool canCreateMoreQuizzes() {

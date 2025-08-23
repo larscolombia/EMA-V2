@@ -27,7 +27,7 @@ class _ClinicalCaseMessageListState extends State<ClinicalCaseMessageList> {
 
   @override
   void dispose() {
-    controller.dispose();
+  // No se debe hacer dispose manual del GetxController compartido aquí.
     super.dispose();
   }
 

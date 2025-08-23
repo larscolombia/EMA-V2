@@ -3,6 +3,7 @@ import 'package:ema_educacion_medica_avanzada/app/actions/screens/actions_list_s
 import 'package:ema_educacion_medica_avanzada/app/chat/chat.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/views/clinical_case_interactive_view.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/views/clinical_case_evaluation_view.dart';
 import 'package:ema_educacion_medica_avanzada/app/profiles/profiles.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/views/quiz_feed_back_view.dart';
@@ -56,6 +57,10 @@ class AppPages {
     GetPage(
       name: Routes.clinicalCaseInteractive.name,
       page: () => ClinicalCaseInteractiveView(),
+    ),
+    GetPage(
+      name: Routes.clinicalCaseEvaluation.name,
+      page: () => ClinicalCaseEvaluationView(),
     ),
     GetPage(
       name: Routes.quizDetail.name,

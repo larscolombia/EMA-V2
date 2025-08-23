@@ -35,88 +35,93 @@ class ActionsDrawerListWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-      child: Obx(() {
-        if (_actionsController.actions.isEmpty) {
-          return StateMessageWidget(
+    return Obx(() {
+      if (_actionsController.actions.isEmpty) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: StateMessageWidget(
             message: 'Aquí se mostrarán sus acciones.',
             type: StateMessageType.noSearchResults,
-          );
-        }
-        return ListView.separated(
-          reverse: true,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: _actionsController.actions.length,
-          separatorBuilder: (context, index) => const Divider(),
-          itemBuilder: (context, index) {
-            final action = _actionsController.actions[index];
-
-            return ListTile(
-              tileColor: AppStyles.whiteColor,
-              contentPadding: const EdgeInsets.only(
-                top: 2,
-                bottom: 2,
-                left: 4,
-                right: 8,
-              ),
-              title: Text(action.shortTitle, maxLines: 1),
-              subtitle: Text(action.type.title),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+          ),
+        );
+      }
+      return ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        reverse: true,
+        itemCount: _actionsController.actions.length,
+        separatorBuilder: (context, index) => const Divider(height: 8),
+        itemBuilder: (context, index) {
+          final action = _actionsController.actions[index];
+          return ListTile(
+            tileColor: AppStyles.whiteColor,
+            contentPadding: const EdgeInsets.only(
+              top: 0,
+              bottom: 0,
+              left: 4,
+              right: 4,
+            ),
+            title: Text(
+              action.shortTitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
+            subtitle: Text(
+              action.type.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
+            trailing: SizedBox(
+              width: 72,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   IconButton(
                     tooltip: 'Eliminar',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
                     onPressed: () async {
                       final confirmed = await showDialog<bool>(
                         context: context,
-                        builder:
-                            (ctx) => AlertDialog(
-                              title: const Text('Eliminar'),
-                              content: const Text(
-                                '¿Deseas eliminar este elemento?',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(ctx).pop(false),
-                                  child: const Text('Cancelar'),
-                                ),
-                                FilledButton(
-                                  onPressed: () => Navigator.of(ctx).pop(true),
-                                  child: const Text('Eliminar'),
-                                ),
-                              ],
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Eliminar'),
+                          content: const Text('¿Deseas eliminar este elemento?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(false),
+                              child: const Text('Cancelar'),
                             ),
+                            FilledButton(
+                              onPressed: () => Navigator.of(ctx).pop(true),
+                              child: const Text('Eliminar'),
+                            ),
+                          ],
+                        ),
                       );
                       if (confirmed == true) {
                         if (action.type == ActionType.chat) {
-                          await _chatController.chatsService.deleteChat(
-                            action.itemId,
-                          );
+                          await _chatController.chatsService.deleteChat(action.itemId);
                         } else {
                           await _actionsController.deleteAction(action);
                         }
-                        // Reload list
                         _actionsController.loadActions(0);
                       }
                     },
-                    icon: Icon(Icons.delete_outline, color: Colors.redAccent),
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
                   ),
                   AppIcons.arrowRightCircular(
-                    height: 24,
-                    width: 24,
+                    height: 22,
+                    width: 22,
                     color: AppStyles.tertiaryColor,
                   ),
                 ],
               ),
-              onTap: () {
-                _onActionSelected(action);
-              },
-            );
-          },
-        );
-      }),
-    );
+            ),
+            onTap: () => _onActionSelected(action),
+          );
+        },
+      );
+    });
   }
 }

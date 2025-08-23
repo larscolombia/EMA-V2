@@ -183,24 +183,33 @@ class ApiProfileService extends ProfileService {
   Future<UserModel> fetchDetailedProfile(UserModel profile) async {
     final token = await AuthTokenProvider.instance.getToken();
     final effectiveId = profile.id == 0 ? '' : '${profile.id}';
-    final url = Uri.parse('$apiUrl/user-detail/$effectiveId');
-    final response = await http.get(
-      url,
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
+    // Prefer aggregated overview to reduce roundtrips; fallback to legacy endpoint
+    final overviewUrl = Uri.parse('$apiUrl/user-overview/$effectiveId');
+    final response = await http.get(overviewUrl, headers: {
+      'Authorization': 'Bearer $token',
+      'Accept': 'application/json'
+    });
     if (response.statusCode == 200) {
-      final responseMap = jsonDecode(response.body) as Map<String, dynamic>;
-      if (responseMap['data'] == null ||
-          responseMap['data'] is! Map<String, dynamic>) {
-        // If no detailed data, return the current profile
-        return profile;
+      final resp = jsonDecode(response.body) as Map<String, dynamic>;
+      final profileData = (resp['data']?['profile']) ?? resp['data'];
+      if (profileData is Map<String, dynamic>) {
+        return UserModel.fromMap(profileData);
       }
-      final data = responseMap['data'] as Map<String, dynamic>;
-      return UserModel.fromMap(data);
-    } else {
-      throw Exception(
-        'Error al obtener perfil detallado: ${response.statusCode}',
-      );
     }
+    // Fallback
+    final legacyUrl = Uri.parse('$apiUrl/user-detail/$effectiveId');
+    final legacyResp = await http.get(legacyUrl, headers: {
+      'Authorization': 'Bearer $token',
+      'Accept': 'application/json'
+    });
+    if (legacyResp.statusCode == 200) {
+      final responseMap = jsonDecode(legacyResp.body) as Map<String, dynamic>;
+      final data = responseMap['data'];
+      if (data is Map<String, dynamic>) {
+        return UserModel.fromMap(data);
+      }
+      return profile;
+    }
+    throw Exception('Error al obtener perfil detallado: ${response.statusCode} / ${legacyResp.statusCode}');
   }
 }
