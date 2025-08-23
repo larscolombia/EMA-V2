@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Declaramos explícitamente que NO requerimos ARCore. Evita que el sistema fuerce
+        la instalación de "Servicios de Google Play para RA" si alguna librería
+        transitoria (ej: visor 3D, WebView con model-viewer, etc.) declara capacidades AR. -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
         android:label="EMA Educaci&#243;n M&#233;dica Avanzada"
         android:name="${applicationName}"
