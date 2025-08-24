@@ -4,6 +4,9 @@
         transitoria (ej: visor 3D, WebView con model-viewer, etc.) declara capacidades AR. -->
     <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Declarar variantes de cámara como opcionales para reforzar que ninguna es obligatoria -->
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <application
         android:label="EMA Educaci&#243;n M&#233;dica Avanzada"
         android:name="${applicationName}"
