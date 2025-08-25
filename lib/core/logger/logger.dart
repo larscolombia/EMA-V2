@@ -1,42 +1,22 @@
 // ignore_for_file: avoid_print
 
+import 'package:flutter/foundation.dart';
+
+/// Logger minimalista con gating en release.
+/// En release sólo deja pasar warnings y errores.
 class Logger {
-  static void log(String message) {
-    print(':::::::::::::::::::::::::::::::::::::::::::::::::::::::'); 
-    print(':: $message'); 
-    print(':::::::::::::::::::::::::::::::::::::::::::::::::::::::'); 
-  }
+  static bool get _allowVerbose => kDebugMode || kProfileMode;
 
-  static void mini(String message) {
-    print('::::: $message :::::'); 
-  }
+  static void debug(String msg) { if (_allowVerbose) print('[D] $msg'); }
+  static void info(String msg)  { if (_allowVerbose) print('[I] $msg'); }
+  static void warn(String msg)  { print('[W] $msg'); }
+  static void error(String msg) { print('[E] $msg'); }
 
-  static void error(String message, {String? className, String? methodName, String? meta}) {
-    const String red = '\x1B[31m';
-    const String reset = '\x1B[0m';
-    if (className != null) print('::::: $red $className $reset :::::'); 
-    if (methodName != null) print('::::: $red $methodName $reset :::::'); 
-    if (meta != null) print('::::: $red $meta $reset :::::'); 
-    print('::::: $red $message $reset :::::');  
-  }
-
+  // Backwards compatibility wrappers
+  static void log(String message) => info(message);
+  static void mini(String message) => debug(message);
   static void objectValue(String object, String value) {
-    const String blue = '\x1B[34m';
-    const String reset = '\x1B[0m';
-    // print(':::::::::::::::::::::::::::::::::::::::::::::::::::::::');
-    print('OBJECT $blue $object $reset');
-    // print('START OF CONTENT');
-    log(value);
-    // print('END OF CONTENT');
-    // print(':::::::::::::::::::::::::::::::::::::::::::::::::::::::');
-  }
-
-  // Simple warning logger (yellow)
-  static void warn(String message, {String? className, String? methodName}) {
-    const String yellow = '\x1B[33m';
-    const String reset = '\x1B[0m';
-    if (className != null) print('::::: $yellow$className$reset :::::');
-    if (methodName != null) print('::::: $yellow$methodName$reset :::::');
-    print('::::: ${yellow}WARN: $message$reset :::::');
+    if (!_allowVerbose) return;
+    debug('$object => $value');
   }
 }

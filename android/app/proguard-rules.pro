@@ -6,3 +6,21 @@
 -dontwarn com.google.errorprone.annotations.RestrictedApi
 -dontwarn javax.annotation.Nullable
 -dontwarn javax.annotation.concurrent.GuardedBy
+
+# --- Flutter / Dart VM ---
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-keep class io.flutter.embedding.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.** { *; }
+-dontwarn io.flutter.embedding.**
+
+# Keep GetX (reflection on generic types & routes)
+-keep class * extends GetxController
+-keep class * extends GetInterface
+-keep class * extends GetxService
+
+# Prevent removal of model classes serialized via json / manual maps
+-keepclassmembers class ** implements java.io.Serializable { *; }
+-keep class com.ema.** { *; }
