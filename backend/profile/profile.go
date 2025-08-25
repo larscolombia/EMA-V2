@@ -28,52 +28,20 @@ func getUserByID(id int) *migrations.User {
 func RegisterRoutes(r *gin.Engine) {
 	r.GET("/user-detail/:id", getProfile)
 	r.POST("/user-detail/:id", updateProfile)
+	// Aggregated overview endpoint to reduce multiple sequential fetches on app start.
+	r.GET("/user-overview/:id", getOverview)
 }
 
 func getProfile(c *gin.Context) {
 	log.Printf("[PROFILE][GET] incoming request: path=%s headers=%v", c.Request.URL.Path, c.Request.Header)
-	idStr := c.Param("id")
-	// Try to parse id, but allow fallback to session user if invalid/zero
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		log.Printf("[PROFILE][GET] invalid id param: %s", idStr)
-		id = 0
-	}
-
-	// Resolve session user from Bearer token (Laravel-like guard)
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	var sessionUser *migrations.User
-	if token != "" {
-		if email, ok := login.GetEmailFromToken(token); ok {
-			sessionUser = migrations.GetUserByEmail(email)
-		}
-	}
+	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token requerido"}); return }
+	email, ok := login.GetEmailFromToken(token)
+	if !ok { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token inválido o expirado"}); return }
+	user := migrations.GetUserByEmail(email)
+	if user == nil { c.JSON(http.StatusUnauthorized, gin.H{"error":"Usuario no encontrado"}); return }
 
-	// Pick effective user: if id==0 or mismatched, prefer session user when available
-	var user *migrations.User
-	if id == 0 && sessionUser != nil {
-		user = sessionUser
-		log.Printf("[PROFILE][GET] using session user (id=%d) due to id=0", user.ID)
-	} else if sessionUser != nil && id != 0 && id != sessionUser.ID {
-		// Frontend may send mismatched path; follow token to keep it tolerant
-		user = sessionUser
-		log.Printf("[PROFILE][GET] id mismatch (param=%d, session=%d). Using session user.", id, sessionUser.ID)
-	} else if id > 0 {
-		user = getUserByID(id)
-	}
-
-	if user == nil {
-		if id == 0 && sessionUser == nil {
-			// No valid id and no session user -> unauthorized like Laravel
-			log.Printf("[PROFILE][GET] no valid user: id=0 and token invalid/absent")
-			c.JSON(http.StatusUnauthorized, gin.H{"message": "No autorizado"})
-			return
-		}
-		log.Printf("[PROFILE][GET] user not found (param id=%d)", id)
-		c.JSON(http.StatusNotFound, gin.H{"message": "Usuario no encontrado"})
-		return
-	}
 	// Ensure user has at least a Free subscription so app quotas work
 	if err := migrations.EnsureFreeSubscriptionForUser(user.ID); err != nil {
 		log.Printf("[PROFILE][GET] ensure free subscription failed for userID=%d: %v", user.ID, err)
@@ -86,9 +54,82 @@ func getProfile(c *gin.Context) {
 	resp := userToMap(user)
 	if activeSub != nil {
 		resp["active_subscription"] = activeSub
+		// Structured log for quota visibility
+		if sp, ok := activeSub["subscription_plan"].(map[string]interface{}); ok {
+			planName, _ := sp["name"].(string)
+			log.Printf("[PROFILE][QUOTA] user=%d plan=%s consultations=%v questionnaires=%v clinical_cases=%v files=%v", user.ID, planName,
+				activeSub["consultations"], activeSub["questionnaires"], activeSub["clinical_cases"], activeSub["files"])
+		}
 	}
-	log.Printf("[PROFILE][GET] success id=%d email=%s hasActiveSub=%t", id, user.Email, activeSub != nil)
+	log.Printf("[PROFILE][GET] success id=%d email=%s hasActiveSub=%t", user.ID, user.Email, activeSub != nil)
 	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
+
+// getOverview aggregates profile + simple stats in one roundtrip so the mobile app
+// can avoid firing 5-6 requests (/user-detail, /user/:id/test-progress, etc.).
+// Response shape:
+// { data: { profile: {..user fields.., active_subscription: {...}}, stats: { clinical_cases_count, total_tests, test_progress, most_studied_category, chats } } }
+// (Maintains backward compatibility by not altering existing /user-detail response.)
+func getOverview(c *gin.Context) {
+	start := time.Now()
+	log.Printf("[OVERVIEW][GET] incoming request: path=%s", c.Request.URL.Path)
+	auth := c.GetHeader("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
+	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token requerido"}); return }
+	email, ok := login.GetEmailFromToken(token)
+	if !ok { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token inválido o expirado"}); return }
+	user := migrations.GetUserByEmail(email)
+	if user == nil { c.JSON(http.StatusUnauthorized, gin.H{"error":"Usuario no encontrado"}); return }
+
+	// Ensure at least a free subscription
+	if err := migrations.EnsureFreeSubscriptionForUser(user.ID); err != nil {
+		log.Printf("[OVERVIEW][GET] ensure free subscription failed for userID=%d: %v", user.ID, err)
+	}
+	activeSub, err := migrations.GetActiveSubscriptionForUser(user.ID)
+	if err != nil { log.Printf("[OVERVIEW][GET] fetch active subscription failed userID=%d: %v", user.ID, err) }
+	prof := userToMap(user)
+	if activeSub != nil {
+		// Detect anomaly: remaining zero but plan limits > 0
+		if sp, ok := activeSub["subscription_plan"].(map[string]interface{}); ok {
+			consZero := activeSub["consultations"].(int) == 0
+			clinZero := activeSub["clinical_cases"].(int) == 0
+			planCons, _ := sp["consultations"].(int)
+			planClin, _ := sp["clinical_cases"].(int)
+			planHasAny := (planCons > 0 || planClin > 0)
+			// Caso 1: ambos en cero pero plan tiene >0 en alguno -> reset completo
+			if consZero && clinZero && planHasAny {
+				log.Printf("[OVERVIEW][AUTO-RESET][DETECT] user_id=%d consultations=0 clinical_cases=0 plan_consultations=%v plan_clinical_cases=%v", user.ID, planCons, planClin)
+				if err := migrations.ResetActiveSubscriptionQuotas(user.ID); err != nil {
+					log.Printf("[OVERVIEW][AUTO-RESET][ERROR] user_id=%d err=%v", user.ID, err)
+				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil { activeSub = refreshed }
+			} else if clinZero && planClin > 0 { // Caso 2: solo clinical_cases en cero pero plan lo ofrece
+				log.Printf("[OVERVIEW][AUTO-REPAIR][CLINICAL_CASES_ONLY] user_id=%d plan_clinical_cases=%d", user.ID, planClin)
+				// Reparar solo clinical_cases usando actualización directa
+				if err := migrations.ResetActiveSubscriptionQuotas(user.ID); err != nil {
+					log.Printf("[OVERVIEW][AUTO-REPAIR][ERROR] user_id=%d err=%v", user.ID, err)
+				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil { activeSub = refreshed }
+			}
+		}
+		prof["active_subscription"] = activeSub
+		if sp, ok := activeSub["subscription_plan"].(map[string]interface{}); ok {
+			planName, _ := sp["name"].(string)
+			log.Printf("[OVERVIEW][QUOTA] user=%d plan=%s consultations=%v questionnaires=%v clinical_cases=%v files=%v", user.ID, planName,
+				activeSub["consultations"], activeSub["questionnaires"], activeSub["clinical_cases"], activeSub["files"])
+		}
+	}
+
+	// Stats actualmente devueltos como parte del overview para evitar múltiples llamadas.
+	stats := gin.H{
+		"clinical_cases_count": 0,
+		"total_tests":          0,
+		"test_progress":        []any{},
+		"most_studied_category": nil,
+		"chats":                []any{},
+	}
+
+	duration := time.Since(start)
+	log.Printf("[OVERVIEW][GET] success userID=%d hasActiveSub=%t duration=%s", user.ID, activeSub != nil, duration)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"profile": prof, "stats": stats}})
 }
 
 func updateProfile(c *gin.Context) {

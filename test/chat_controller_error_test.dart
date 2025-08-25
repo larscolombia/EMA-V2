@@ -74,8 +74,8 @@ class FakeProfileController extends ProfileController {
   @override void onInit() { super.onInit(); } // mantiene contrato mustCallSuper
   @override bool canCreateMoreChats() => true;
   @override bool canUploadMoreFiles() => true;
-  @override Future<bool> decrementChatQuota() async => true;
-  @override Future<bool> decrementFileQuota() async => true;
+  @override Future<bool> decrementChatQuota() async => false; // server-side now
+  @override Future<bool> decrementFileQuota() async => false; // server-side now
   @override void refreshChatQuota() {}
   @override void refreshFileQuota() {}
   @override Future<void> refreshProfile({bool forceCancel = false}) async {}

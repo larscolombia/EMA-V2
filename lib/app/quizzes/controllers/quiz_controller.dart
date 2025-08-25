@@ -110,11 +110,7 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
       _updateQuestions(generatedQuizData.questions);
 
-      // Descontar la cuota después de crear el cuestionario
-      final success = await profileController.decrementQuizQuota();
-      if (success) {
-        profileController.refreshQuizQuota();
-      }
+  // Quota consumption centralized in backend (quiz_generate flow)
     } catch (e) {
       change(null, status: RxStatus.error(e.toString()));
     }

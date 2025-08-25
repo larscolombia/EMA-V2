@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/joho/godotenv v1.5.1
 	github.com/sashabaranov/go-openai v1.24.0
+	github.com/stripe/stripe-go/v78 v78.6.0
 	rsc.io/pdf v0.1.1
 )
 

@@ -12,6 +12,9 @@ type Plan struct {
     Questionnaires int    `json:"questionnaires"`
     ClinicalCases int     `json:"clinical_cases"`
     Files         int     `json:"files"`
+    StripeProductID string `json:"stripe_product_id,omitempty"`
+    StripePriceID   string `json:"stripe_price_id,omitempty"`
+    Statistics    int     `json:"statistics"` // 1 = incluye estadísticas premium
 }
 
 type Subscription struct {
@@ -26,5 +29,6 @@ type Subscription struct {
     ClinicalCases int        `json:"clinical_cases"`
     Files         int        `json:"files"`
     Plan          *Plan      `json:"subscription_plan,omitempty"`
+    Statistics    int        `json:"statistics"` // copia denormalizada para acceso rápido
 }
 

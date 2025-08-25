@@ -23,6 +23,10 @@ var flowField = map[string]string{
     // now DO NOT consume additional quota; they are intentionally omitted.
     // General assistant chat mapped to consultations bucket
     "chat_message":              "consultations",
+    // Quiz generation -> questionnaires bucket
+    "quiz_generate":            "questionnaires",
+    // File (PDF) upload in chat -> files bucket
+    "file_upload":              "files",
 }
 
 // Validator provides quota validation wired into handlers.

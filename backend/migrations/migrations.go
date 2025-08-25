@@ -3,6 +3,7 @@ package migrations
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"time"
 )
@@ -17,6 +18,7 @@ type User struct {
 	ProfileImage string    `db:"profile_image"`
 	City         string    `db:"city"`
 	Profession   string    `db:"profession"`
+	StripeCustomerID string `db:"stripe_customer_id"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }
@@ -69,7 +71,9 @@ func Migrate() error {
 		consultations INT NOT NULL DEFAULT 0,
 		questionnaires INT NOT NULL DEFAULT 0,
 		clinical_cases INT NOT NULL DEFAULT 0,
-		files INT NOT NULL DEFAULT 0
+		files INT NOT NULL DEFAULT 0,
+		stripe_product_id VARCHAR(100) NULL,
+		stripe_price_id VARCHAR(100) NULL
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createPlans); err != nil {
 		return err
@@ -92,6 +96,11 @@ func Migrate() error {
 	if _, err := db.Exec(createSubs); err != nil {
 		return err
 	}
+
+	// Ensure new Stripe-related columns exist (idempotent) for backward compatibility
+	if err := ensureColumnExists("subscription_plans", "stripe_product_id", "stripe_product_id VARCHAR(100) NULL"); err != nil { return err }
+	if err := ensureColumnExists("subscription_plans", "stripe_price_id", "stripe_price_id VARCHAR(100) NULL"); err != nil { return err }
+	if err := ensureColumnExists("users", "stripe_customer_id", "stripe_customer_id VARCHAR(100) NULL"); err != nil { return err }
 
 	// Medical categories table for quizzes/tests
 	createMedicalCategories := `
@@ -137,13 +146,16 @@ func SeedDefaultUser() error {
 		return err
 	}
 	if count == 0 {
-		_, err := db.Exec(
+		res, err := db.Exec(
 			"INSERT INTO users (first_name, last_name, email, password, role) VALUES (?, ?, ?, ?, ?)",
 			"Leonardo", "Herrera", email, password, "super_admin",
 		)
 		if err != nil {
 			return err
 		}
+		uid, _ := res.LastInsertId()
+		// Asigna subscripción Free automáticamente si existe plan
+		_ = EnsureFreeSubscriptionForUser(int(uid))
 	}
 	return nil
 }
@@ -390,7 +402,8 @@ func GetActiveSubscriptionForUser(userID int) (map[string]interface{}, error) {
 	}
 	query := `SELECT s.id, s.user_id, s.plan_id, s.start_date, s.end_date, s.frequency,
 		s.consultations, s.questionnaires, s.clinical_cases, s.files,
-		p.id, p.name, p.currency, p.price, p.billing, p.consultations, p.questionnaires, p.clinical_cases, p.files
+		p.id, p.name, p.currency, p.price, p.billing, p.consultations, p.questionnaires, p.clinical_cases, p.files,
+		CASE WHEN p.price>0 THEN 1 ELSE 0 END AS statistics
 		FROM subscriptions s JOIN subscription_plans p ON s.plan_id = p.id
 		WHERE s.user_id = ? ORDER BY s.id DESC LIMIT 1`
 	row := db.QueryRow(query, userID)
@@ -398,10 +411,11 @@ func GetActiveSubscriptionForUser(userID int) (map[string]interface{}, error) {
 	var start time.Time
 	var end sql.NullTime
 	var pID, pConsult, pQuest, pClin, pFiles int
+	var statistics int
 	var pName, pCurrency, pBilling string
 	var pPrice float64
 	if err := row.Scan(&sID, &uID, &planID, &start, &end, &freq, &sConsult, &sQuest, &sClin, &sFiles,
-		&pID, &pName, &pCurrency, &pPrice, &pBilling, &pConsult, &pQuest, &pClin, &pFiles); err != nil {
+		&pID, &pName, &pCurrency, &pPrice, &pBilling, &pConsult, &pQuest, &pClin, &pFiles, &statistics); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -418,6 +432,7 @@ func GetActiveSubscriptionForUser(userID int) (map[string]interface{}, error) {
 		"questionnaires": sQuest,
 		"clinical_cases": sClin,
 		"files":          sFiles,
+		"statistics":     statistics,
 		"subscription_plan": map[string]interface{}{
 			"id":             pID,
 			"name":           pName,
@@ -428,10 +443,28 @@ func GetActiveSubscriptionForUser(userID int) (map[string]interface{}, error) {
 			"questionnaires": pQuest,
 			"clinical_cases": pClin,
 			"files":          pFiles,
+			"statistics":     statistics,
 		},
 	}
 	if end.Valid {
 		sub["end_date"] = end.Time.Format(time.RFC3339)
 	}
 	return sub, nil
+}
+
+// ResetActiveSubscriptionQuotas resets the latest subscription quotas to plan defaults.
+func ResetActiveSubscriptionQuotas(userID int) error {
+	if db == nil { return fmt.Errorf("db is not initialized") }
+	row := db.QueryRow("SELECT id, plan_id FROM subscriptions WHERE user_id=? ORDER BY id DESC LIMIT 1", userID)
+	var subID, planID int
+	if err := row.Scan(&subID, &planID); err != nil {
+		if err == sql.ErrNoRows { return nil }
+		return err
+	}
+	prow := db.QueryRow("SELECT consultations, questionnaires, clinical_cases, files FROM subscription_plans WHERE id=? LIMIT 1", planID)
+	var c1,c2,c3,c4 int
+	if err := prow.Scan(&c1,&c2,&c3,&c4); err != nil { return err }
+	if _, err := db.Exec(`UPDATE subscriptions SET consultations=?, questionnaires=?, clinical_cases=?, files=? WHERE id=?`, c1,c2,c3,c4, subID); err != nil { return err }
+	log.Printf("[QUOTA][AUTO-RESET] user_id=%d sub_id=%d plan_id=%d consultations=%d questionnaires=%d clinical_cases=%d files=%d", userID, subID, planID, c1,c2,c3,c4)
+	return nil
 }

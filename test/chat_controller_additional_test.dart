@@ -54,18 +54,12 @@ class FakeSubscriptionService implements SubscriptionService {
 class FakeCountryService extends CountryService { @override Future<List<CountryModel>> getCountries() async => []; }
 
 class ProfileControllerCounters extends ProfileController {
-  int decrementFileQuotaCalls = 0;
-  int decrementChatQuotaCalls = 0;
   @override void onInit() { 
     super.onInit();
     currentProfile.value = userService.currentUser.value; 
   }
   @override bool canCreateMoreChats() => true;
   @override bool canUploadMoreFiles() => true;
-  @override Future<bool> decrementFileQuota() async { decrementFileQuotaCalls++; return true; }
-  @override Future<bool> decrementChatQuota() async { decrementChatQuotaCalls++; return true; }
-  @override void refreshChatQuota() {}
-  @override void refreshFileQuota() {}
   @override Future<void> refreshProfile({bool forceCancel = false}) async {}
 }
 
@@ -187,21 +181,17 @@ void main() {
     expect(chats.generateCalls, 0);
   });
 
-  test('Retry con PDF decrementa cuota de archivos', () async {
+  test('Retry con PDF ya no decrementa cuota en cliente (server-side only)', () async {
   await _registerBaseDeps();
   if (Get.isRegistered<ChatsService>()) { Get.delete<ChatsService>(); }
   final chats = Get.put(FakeChatsService()..alwaysThrow = true);
   final c = Get.put(ChatController());
-    final profile = Get.find<ProfileController>() as ProfileControllerCounters;
     final pdf = PdfAttachment(uid: 'u1', fileName: 'f.pdf', filePath: 'x', mimeType: 'application/pdf', fileSize: 20);
     c.attachPdf(pdf);
   await c.sendMessage('Falla'); // en este flujo falla después de intentar validar/enviar; puede haber decremento si llegó a éxito parcial
-  final initialCalls = profile.decrementFileQuotaCalls;
-  expect(initialCalls >= 0, true); // simplemente registrar valor inicial
     chats.alwaysThrow = false; // ahora éxito
     await c.retryLastSend();
-  // En retry sólo debe descontar si no se descontó antes. Así que resultado esperado es initialCalls o initialCalls+1
-  expect(profile.decrementFileQuotaCalls == initialCalls || profile.decrementFileQuotaCalls == initialCalls + 1, true);
+  // No se verifica decremento porque ahora es server-side.
   });
 
   test('Detección de stuck state resetea isSending', () async {

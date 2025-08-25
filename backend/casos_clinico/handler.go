@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"sync"
+	"strconv"
 
 	"ema-backend/openai"
 
@@ -25,6 +27,8 @@ type Handler struct {
 	aiAnalytical   Assistant
 	aiInteractive  Assistant
 	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
+	mu             sync.Mutex
+	analyticalTurns map[string]int // thread_id -> number of chat turns served
 }
 
 // NewHandler lets you inject different assistants (analytical/interactive). If one is nil, the other will be used for both flows.
@@ -39,7 +43,7 @@ func NewHandler(analytical Assistant, interactive Assistant) *Handler {
 	if interactive == nil {
 		interactive = analytical
 	}
-	return &Handler{aiAnalytical: analytical, aiInteractive: interactive}
+	return &Handler{aiAnalytical: analytical, aiInteractive: interactive, analyticalTurns: make(map[string]int)}
 }
 
 // DefaultHandler configures assistants from env:
@@ -59,7 +63,7 @@ func DefaultHandler() *Handler {
 	} else {
 		cliI = cliA
 	}
-	return &Handler{aiAnalytical: cliA, aiInteractive: cliI}
+	return &Handler{aiAnalytical: cliA, aiInteractive: cliI, analyticalTurns: make(map[string]int)}
 }
 
 // RegisterRoutes wires endpoints expected by the Flutter client.
@@ -96,9 +100,16 @@ type chatReq struct {
 func (h *Handler) GenerateAnalytical(c *gin.Context) {
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "analytical_generate"); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded"})
+			// Enrich 403 with field/reason if present
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded", "field": field, "reason": reason})
 			return
 		}
+	}
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+		c.Header("X-Quota-Field", "clinical_cases")
 	}
 	var req generateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -195,9 +206,15 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 func (h *Handler) ChatAnalytical(c *gin.Context) {
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "analytical_chat"); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded"})
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded", "field": field, "reason": reason})
 			return
 		}
+	}
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+		c.Header("X-Quota-Field", "clinical_cases")
 	}
 	var req chatReq
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Mensaje) == "" {
@@ -215,14 +232,42 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	}
 	// Ask assistant to respond with JSON-wrapped message to avoid extra formatting
 	userPrompt := req.Mensaje
+	// Determinar turno lógico (1-based). El mapa almacena el último turno completado.
+	h.mu.Lock()
+	turn := h.analyticalTurns[threadID] + 1
+	h.mu.Unlock()
+
+	// Construimos instrucciones dinámicas para fomentar profundidad y continuidad.
+	var phaseInstr string
+	switch {
+	case turn < 3:
+		phaseInstr = "Extiende el razonamiento clínico inicial: analiza síntomas cardinales, factores de riesgo y plantea hipótesis diagnósticas preliminares."
+	case turn < 6:
+		phaseInstr = "Profundiza correlación fisiopatológica y justifica qué datos faltan; sugiere exámenes complementarios pertinentes."
+	case turn < 9:
+		phaseInstr = "Integra hallazgos y prioriza diagnósticos diferenciales con justificación comparativa (por qué uno es más probable que otro)."
+	default:
+		phaseInstr = "Prepara el cierre: sintetiza los datos clave y guía al usuario hacia diagnóstico final y plan terapéutico; aún formula una última pregunta exploratoria si no es la despedida definitiva."
+	}
+
+	closingInstr := ""
+	// Solo permitir bibliografía y cierre completo después del turno 9 (>=10)
+	if turn >= 10 {
+		closingInstr = "Si el usuario lo sugiere o la información es suficiente para cerrar, entonces entrega: Conclusión final + Plan de manejo + 'Referencias:' con 2-3 citas (formato narrativo abreviado). Si cierras, NO hagas más preguntas."
+	} else {
+		closingInstr = "No cierres todavía ni des conclusiones definitivas. No incluyas bibliografía aún."
+	}
+
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
-		"Mantén un tono docente, breve y conversacional acorde a un caso clínico analítico en 10 turnos máximo.",
-		"OBLIGATORIO: Tu respuesta DEBE terminar con una pregunta específica y clara para continuar el análisis del caso clínico.",
-		"Si es el mensaje final del caso (después de 8-10 turnos), incluye: 1) Conclusión/cierre del caso, 2) Bibliografía con 2-3 referencias médicas relevantes.",
-		"Ejemplos de preguntas de cierre: '¿Cuál sería tu diagnóstico diferencial?', '¿Qué exámenes complementarios solicitarías?', '¿Cuál sería tu plan terapéutico?'",
-		"Formato de bibliografía: 'Referencias: 1. Autor et al. Título. Revista. Año;Vol(No):páginas. 2. [...]'",
-		"No incluyas títulos, enumeraciones rígidas ni markdown.",
+		"Estructura del texto: 1) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) 2) Pregunta final (salvo cierre).",
+		phaseInstr,
+		closingInstr,
+		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
+		"Referenciar hallazgos previos sin repetirlos literalmente; añade nueva inferencia o hipótesis en cada turno.",
+		"La última línea (si NO cierras) debe ser SOLO la pregunta, sin texto adicional antes ni después.",
+		"Si cierras, no formules pregunta y añade referencias según se indicó.",
+		"No inventes datos que no se hayan introducido implícita o explícitamente en el hilo.",
 		"Idioma: español.",
 	}, " ")
 	ch, err := h.aiAnalytical.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
@@ -243,10 +288,18 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		if fixed, ok := h.repairAnalyticalChatJSON(ctx, threadID, content); ok {
 			parsed = map[string]any{}
 			_ = json.Unmarshal([]byte(fixed), &parsed)
+			// Registrar turno completado
+			h.mu.Lock()
+			h.analyticalTurns[threadID] = turn
+			h.mu.Unlock()
 			c.JSON(http.StatusOK, parsed)
 			return
 		}
 	} else {
+		// Registrar turno completado
+		h.mu.Lock()
+		h.analyticalTurns[threadID] = turn
+		h.mu.Unlock()
 		c.JSON(http.StatusOK, parsed)
 		return
 	}
@@ -258,9 +311,15 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 func (h *Handler) GenerateInteractive(c *gin.Context) {
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "interactive_generate"); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded"})
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded", "field": field, "reason": reason})
 			return
 		}
+	}
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+		c.Header("X-Quota-Field", "clinical_cases")
 	}
 	var req generateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -343,9 +402,15 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 func (h *Handler) ChatInteractive(c *gin.Context) {
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "interactive_chat"); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded"})
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			c.JSON(http.StatusForbidden, gin.H{"error": "clinical cases quota exceeded", "field": field, "reason": reason})
 			return
 		}
+	}
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+		c.Header("X-Quota-Field", "clinical_cases")
 	}
 	var req chatReq
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Mensaje) == "" {
@@ -580,4 +645,14 @@ func (h *Handler) repairInteractiveChatJSON(ctx context.Context, threadID, lastC
 		return "", false
 	}
 	return "", false
+}
+
+// helper for quota header string conversion
+func toString(v interface{}) string {
+	switch t := v.(type) {
+	case string: return t
+	case int: return strconv.Itoa(t)
+	case int64: return strconv.FormatInt(t,10)
+	default: return ""
+	}
 }

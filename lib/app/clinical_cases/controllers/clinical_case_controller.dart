@@ -118,11 +118,7 @@ class ClinicalCaseController extends GetxController
 
       _startClinicalCase(temporalCase);
 
-      // Descontar la cuota después de crear el caso clínico
-      final success = await profileController.decrementClinicalCaseQuota();
-      if (success) {
-        profileController.refreshClinicalCaseQuota();
-      }
+  // Quota consumption now centralized in backend (analytical_generate / interactive_generate flows)
     } catch (e) {
       print('❌ [ClinicalCaseController] Error in generateCase: $e');
       change(

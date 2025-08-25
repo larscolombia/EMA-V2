@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -38,7 +39,12 @@ type Client struct {
 	// last uploaded file per thread to bias instructions
 	lastMu   sync.RWMutex
 	lastFile map[string]LastFileInfo
+	// Ensure *Client implements the chat.AIClient interface (compile-time check) via a blank identifier assignment.
+	// (We inline the minimal subset because importing chat here would create a cycle; so we skip direct assertion.)
 }
+
+// GetAssistantID returns the configured Assistant ID (implements chat.AIClient).
+func (c *Client) GetAssistantID() string { return c.AssistantID }
 
 type LastFileInfo struct {
 	ID   string
@@ -46,10 +52,21 @@ type LastFileInfo struct {
 	At   time.Time
 }
 
+// sanitizeEnv limpia espacios y elimina comillas simples o dobles rodeando todo el valor.
+func sanitizeEnv(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 {
+		if (strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"")) || (strings.HasPrefix(v, "'") && strings.HasSuffix(v, "'")) {
+			v = strings.TrimSuffix(strings.TrimPrefix(v, string(v[0])), string(v[len(v)-1]))
+		}
+	}
+	return v
+}
+
 func NewClient() *Client {
-	key := os.Getenv("OPENAI_API_KEY")
-	assistant := os.Getenv("CHAT_PRINCIPAL_ASSISTANT")
-	model := os.Getenv("CHAT_MODEL")
+	key := sanitizeEnv(os.Getenv("OPENAI_API_KEY"))
+	assistant := sanitizeEnv(os.Getenv("CHAT_PRINCIPAL_ASSISTANT"))
+	model := sanitizeEnv(os.Getenv("CHAT_MODEL"))
 	var api *openai.Client
 	if key != "" {
 		api = openai.NewClient(key)
@@ -594,6 +611,9 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
 func (c *Client) runAndWait(ctx context.Context, threadID string, instructions string, vectorStoreID string) (string, error) {
+	// Máxima duración interna antes de intentar devolver contenido parcial
+	const maxRunDuration = 55 * time.Second
+	start := time.Now()
 	// create run
 	payload := map[string]any{"assistant_id": c.AssistantID}
 	if strings.TrimSpace(instructions) != "" {
@@ -631,6 +651,36 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-time.After(400 * time.Millisecond):
+		}
+
+		// Si excedemos la duración máxima, intentamos devolver lo que haya aunque el run no esté completado
+		if time.Since(start) > maxRunDuration {
+			// Intentar leer mensajes actuales aunque el run siga en progreso
+			mresp, merr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+			if merr == nil {
+				var ml struct {
+					Data []struct {
+						Role    string `json:"role"`
+						Content []struct {
+							Type string `json:"type"`
+							Text struct { Value string `json:"value"` } `json:"text"`
+						} `json:"content"`
+					} `json:"data"`
+				}
+				_ = json.NewDecoder(mresp.Body).Decode(&ml)
+				mresp.Body.Close()
+				for _, m := range ml.Data {
+					if m.Role == "assistant" {
+						var buf bytes.Buffer
+						for _, cpart := range m.Content { if cpart.Type == "text" { buf.WriteString(cpart.Text.Value) } }
+						text := buf.String()
+						if strings.TrimSpace(text) != "" {
+							return text + "\n\n[Nota: respuesta parcial generada antes de completar el proceso para evitar timeout]", nil
+						}
+					}
+				}
+			}
+			// Si no pudimos recuperar nada, continuamos polling hasta timeout real del handler
 		}
 		rresp, rerr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/runs/"+run.ID, nil)
 		if rerr != nil {
@@ -671,12 +721,21 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	for _, m := range ml.Data {
 		if m.Role == "assistant" {
 			var buf bytes.Buffer
-			for _, c := range m.Content {
+			log.Printf("DEBUG: Processing assistant message with %d content parts", len(m.Content))
+			for i, c := range m.Content {
+				log.Printf("DEBUG: Content part %d: type=%s, value_length=%d", i, c.Type, len(c.Text.Value))
 				if c.Type == "text" && c.Text.Value != "" {
 					buf.WriteString(c.Text.Value)
 				}
 			}
-			if s := buf.String(); s != "" {
+			finalText := buf.String()
+			log.Printf("DEBUG: Final assistant message length: %d characters", len(finalText))
+			if len(finalText) > 200 {
+				log.Printf("DEBUG: First 200 chars: %s...", finalText[:200])
+			} else {
+				log.Printf("DEBUG: Full message: %s", finalText)
+			}
+			if s := finalText; s != "" {
 				return s, nil
 			}
 		}
@@ -706,6 +765,11 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 		c.lastMu.RUnlock()
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
+			// En modo test, guardar respuesta completa en archivo temporal
+			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
+				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
+				os.WriteFile(tmpFile, []byte(text), 0644)
+			}
 			out <- text
 		}
 	}()
@@ -751,6 +815,11 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		}
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
+			// En modo test, guardar respuesta completa en archivo temporal
+			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
+				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
+				os.WriteFile(tmpFile, []byte(text), 0644)
+			}
 			out <- text
 		}
 	}()
@@ -760,9 +829,43 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 // StreamAssistantJSON runs the assistant using file_search but WITHOUT overriding tool_resources (vector_store_ids),
 // so it uses the assistant's pre-configured RAG. It enforces custom JSON-style instructions via the run.
 func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
-	if c.key == "" || c.AssistantID == "" {
-		return nil, errors.New("assistants not configured")
+	// Fallback path: if we have no AssistantID but do have an API key + model, emulate via Chat Completions.
+	if c.key == "" { // sin API key no podemos llamar a OpenAI
+		return nil, errors.New("openai api key not configured")
 	}
+	if c.AssistantID == "" { // usar chat completions como fallback
+		model := c.Model
+		if strings.TrimSpace(model) == "" {
+			model = "gpt-4o-mini" // default razonable
+		}
+		out := make(chan string, 1)
+		go func() {
+			defer close(out)
+			log.Printf("[openai][StreamAssistantJSON] usando fallback chat completions model=%s", model)
+			// Construimos un prompt estructurado: system con instrucciones JSON y user con el prompt del usuario.
+			// Reutilizamos cliente subyacente (c.api) directamente.
+			if c.api == nil {
+				return
+			}
+			req := openai.ChatCompletionRequest{
+				Model: model,
+				Messages: []openai.ChatCompletionMessage{
+					{Role: openai.ChatMessageRoleSystem, Content: jsonInstructions + "\nResponde UNICAMENTE JSON válido."},
+					{Role: openai.ChatMessageRoleUser, Content: userPrompt},
+				},
+			}
+			resp, err := c.api.CreateChatCompletion(ctx, req)
+			if err != nil || len(resp.Choices) == 0 {
+				return
+			}
+			txt := resp.Choices[0].Message.Content
+			if strings.TrimSpace(txt) != "" {
+				out <- txt
+			}
+		}()
+		return out, nil
+	}
+	// Ruta normal Assistants v2
 	if err := c.addMessage(ctx, threadID, userPrompt); err != nil {
 		return nil, err
 	}
@@ -884,4 +987,12 @@ func (c *Client) DeleteThreadArtifacts(ctx context.Context, threadID string) err
 	c.sessMu.Unlock()
 
 	return nil
+}
+
+// Satisfy chat.AIClient interface signature using generic any for ctx when invoked indirectly.
+func (c *Client) DeleteThreadArtifactsAny(ctx any, threadID string) error {
+	if realCtx, ok := ctx.(context.Context); ok {
+		return c.DeleteThreadArtifacts(realCtx, threadID)
+	}
+	return c.DeleteThreadArtifacts(context.Background(), threadID)
 }

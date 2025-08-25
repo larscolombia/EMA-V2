@@ -313,3 +313,48 @@ func TestPdfWithoutThread(t *testing.T) {
 		t.Fatalf("SSE malformed without thread_id: %s", rec.Body.String())
 	}
 }
+
+// TestStructuredPromptHeader valida que cuando el prompt está vacío y se sube un PDF,
+// el handler inyecta el prompt estructurado (structured-v1) y añade cabecera X-RAG-Prompt.
+func TestStructuredPromptHeader(t *testing.T) {
+	if os.Getenv("OPENAI_API_KEY") == "" || !strings.HasPrefix(os.Getenv("CHAT_PRINCIPAL_ASSISTANT"), "asst_") {
+		t.Skip("requires OpenAI env")
+	}
+	r := setupRouter(t)
+	// start thread
+	recStart := httptest.NewRecorder()
+	reqStart := httptest.NewRequest(http.MethodPost, "/asistente/start", strings.NewReader(`{"prompt":""}`))
+	reqStart.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(recStart, reqStart)
+	var startResp struct { ThreadID string `json:"thread_id"` }
+	_ = json.Unmarshal(recStart.Body.Bytes(), &startResp)
+	if startResp.ThreadID == "" { t.Fatalf("no thread_id") }
+
+	pdf := filepath.FromSlash("backend/chat/docsprueba/Propuesta-405.pdf")
+	if _, err := os.Stat(pdf); err != nil { t.Skip("pdf missing") }
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	fw, _ := w.CreateFormFile("file", filepath.Base(pdf))
+	f, _ := os.Open(pdf)
+	_, _ = io.Copy(fw, f)
+	_ = f.Close()
+	_ = w.WriteField("prompt", "")
+	_ = w.WriteField("thread_id", startResp.ThreadID)
+	_ = w.Close()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/asistente/message", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusAccepted { t.Fatalf("unexpected status %d", rec.Code) }
+	// Header debe estar presente si terminó en 200; si 202 podría aún no haber hecho run
+	if rec.Code == http.StatusOK {
+		if got := rec.Header().Get("X-RAG-Prompt"); got != "structured-v1" {
+			t.Fatalf("esperabamos X-RAG-Prompt=structured-v1, obtuvimos %q", got)
+		}
+	}
+	// Verificar que al menos la primera parte del stream contiene prefacio español (puede tardar en tokenizar secciones)
+	bodyStr := rec.Body.String()
+	if rec.Code == http.StatusOK && !strings.Contains(bodyStr, "Resumen Ejecutivo") {
+		t.Logf("Advertencia: no se detectó 'Resumen Ejecutivo' aún en el stream inicial (puede llegar después). Body=%s", truncate(bodyStr, 400))
+	}
+}

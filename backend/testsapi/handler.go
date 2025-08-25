@@ -28,6 +28,7 @@ type Handler struct {
 	assistantID string
 	// Optional: resolver to map category IDs to names
 	resolveCategoryNames func(ctx context.Context, ids []int) ([]string, error)
+	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
 }
 
 func NewHandler(ai Assistant, assistantID string) *Handler {
@@ -79,7 +80,27 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.POST("/tests/responder-test/submit", h.evaluate)
 }
 
+// SetQuotaValidator allows main to inject quota validator (quiz generation counts)
+func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) { h.quotaValidator = fn }
+
 func (h *Handler) generate(c *gin.Context) {
+	// Quota: quiz generation consumes questionnaires bucket
+	if h.quotaValidator != nil {
+		if err := h.quotaValidator(c.Request.Context(), c, "quiz_generate"); err != nil {
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			resp := gin.H{"error":"quiz quota exceeded"}
+			if f, ok := field.(string); ok && f != "" { resp["field"] = f }
+			if r, ok := reason.(string); ok && r != "" { resp["reason"] = r }
+			c.JSON(http.StatusForbidden, resp)
+			return
+		}
+		if v, ok := c.Get("quota_remaining"); ok {
+			c.Header("X-Quota-Questionnaires-Remaining", toString(v)) // legacy
+			c.Header("X-Quota-Field", "questionnaires")
+			c.Header("X-Quota-Remaining", toString(v))
+		}
+	}
 	var req generateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})

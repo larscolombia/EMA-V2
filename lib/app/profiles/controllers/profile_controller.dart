@@ -310,57 +310,11 @@ class ProfileController extends GetxController {
     }
   }
 
-  Future<bool> decrementChatQuota() async {
-    try {
-      final subscription = currentProfile.value.activeSubscription;
-      if (subscription == null) return false;
+  // LEGACY (client-side decrement) REMOVED: chat quota now decremented server-side via flow chat_message
+  Future<bool> decrementChatQuota() async { return false; }
 
-      await subscriptionService.updateSubscriptionQuantities(
-        subscriptionId: subscription.id,
-        authToken: currentProfile.value.authToken,
-        consultations: 1, // Decrementar 1 chat
-      );
-
-      // Actualizar el perfil para obtener la nueva cuota
-      await refreshProfile();
-      return true;
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'No se pudo actualizar la cuota de chats',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.red,
-        colorText: Colors.white,
-      );
-      return false;
-    }
-  }
-
-  Future<bool> decrementFileQuota() async {
-    try {
-      final subscription = currentProfile.value.activeSubscription;
-      if (subscription == null) return false;
-
-      await subscriptionService.updateSubscriptionQuantities(
-        subscriptionId: subscription.id,
-        authToken: currentProfile.value.authToken,
-        files: 1,
-      );
-
-      // Actualizar el perfil para obtener la nueva cuota
-      await refreshProfile();
-      return true;
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'No se pudo actualizar la cuota de archivos',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.red,
-        colorText: Colors.white,
-      );
-      return false;
-    }
-  }
+  // LEGACY: file quota decremented server-side (file_upload flow)
+  Future<bool> decrementFileQuota() async { return false; }
 
   void refreshFileQuota() {
     update();
@@ -370,61 +324,15 @@ class ProfileController extends GetxController {
     update();
   }
 
-  Future<bool> decrementClinicalCaseQuota() async {
-    try {
-      final subscription = currentProfile.value.activeSubscription;
-      if (subscription == null) return false;
-
-      await subscriptionService.updateSubscriptionQuantities(
-        subscriptionId: subscription.id,
-        authToken: currentProfile.value.authToken,
-        clinicalCases: 1, // Decrementar 1 caso clínico
-      );
-
-      // Actualizar el perfil para obtener la nueva cuota
-      await refreshProfile();
-      return true;
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'No se pudo actualizar la cuota de casos clínicos',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.red,
-        colorText: Colors.white,
-      );
-      return false;
-    }
-  }
+  // LEGACY: clinical case quota server-side (analytical_generate / interactive_generate)
+  Future<bool> decrementClinicalCaseQuota() async { return false; }
 
   void refreshClinicalCaseQuota() {
     update();
   }
 
-  Future<bool> decrementQuizQuota() async {
-    try {
-      final subscription = currentProfile.value.activeSubscription;
-      if (subscription == null) return false;
-
-      await subscriptionService.updateSubscriptionQuantities(
-        subscriptionId: subscription.id,
-        authToken: currentProfile.value.authToken,
-        questionnaires: 1, // Decrementar 1 cuestionario
-      );
-
-      // Actualizar el perfil para obtener la nueva cuota
-      await refreshProfile();
-      return true;
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'No se pudo actualizar la cuota de cuestionarios',
-        snackPosition: SnackPosition.TOP,
-        backgroundColor: Colors.red,
-        colorText: Colors.white,
-      );
-      return false;
-    }
-  }
+  // LEGACY: quiz quota server-side (quiz_generate)
+  Future<bool> decrementQuizQuota() async { return false; }
 
   void refreshQuizQuota() {
     update();

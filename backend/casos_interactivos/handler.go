@@ -109,6 +109,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 			return
 		}
 	}
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+		c.Header("X-Quota-Field", "clinical_cases")
+	}
 	var req startReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -239,6 +243,7 @@ func (h *Handler) Message(c *gin.Context) {
 			return
 		}
 	}
+	if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
 	var req messageReq
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Mensaje) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -493,6 +498,16 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// helper for quota header (duplicate small util to avoid cross-package import tangle)
+func toString(v interface{}) string {
+	switch t := v.(type) {
+	case string: return t
+	case int: return strconv.Itoa(t)
+	case int64: return strconv.FormatInt(t,10)
+	default: return ""
+	}
 }
 
 // Attempt a one-shot repair to force strict JSON turn
