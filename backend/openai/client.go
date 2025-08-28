@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type Client struct {
 	// session vector stores: thread_id -> vector_store_id
 	vsMu        sync.RWMutex
 	vectorStore map[string]string
+	vsLastAccess map[string]time.Time // thread_id -> last access
 	fileMu      sync.RWMutex
 	fileCache   map[string]string // key: threadID+"|"+sha256 -> fileID
 	// session usage tracking (in-memory)
@@ -39,6 +41,8 @@ type Client struct {
 	// last uploaded file per thread to bias instructions
 	lastMu   sync.RWMutex
 	lastFile map[string]LastFileInfo
+	lastCleanup time.Time
+	vsTTL       time.Duration
 	// Ensure *Client implements the chat.AIClient interface (compile-time check) via a blank identifier assignment.
 	// (We inline the minimal subset because importing chat here would create a cycle; so we skip direct assertion.)
 }
@@ -50,6 +54,7 @@ type LastFileInfo struct {
 	ID   string
 	Name string
 	At   time.Time
+	Hash string
 }
 
 // sanitizeEnv limpia espacios y elimina comillas simples o dobles rodeando todo el valor.
@@ -73,17 +78,23 @@ func NewClient() *Client {
 	}
 	vsMap, _ := loadVectorStoreFile()
 	fcMap, _ := loadFileCache()
+	var ttl time.Duration
+	if v := strings.TrimSpace(os.Getenv("VS_TTL_MINUTES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 { ttl = time.Duration(n) * time.Minute }
+	}
 	return &Client{
-		api:         api,
-		AssistantID: assistant,
-		Model:       model,
-		key:         key,
-		httpClient:  &http.Client{Timeout: 60 * time.Second},
-		vectorStore: vsMap,
-		fileCache:   fcMap,
-		sessBytes:   make(map[string]int64),
-		sessFiles:   make(map[string]int),
-		lastFile:    make(map[string]LastFileInfo),
+		api:          api,
+		AssistantID:  assistant,
+		Model:        model,
+		key:          key,
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		vectorStore:  vsMap,
+		vsLastAccess: make(map[string]time.Time),
+		fileCache:    fcMap,
+		sessBytes:    make(map[string]int64),
+		sessFiles:    make(map[string]int),
+		lastFile:     make(map[string]LastFileInfo),
+		vsTTL:        ttl,
 	}
 }
 
@@ -288,10 +299,12 @@ func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string
 	if c.key == "" {
 		return "", fmt.Errorf("OpenAI API key not set")
 	}
+	c.maybeCleanupVectorStores()
 
 	c.vsMu.RLock()
 	if id, ok := c.vectorStore[threadID]; ok {
 		c.vsMu.RUnlock()
+		c.touchVectorStore(threadID)
 		fmt.Printf("DEBUG: Using existing vector store: %s for thread: %s\n", id, threadID)
 		return id, nil
 	}
@@ -317,6 +330,7 @@ func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string
 	}
 	c.vsMu.Lock()
 	c.vectorStore[threadID] = data.ID
+	c.vsLastAccess[threadID] = time.Now()
 	// persist
 	snapshot := make(map[string]string, len(c.vectorStore))
 	for k, v := range c.vectorStore {
@@ -377,6 +391,7 @@ func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) 
 			c.sessMu.Lock()
 			c.sessFiles[thread] = c.sessFiles[thread] + 1
 			c.sessMu.Unlock()
+			c.touchVectorStore(thread)
 			fmt.Printf("DEBUG: Incremented file count for thread %s\n", thread)
 			return nil
 		}
@@ -458,6 +473,7 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	if id, ok := c.fileCache[key]; ok {
 		c.fileMu.RUnlock()
 		fmt.Printf("DEBUG: Using cached file ID: %s\n", id)
+		c.lastMu.Lock(); c.lastFile[threadID] = LastFileInfo{ID: id, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}; c.lastMu.Unlock()
 		return id, nil
 	}
 	c.fileMu.RUnlock()
@@ -498,7 +514,7 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 
 	// remember last uploaded file for this thread
 	c.lastMu.Lock()
-	c.lastFile[threadID] = LastFileInfo{ID: data.ID, Name: filepath.Base(filePath), At: time.Now()}
+	c.lastFile[threadID] = LastFileInfo{ID: data.ID, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}
 	c.lastMu.Unlock()
 	return data.ID, nil
 }
@@ -752,6 +768,12 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	if err := c.addMessage(ctx, threadID, prompt); err != nil {
 		return nil, err
 	}
+	// Debug meta para detectar hilos mezclados: log con hash corto del prompt
+	hashPrompt := ""
+	if len(prompt) > 0 {
+		if len(prompt) > 64 { hashPrompt = fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))[:12] } else { hashPrompt = fmt.Sprintf("len%d", len(prompt)) }
+	}
+	log.Printf("[assist][StreamAssistantMessage][start] thread=%s vs=%s prompt_hash=%s", threadID, vsID, hashPrompt)
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
@@ -761,16 +783,23 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 		c.lastMu.RLock()
 		if lf, ok := c.lastFile[threadID]; ok && strings.TrimSpace(lf.Name) != "" {
 			strict = strict + " Prioriza el archivo más reciente de este hilo ('" + lf.Name + "') y no pidas confirmación a menos que el usuario lo contradiga."
+			log.Printf("[assist][StreamAssistantMessage] thread=%s bias_last_file=%s age=%s", threadID, lf.Name, time.Since(lf.At))
 		}
 		c.lastMu.RUnlock()
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
+			outHash := ""
+			if len(text) > 120 { outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12] } else { outHash = fmt.Sprintf("len%d", len(text)) }
+			log.Printf("[assist][StreamAssistantMessage][done] thread=%s prompt_hash=%s out_hash=%s chars=%d", threadID, hashPrompt, outHash, len(text))
 			// En modo test, guardar respuesta completa en archivo temporal
 			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
 				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
 				os.WriteFile(tmpFile, []byte(text), 0644)
 			}
 			out <- text
+		}
+		if err != nil {
+			log.Printf("[assist][StreamAssistantMessage][error] thread=%s err=%v", threadID, err)
 		}
 	}()
 	return out, nil
@@ -803,6 +832,7 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 	if err := c.addMessage(ctx, threadID, prompt); err != nil {
 		return nil, err
 	}
+	log.Printf("[assist][StreamAssistantMessageWithFile][start] thread=%s vs=%s file=%s prompt_len=%d", threadID, vsID, filepath.Base(filePath), len(prompt))
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
@@ -815,12 +845,18 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		}
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
+			outHash := ""
+			if len(text) > 120 { outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12] } else { outHash = fmt.Sprintf("len%d", len(text)) }
+			log.Printf("[assist][StreamAssistantMessageWithFile][done] thread=%s file=%s out_hash=%s chars=%d", threadID, filepath.Base(filePath), outHash, len(text))
 			// En modo test, guardar respuesta completa en archivo temporal
 			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
 				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
 				os.WriteFile(tmpFile, []byte(text), 0644)
 			}
 			out <- text
+		}
+		if err != nil {
+			log.Printf("[assist][StreamAssistantMessageWithFile][error] thread=%s file=%s err=%v", threadID, filepath.Base(filePath), err)
 		}
 	}()
 	return out, nil
@@ -995,4 +1031,62 @@ func (c *Client) DeleteThreadArtifactsAny(ctx any, threadID string) error {
 		return c.DeleteThreadArtifacts(realCtx, threadID)
 	}
 	return c.DeleteThreadArtifacts(context.Background(), threadID)
+}
+
+// --- Vector Store maintenance & inspection helpers --- //
+
+// ForceNewVectorStore drops current vector store (best-effort) and creates a new empty one.
+func (c *Client) ForceNewVectorStore(ctx context.Context, threadID string) (string, error) {
+	if threadID == "" { return "", errors.New("threadID vacío") }
+	c.vsMu.Lock()
+	old := c.vectorStore[threadID]
+	delete(c.vectorStore, threadID)
+	delete(c.vsLastAccess, threadID)
+	c.vsMu.Unlock()
+	if old != "" { _ = c.deleteVectorStore(ctx, old) }
+	return c.ensureVectorStore(ctx, threadID)
+}
+
+// ListVectorStoreFiles lists file ids currently attached to the vector store for a thread.
+func (c *Client) ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error) {
+	if threadID == "" { return nil, errors.New("threadID vacío") }
+	vsID := c.GetVectorStoreID(threadID)
+	if vsID == "" { return []string{}, nil }
+	resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vsID+"/files?limit=100", nil)
+	if err != nil { return nil, err }
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 { b,_:=io.ReadAll(resp.Body); return nil, fmt.Errorf("list files failed: %s", string(b)) }
+	var data struct { Data []struct { ID string `json:"id"` } `json:"data"` }
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil { return nil, err }
+	ids := make([]string,0,len(data.Data))
+	for _, d := range data.Data { if d.ID != "" { ids = append(ids, d.ID) } }
+	return ids, nil
+}
+
+// GetVectorStoreID returns existing vector store id without creating a new one.
+func (c *Client) GetVectorStoreID(threadID string) string { c.vsMu.RLock(); defer c.vsMu.RUnlock(); return c.vectorStore[threadID] }
+
+// touchVectorStore updates last access for TTL logic.
+func (c *Client) touchVectorStore(threadID string) { if threadID==""||c.vsTTL==0 { return }; c.vsMu.Lock(); c.vsLastAccess[threadID]=time.Now(); c.vsMu.Unlock() }
+
+// maybeCleanupVectorStores removes expired vector stores based on TTL.
+func (c *Client) maybeCleanupVectorStores() {
+	if c.vsTTL == 0 { return }
+	if time.Since(c.lastCleanup) < 5*time.Minute { return }
+	c.vsMu.Lock()
+	now := time.Now()
+	expired := make([]string,0)
+	for t, id := range c.vectorStore {
+		last := c.vsLastAccess[t]
+		if last.IsZero() { c.vsLastAccess[t] = now; continue }
+		if now.Sub(last) > c.vsTTL { expired = append(expired, t); _ = c.deleteVectorStore(context.Background(), id) }
+	}
+	if len(expired) > 0 {
+		for _, t := range expired { delete(c.vectorStore, t); delete(c.vsLastAccess, t) }
+		snap := make(map[string]string,len(c.vectorStore))
+		for k,v := range c.vectorStore { snap[k]=v }
+		go saveVectorStoreFile(snap)
+	}
+	c.lastCleanup = now
+	c.vsMu.Unlock()
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math"
 
 	"ema-backend/openai"
 
@@ -296,7 +297,8 @@ func (h *Handler) evaluate(c *gin.Context) {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
 		log.Printf("[testsapi.evaluate] assistant evaluation parsed OK (uid=%s, test_id=%d)", req.UID, req.TestID)
-		// Happy path: return assistant result
+		// Augment with summary if evaluation array present
+		parsed = augmentEvaluationSummary(parsed, req.Items)
 		c.JSON(http.StatusOK, parsed)
 		return
 	}
@@ -305,6 +307,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 		var parsed2 map[string]any
 		if err := json.Unmarshal([]byte(repaired), &parsed2); err == nil {
 			log.Printf("[testsapi.evaluate] repair succeeded; returning fixed JSON (uid=%s, test_id=%d)", req.UID, req.TestID)
+			parsed2 = augmentEvaluationSummary(parsed2, req.Items)
 			c.JSON(http.StatusOK, parsed2)
 			return
 		}
@@ -319,11 +322,13 @@ func (h *Handler) evaluate(c *gin.Context) {
 			"fit":         "Respuesta registrada",
 		})
 	}
-	c.JSON(http.StatusOK, map[string]any{
+	fallback := map[string]any{
 		"evaluation":      eval,
 		"correct_answers": 0,
 		"fit_global":      "Evaluación automática sin modelo",
-	})
+	}
+	fallback = augmentEvaluationSummary(fallback, req.Items)
+	c.JSON(http.StatusOK, fallback)
 }
 
 var jsonRe = regexp.MustCompile(`(?s)\{.*\}`)
@@ -472,6 +477,20 @@ func toStr(v any) string {
 		return ""
 	}
 }
+
+// toString replica helper simple usado en otros handlers para cabeceras de cuota
+func toString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return ""
+	}
+}
 func toStringSlice(v any) []string {
 	switch x := v.(type) {
 	case []any:
@@ -586,4 +605,53 @@ func (h *Handler) repairEvaluationJSON(ctx context.Context, threadID, lastConten
 		return "", false
 	}
 	return "", false
+}
+
+// augmentEvaluationSummary computes a lightweight summary with counts and missed questions.
+// Expects map possibly containing 'evaluation' and 'correct_answers'.
+// Adds field 'summary': { total:int, correct:int, incorrect:int, correct_percentage:float, missed_ids:[], correct_answers_map:{question_id:answer} }
+// correct_answers_map derived from evaluation where is_correct==1 if answer present in input items; limited to 50 entries.
+func augmentEvaluationSummary(parsed map[string]any, reqItems []evalQuestion) map[string]any {
+	if parsed == nil { return parsed }
+	// Extract evaluation array
+	evalAny, ok := parsed["evaluation"]
+	var evalArr []map[string]any
+	if ok {
+		switch v := evalAny.(type) {
+		case []any:
+			for _, e := range v { if m, ok := e.(map[string]any); ok { evalArr = append(evalArr, m) } }
+		case []map[string]any:
+			evalArr = v
+		}
+	}
+	total := len(evalArr)
+	correct := 0
+	missedIDs := []int{}
+	// map questionID -> answer from original request for correct ones
+	answerLookup := map[int]string{}
+	for _, it := range reqItems { answerLookup[it.QuestionID] = it.Answer }
+	correctMap := map[string]string{}
+	for _, e := range evalArr {
+		qid := -1
+		if idf, ok := e["question_id"].(float64); ok { qid = int(idf) } else if idi, ok := e["question_id"].(int); ok { qid = idi }
+		isC := 0
+		if icf, ok := e["is_correct"].(float64); ok { isC = int(icf) } else if ici, ok := e["is_correct"].(int); ok { isC = ici }
+		if isC == 1 { correct++ ; if ans, ok2 := answerLookup[qid]; ok2 && len(correctMap) < 50 { correctMap[strconv.Itoa(qid)] = ans } } else if qid >= 0 { missedIDs = append(missedIDs, qid) }
+	}
+	incorrect := total - correct
+	pct := 0.0
+	if total > 0 { pct = (float64(correct) / float64(total)) * 100.0 }
+	parsed["summary"] = map[string]any{
+		"total": total,
+		"correct": correct,
+		"incorrect": incorrect,
+		"correct_percentage": fmtFloat(pct),
+		"missed_ids": missedIDs,
+		"correct_answers_map": correctMap,
+	}
+	return parsed
+}
+
+func fmtFloat(f float64) float64 { // round to 2 decimals
+	return math.Round(f*100) / 100
 }

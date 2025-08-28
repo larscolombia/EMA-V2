@@ -10,7 +10,17 @@ class Logger {
   static void debug(String msg) { if (_allowVerbose) print('[D] $msg'); }
   static void info(String msg)  { if (_allowVerbose) print('[I] $msg'); }
   static void warn(String msg)  { print('[W] $msg'); }
-  static void error(String msg) { print('[E] $msg'); }
+  static void error(String msg, {String? className, String? methodName, String? meta}) {
+    if (className == null && methodName == null && meta == null) {
+      print('[E] $msg');
+      return;
+    }
+    final parts = <String>[];
+    if (className != null) parts.add(className);
+    if (methodName != null) parts.add(methodName);
+    if (meta != null) parts.add(meta);
+    print('[E] ${parts.join(' | ')} -> $msg');
+  }
 
   // Backwards compatibility wrappers
   static void log(String message) => info(message);

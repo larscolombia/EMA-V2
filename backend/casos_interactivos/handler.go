@@ -30,6 +30,17 @@ type Handler struct {
 	mu                 sync.Mutex
 	turnCount          map[string]int // thread_id -> number of questions already asked
 	threadMaxQuestions map[string]int // thread_id -> max questions for this specific thread
+	askedQuestions     map[string][]string // thread_id -> list of question texts already asked (to reduce repetition)
+}
+
+// finalQuestion builds the canonical empty question object used when the case is finished.
+// Mantiene las claves para que el frontend detecte cierre sin romper parsing.
+func finalQuestion() map[string]any {
+	return map[string]any{
+		"tipo":     "",
+		"texto":    "",
+		"opciones": []string{},
+	}
 }
 
 // DefaultHandler builds the assistant client from env
@@ -51,6 +62,7 @@ func DefaultHandler() *Handler {
 		maxQuestions:       maxQ,
 		turnCount:          make(map[string]int),
 		threadMaxQuestions: make(map[string]int),
+		askedQuestions:     make(map[string][]string),
 	}
 }
 
@@ -102,6 +114,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 	}
 	if h.threadMaxQuestions == nil {
 		h.threadMaxQuestions = make(map[string]int)
+	}
+	if h.askedQuestions == nil { // lazy init in case of nil
+		h.askedQuestions = make(map[string][]string)
 	}
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "interactive_strict_start"); err != nil {
@@ -186,6 +201,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 	if threadID != "" {
 		h.mu.Lock()
 		h.turnCount[threadID] = 1
+		// store initial question to help reduce repetition later
+		if q := extractQuestionText(data); q != "" {
+			h.askedQuestions[threadID] = append(h.askedQuestions[threadID], q)
+		}
 		h.mu.Unlock()
 	}
 
@@ -259,30 +278,44 @@ func (h *Handler) Message(c *gin.Context) {
 	}
 
 	// Enforce max questions policy using per-thread counters
-	curr := h.getCount(threadID)
+	curr := h.getCount(threadID)              // questions already asked
 	maxQuestions := h.getMaxQuestions(threadID)
-	if curr >= maxQuestions {
-		log.Printf("[InteractiveCase][Message][CloseEarly] thread=%s curr=%d max=%d (>= max)", threadID, curr, maxQuestions)
-		// Already at or over the limit: return final closure turn
-		final := h.minTurn()
-		final["finish"] = 1
-		final["next"].(map[string]any)["hallazgos"] = map[string]any{}
-		final["next"].(map[string]any)["pregunta"] = map[string]any{}
-		c.JSON(http.StatusOK, map[string]any{"data": withThread(final, threadID)})
-		return
-	}
-	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d", threadID, curr, maxQuestions)
+	closing := curr >= maxQuestions           // we've already asked the max; now we only need final feedback
+	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d closing=%v", threadID, curr, maxQuestions, closing)
 
 	userPrompt := req.Mensaje
-	// Nueva lógica: no forzamos el cierre antes de tiempo; el handler controla el cierre cuando se alcanza el límite.
-	instr := strings.Join([]string{
-		"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones}}, finish(0|1).",
-		"'feedback' conciso (máx 50 palabras) evaluando SOLO la respuesta previa y dando explicación breve.",
-		"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
-		"Si el sistema ya alcanzó el límite de preguntas NO generes nueva pregunta (el handler lo indicará).",
-		"Cuando recibas una instrucción implícita de cierre (no habrá nueva pregunta) pon finish=1 y deja hallazgos y pregunta vacíos.",
-		"Fuentes: Vector o PubMed (variar). Sin texto fuera del JSON. Idioma: español.",
-	}, " ")
+	var instr string
+	if closing {
+		instr = strings.Join([]string{
+			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{}}, finish(1).",
+			"Objetivo: feedback FINAL evaluando la ÚLTIMA respuesta del usuario, sintetizando errores/aciertos, proponiendo diagnóstico diferencial y plan siguiente paso. Máx 80 palabras.",
+			"NO generes nueva pregunta. 'next.hallazgos' = {} y 'next.pregunta' = {}. finish=1 obligatorio.",
+			"Incluye fuente (Vector o PubMed). Idioma: español. Sin texto fuera del JSON.",
+		}, " ")
+	} else {
+		// Build a short memory of prior questions to discourage repetition
+		var prevQs []string
+		if threadID != "" {
+			h.mu.Lock(); prevQs = append(prevQs, h.askedQuestions[threadID]...); h.mu.Unlock()
+		}
+		if len(prevQs) > 5 { // limit context length
+			prevQs = prevQs[len(prevQs)-5:]
+		}
+		prevList := ""
+		if len(prevQs) > 0 {
+			for i, q := range prevQs { prevQs[i] = strings.TrimSpace(q) }
+			prevList = "Preguntas previas (NO repetir ni variantes triviales): " + strings.Join(prevQs, " | ") + "."
+		}
+		instr = strings.Join([]string{
+			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones}}, finish(0|1).",
+			"'feedback' conciso (máx 50 palabras) evaluando SOLO la respuesta previa y dando explicación breve.",
+			"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
+			prevList,
+			"Si más adelante alcanzamos el límite de preguntas el handler enviará nueva instrucción de cierre.",
+			"Si decides cerrar por coherencia clínica pon finish=1 y NO generes pregunta (pregunta vacía).",
+			"Evita repetir preguntas ya hechas. Fuentes: Vector o PubMed (variar). Sin texto fuera del JSON. Idioma: español.",
+		}, " ")
+	}
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
@@ -307,8 +340,8 @@ func (h *Handler) Message(c *gin.Context) {
 	if !validInteractiveTurn(data) {
 		data = h.minTurn()
 	}
-	// If the assistant closed early but we haven't reached the limit, force a placeholder question
-	if curr < maxQuestions {
+	// If not closing: handle validation / repair of premature closure & ensure a question exists
+	if !closing {
 		preguntaValid := func() bool {
 			next, ok := data["next"].(map[string]any)
 			if !ok {
@@ -342,8 +375,17 @@ func (h *Handler) Message(c *gin.Context) {
 			}
 			return true
 		}()
-		if finF, ok := data["finish"].(float64); ok && finF == 1 && curr < maxQuestions {
-			data["finish"] = 0.0
+		if finF, ok := data["finish"].(float64); ok && finF == 1 {
+			// prevent premature finish before reaching max unless assistant intentionally closed logically *and* we accept it
+			// We relax: keep finish=1 only if there is no pregunta or it's empty; else reset to 0
+			keep := false
+			if nx, ok := data["next"].(map[string]any); ok {
+				if pq, ok := nx["pregunta"].(map[string]any); ok {
+					texto, _ := pq["texto"].(string)
+					if strings.TrimSpace(texto) == "" { keep = true }
+				} else { keep = true }
+			}
+			if !keep { data["finish"] = 0.0 }
 		}
 		if !preguntaValid {
 			mt := h.minTurn()
@@ -354,22 +396,39 @@ func (h *Handler) Message(c *gin.Context) {
 			}
 			log.Printf("[InteractiveCase][Message][RepairedQuestion] thread=%s curr=%d max=%d", threadID, curr, maxQuestions)
 		}
-	}
-	// Increment counter after generating the next question/turn
-	h.incrementCount(threadID)
-	// If we've reached the limit now, enforce closure on this returned turn
-	maxQuestions = h.getMaxQuestions(threadID)
-	if h.getCount(threadID) > maxQuestions {
-		data["finish"] = 1
+		// record asked question to reduce repetition
+		if q := extractQuestionText(data); q != "" && threadID != "" {
+			h.mu.Lock(); h.askedQuestions[threadID] = append(h.askedQuestions[threadID], q); h.mu.Unlock()
+		}
+		// Increment counter only when a new question is produced
+		h.incrementCount(threadID)
+
+		// Safety: si tras incrementar alcanzamos o superamos el máximo, forzamos cierre coherente
+		if h.getCount(threadID) >= maxQuestions {
+			fq := finalQuestion()
+			if nx, ok := data["next"].(map[string]any); ok {
+				nx["hallazgos"] = map[string]any{}
+				nx["pregunta"] = fq
+			} else {
+				data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": fq}
+			}
+			data["finish"] = 1
+			data["status"] = "finished"
+			log.Printf("[InteractiveCase][Message][ForceClose] thread=%s count=%d max=%d", threadID, h.getCount(threadID), maxQuestions)
+		}
+	} else {
+		// Force closure normalization: usar estructura vacía esperada por frontend (claves presentes, valores vacíos)
+		fq := finalQuestion()
 		if nx, ok := data["next"].(map[string]any); ok {
 			nx["hallazgos"] = map[string]any{}
-			nx["pregunta"] = map[string]any{}
+			nx["pregunta"] = fq
 		} else {
-			data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{}}
+			data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": fq}
 		}
-		log.Printf("[InteractiveCase][Message][ClosePostGen] thread=%s count=%d max=%d", threadID, h.getCount(threadID), maxQuestions)
+		data["finish"] = 1
+		data["status"] = "finished" // auxiliar para depuración
 	}
-	log.Printf("[InteractiveCase][Message][Return] thread=%s count=%d max=%d finish=%v", threadID, h.getCount(threadID), maxQuestions, data["finish"])
+	log.Printf("[InteractiveCase][Message][Return] thread=%s count=%d max=%d finish=%v closing=%v", threadID, h.getCount(threadID), maxQuestions, data["finish"], closing)
 	c.JSON(http.StatusOK, map[string]any{"data": withThread(data, threadID)})
 }
 
@@ -485,6 +544,15 @@ func (h *Handler) getMaxQuestions(threadID string) int {
 		return max
 	}
 	return h.maxQuestions
+}
+
+// extractQuestionText pulls pregunta.texto from a data turn
+func extractQuestionText(data map[string]any) string {
+	if data == nil { return "" }
+	next, ok := data["next"].(map[string]any); if !ok { return "" }
+	preg, ok := next["pregunta"].(map[string]any); if !ok { return "" }
+	txt, _ := preg["texto"].(string)
+	return strings.TrimSpace(txt)
 }
 
 func boolToStr(b bool) string {

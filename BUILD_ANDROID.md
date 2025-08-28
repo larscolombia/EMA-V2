@@ -2,8 +2,8 @@
 
 Para generar un APK apuntando a backend de producción:
 
-1. El fallback en código ya es producción: `https://emma.drleonardoherrera.com`.
-2. En debug se fuerza local (emulador) si no pasas nada. En release NO se fuerza local.
+1. El fallback en código es producción: `https://emma.drleonardoherrera.com`.
+2. En debug ya NO se fuerza local automáticamente; para apuntar a local usa `--dart-define=APP_ENV=dev` o cambia temporalmente `forceLocalInDebug`.
 3. Para asegurar explícitamente la URL (recomendado en CI):
 
 ```

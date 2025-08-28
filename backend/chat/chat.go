@@ -407,6 +407,27 @@ func (h *Handler) Message(c *gin.Context) {
 	sse.Stream(c, stream)
 }
 
+// VectorReset: fuerza un nuevo vector store limpio para el hilo dado.
+func (h *Handler) VectorReset(c *gin.Context) {
+	var req struct { ThreadID string `json:"thread_id"` }
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ThreadID)=="" { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
+	if !strings.HasPrefix(req.ThreadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+	vsID, err := h.AI.ForceNewVectorStore(c.Request.Context(), req.ThreadID)
+	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()}); return }
+	c.JSON(http.StatusOK, gin.H{"status":"reset","vector_store_id":vsID})
+}
+
+// VectorFiles: lista archivos asociados al vector store del hilo.
+func (h *Handler) VectorFiles(c *gin.Context) {
+	threadID := strings.TrimSpace(c.Query("thread_id"))
+	if threadID=="" { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
+	if !strings.HasPrefix(threadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+	files, err := h.AI.ListVectorStoreFiles(c.Request.Context(), threadID)
+	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()}); return }
+	vsID := h.AI.GetVectorStoreID(threadID)
+	c.JSON(http.StatusOK, gin.H{"thread_id":threadID, "vector_store_id":vsID, "files":files})
+}
+
 // helper to stringify interface
 func toString(v interface{}) string {
 	switch t := v.(type) {

@@ -97,19 +97,19 @@ class _ProfileHeaderState extends State<ProfileHeader> {
           Stack(
             children: [
               Obx(() {
-                String profileImage = Get.find<ProfileController>()
+                final raw = Get.find<ProfileController>()
                     .currentProfile
                     .value
                     .profileImage;
-                if (profileImage.isNotEmpty && !profileImage.startsWith('http')) {
-                  // Asegurar URL absoluta para evitar "No host specified".
-                  final base = ApiConstants.apiUrl;
-                  if (profileImage.startsWith('media/')) {
-                    profileImage = '$base/$profileImage';
-                  } else if (profileImage.startsWith('/media/')) {
-                    profileImage = '$base${profileImage.startsWith('/') ? profileImage : '/$profileImage'}';
+                // Construir URL absoluta si viene relativa (ej: media/user_1/profile.jpg)
+                final profileImage = () {
+                  if (raw.isEmpty) return raw;
+                  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+                    return raw;
                   }
-                }
+                  final base = apiUrl.endsWith('/') ? apiUrl.substring(0, apiUrl.length - 1) : apiUrl;
+                  return '$base/${raw.startsWith('/') ? raw.substring(1) : raw}';
+                }();
                 return Container(
                   width: 100,
                   height: 100,
@@ -128,6 +128,7 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                             fit: BoxFit.cover,
                             width: 100,
                             height: 100,
+                            errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 48),
                           )
                         : const Icon(Icons.person, size: 48),
                   ),

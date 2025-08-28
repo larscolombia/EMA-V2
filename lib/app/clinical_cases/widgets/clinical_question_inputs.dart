@@ -1,6 +1,7 @@
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/controllers/clinical_case_controller.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/models/answer_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
+import 'package:ema_educacion_medica_avanzada/app/quizzes/widgets/question_input_text.dart';
 import 'package:ema_educacion_medica_avanzada/common/widgets/outline_ai_button.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/material.dart';
@@ -29,15 +30,57 @@ class ClinicalQuestionInputs extends StatelessWidget {
       }
 
       if (controller.isComplete.value) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          child: OutlineAiButton(
-            text: 'Salir del Caso Clínico',
-            onPressed: () {
-              Get.toNamed(Routes.home.name);
-            },
-          ),
-        );
+        // Si ya se generó la evaluación, mostrar botón para ir a verla
+        if (controller.interactiveEvaluationGenerated.value) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Column(
+              children: [
+                OutlineAiButton(
+                  text: 'Ver Evaluación Final',
+                  onPressed: () {
+                    final caseModel = controller.currentCase.value;
+                    if (caseModel != null) {
+                      Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                OutlineAiButton(
+                  text: 'Regresar al Inicio',
+                  onPressed: () {
+                    Get.toNamed(Routes.home.name);
+                  },
+                ),
+              ],
+            ),
+          );
+        } else {
+          // Evaluación aún se está generando
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            child: Column(
+              children: [
+                Text(
+                  'Caso clínico completado. Generando evaluación...',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).primaryColor,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CircularProgressIndicator(),
+                const SizedBox(height: 12),
+                OutlineAiButton(
+                  text: 'Regresar al Inicio',
+                  onPressed: () {
+                    Get.toNamed(Routes.home.name);
+                  },
+                ),
+              ],
+            ),
+          );
+        }
       }
 
       if (question.type == QuestionType.singleChoice) {
@@ -48,6 +91,15 @@ class ClinicalQuestionInputs extends StatelessWidget {
               controller
                   .isTyping
                   .value, // We'll continue using isTyping to disable
+        );
+      }
+
+      if (question.type == QuestionType.open) {
+        return QuestionInputText(
+          onAnswer: onPressedUniqueAnswer,
+          question: question,
+          title: 'Mi respuesta es...',
+          isDisabled: controller.isTyping.value,
         );
       }
 

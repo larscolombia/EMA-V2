@@ -6,7 +6,7 @@ const String _envApiBase = String.fromEnvironment('API_BASE_URL', defaultValue: 
 /// Fuerza backend local automáticamente en compilaciones debug si no se pasó API_BASE_URL.
 /// No afecta a release/profile.
 /// Activado para modo desarrollo solicitado.
-const bool forceLocalInDebug = true; // Ahora apuntamos a local por defecto en debug.
+const bool forceLocalInDebug = true; // Activado temporalmente para desarrollo local.
 
 String _computeLocal() {
   if (kIsWeb) return 'http://localhost:8080';
@@ -25,21 +25,12 @@ final String _computedApiUrl = () {
   if (_envApiBase.trim().isNotEmpty) return _envApiBase.trim();
   // 2. En debug podemos forzar local automáticamente
   if (kDebugMode && forceLocalInDebug) return _computeLocal();
-  // 3. fallback producción
+  // 3. Fallback producción
   return 'https://emma.drleonardoherrera.com';
 }();
 
 // Mantener alias público previo (si el código usa la variable global apiUrl directamente)
 final String apiUrl = _computedApiUrl;
-
-/// Permite forzar en runtime (antes de inicializar servicios) el uso de la URL de producción
-/// sin necesidad de recompilar con dart-define. Útil para tests manuales en builds debug.
-/// No persiste entre reinicios calientes.
-void forceProductionApiUrl() {
-  // No se puede re-asignar const, pero muchos servicios leen ApiConstants.baseUrl en runtime,
-  // por lo que exponer esta función sirve como hint para futuros refactors si se agrega
-  // un mecanismo dinámico. De momento se deja intencionalmente vacío para evitar side-effects.
-}
 
 /// Compat layer: algunas partes antiguas del código (o builds intermedios) podrían referirse a
 /// `ApiConstants.baseUrl` o `ApiConstants.apiUrl`. Mantener esto evita fallos de build mientras

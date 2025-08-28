@@ -6,6 +6,7 @@ import (
     "os"
     "strings"
     "log"
+    "strconv"
 
     "ema-backend/login"
     "ema-backend/subscriptions"
@@ -76,7 +77,60 @@ func (v *Validator) ValidateAndConsume(ctx context.Context, c *gin.Context, flow
     log.Printf("[quota][deny] flow=%s field=%s user_id=%d email=%s reason=no_subscription", flow, field, u.ID, email)
         return errors.New("no subscription")
     }
-    // Fast path check
+    // Unlimited semantics: si el plan define un valor enorme (>=99999) para el campo, tratamos ese campo como ilimitado
+    planUnlimited := func(f string) bool {
+        if sub.Plan == nil { return false }
+        switch f {
+        case "consultations": return sub.Plan.Consultations >= 99999
+        case "questionnaires": return sub.Plan.Questionnaires >= 99999
+        case "clinical_cases": return sub.Plan.ClinicalCases >= 99999
+        case "files": return sub.Plan.Files >= 9999
+        }
+        return false
+    }
+    if planUnlimited(field) {
+        // No decrement, simplemente anotamos cabeceras/contexto
+        c.Set("quota_field", field)
+        c.Set("quota_remaining", "unlimited")
+        log.Printf("[quota][unlimited] flow=%s field=%s user_id=%d sub_id=%d plan_value=unlimited", flow, field, u.ID, sub.ID)
+        return nil
+    }
+    // Campo individual en cero pero plan >0: opción de recarga puntual (DEV_REFILL_MISSING_FIELDS=1)
+    if os.Getenv("DEV_REFILL_MISSING_FIELDS") == "1" && sub.Plan != nil {
+        switch field {
+        case "consultations": if sub.Consultations == 0 && sub.Plan.Consultations > 0 { _ = v.subs.SetQuotaValue(sub.ID, field, sub.Plan.Consultations) }
+        case "questionnaires": if sub.Questionnaires == 0 && sub.Plan.Questionnaires > 0 { _ = v.subs.SetQuotaValue(sub.ID, field, sub.Plan.Questionnaires) }
+        case "clinical_cases": if sub.ClinicalCases == 0 && sub.Plan.ClinicalCases > 0 { _ = v.subs.SetQuotaValue(sub.ID, field, sub.Plan.ClinicalCases) }
+        case "files": if sub.Files == 0 && sub.Plan.Files > 0 { _ = v.subs.SetQuotaValue(sub.ID, field, sub.Plan.Files) }
+        }
+        if ref, rerr := v.subs.GetActiveSubscription(u.ID); rerr == nil && ref != nil { sub = ref }
+    }
+    // Optional auto-reset for dev environments where legacy subscriptions have all zeros but plan has defaults.
+    if os.Getenv("DEV_RESET_ZERO_QUOTAS") == "1" &&
+        sub.Consultations == 0 && sub.Questionnaires == 0 && sub.ClinicalCases == 0 && sub.Files == 0 &&
+        sub.Plan != nil && (sub.Plan.Consultations > 0 || sub.Plan.Questionnaires > 0 || sub.Plan.ClinicalCases > 0 || sub.Plan.Files > 0) {
+        if err := v.subs.ResetSubscriptionQuotasToPlan(sub.ID); err == nil {
+            if ref, rerr := v.subs.GetActiveSubscription(u.ID); rerr == nil && ref != nil { sub = ref }
+            log.Printf("[quota][auto_reset] user_id=%d sub_id=%d applied plan defaults", u.ID, sub.ID)
+        } else {
+            log.Printf("[quota][auto_reset_failed] user_id=%d sub_id=%d err=%v", u.ID, sub.ID, err)
+        }
+    }
+    // Optional single-field refill for consultations in dev: if consultations <=0 and plan has value.
+    if refill := os.Getenv("DEV_REFILL_CONSULTATIONS"); refill != "" && sub.Plan != nil && sub.Plan.Consultations > 0 {
+        if sub.Consultations <= 0 {
+            target := sub.Plan.Consultations
+            // Allow override numeric env to cap the refill amount
+            if n, err := strconv.Atoi(refill); err == nil && n > 0 && n < target { target = n }
+            if err := v.subs.SetQuotaValue(sub.ID, "consultations", target); err == nil {
+                if ref, rerr := v.subs.GetActiveSubscription(u.ID); rerr == nil && ref != nil { sub = ref }
+                log.Printf("[quota][refill] user_id=%d sub_id=%d consultations_refilled=%d", u.ID, sub.ID, target)
+            } else {
+                log.Printf("[quota][refill_failed] user_id=%d sub_id=%d err=%v", u.ID, sub.ID, err)
+            }
+        }
+    }
+    // Fast path check (after potential reset)
     var remaining int
     switch field {
     case "clinical_cases":

@@ -116,7 +116,6 @@ class ApiClinicalCaseData {
       final pregunta =
           (next['pregunta'] ?? const <String, dynamic>{})
               as Map<String, dynamic>;
-      final isFinished = data['finish'] == 1;
       final questionMap = {
         'id': 0,
         'question': pregunta['texto'] ?? '',
@@ -126,7 +125,6 @@ class ApiClinicalCaseData {
           '_',
         ),
         'options': pregunta['opciones'] ?? [],
-        'finished': isFinished, // Add the finished flag
       };
 
       final newThreadId = data['thread_id'];

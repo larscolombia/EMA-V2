@@ -24,7 +24,6 @@ class QuestionResponseModel {
   final String? fit;
   final DateTime createdAt;
   final DateTime updatedAt;
-  final bool finished;
 
   QuestionResponseModel({
     required this.id,
@@ -43,7 +42,6 @@ class QuestionResponseModel {
     // New properties for clinical cases
     this.parentType = 'quiz',
     this.message = '',
-    this.finished = false,
   });
 
   get isAnswered {
@@ -81,7 +79,6 @@ class QuestionResponseModel {
     DateTime? updatedAt,
     String? parentType,
     String? message,
-    bool? finished,
   }) {
     return QuestionResponseModel(
       id: id ?? this.id,
@@ -99,7 +96,6 @@ class QuestionResponseModel {
       updatedAt: updatedAt ?? this.updatedAt,
       parentType: parentType ?? this.parentType,
       message: message ?? this.message,
-      finished: finished ?? this.finished,
     );
   }
 
@@ -160,9 +156,6 @@ class QuestionResponseModel {
     final typeName = rawType is String
         ? rawType.replaceAll('-', '_')
         : rawType.toString();
-        
-    // Check if this is a finished question (from the backend finish flag)
-    final bool isFinished = questionMap['finished'] == true;
 
     return QuestionResponseModel(
       id: Uuid().v4(),
@@ -179,8 +172,7 @@ class QuestionResponseModel {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       // Nuevos campos para casos clínicos
-      parentType: 'clinical_case',
-      finished: isFinished
+      parentType: 'clinical_case'
     );
   }
   

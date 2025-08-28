@@ -111,6 +111,9 @@ func main() {
 	r.POST("/asistente/message", chatHandler.Message)
 	// Cleanup endpoint to delete OpenAI artifacts for a thread
 	r.POST("/asistente/delete", chatHandler.Delete)
+	// Vector store maintenance & inspection
+	r.POST("/asistente/vector/reset", chatHandler.VectorReset)
+	r.GET("/asistente/vector/files", chatHandler.VectorFiles)
 
 	// Quotas endpoint for current user (Authorization token required)
 	r.GET("/me/quotas", func(c *gin.Context) {

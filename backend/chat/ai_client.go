@@ -24,4 +24,8 @@ type AIClient interface {
     TranscribeFile(ctx context.Context, filePath string) (string, error)
     StreamAssistantMessageWithFile(ctx context.Context, threadID, prompt, filePath string) (<-chan string, error)
     DeleteThreadArtifacts(ctx context.Context, threadID string) error
+    // nuevas utilidades de inspección/reset
+    ForceNewVectorStore(ctx context.Context, threadID string) (string, error)
+    ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error)
+    GetVectorStoreID(threadID string) string
 }
