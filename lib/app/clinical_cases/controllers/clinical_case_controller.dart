@@ -31,6 +31,7 @@ class ClinicalCaseController extends GetxController
 
   final isComplete = false.obs;
   final isTyping = false.obs; // New observable
+  final isFinalizingCase = false.obs; // Loading específico para finalización
   final analyticalAiTurns = 0.obs; // Cuenta respuestas IA en modo analítico
   static const int maxAnalyticalAiTurns = 15;
   final evaluationGenerated = false.obs; // Evita duplicar evaluación final
@@ -307,15 +308,15 @@ class ClinicalCaseController extends GetxController
       // para cerrar el caso clínico.
       if (feedBackAndNewQuestion.question == '') {
         isComplete.value = true;
-        // Generar evaluación final interactiva y navegar
+        // Generar evaluación final interactiva sin navegar automáticamente
         final caseModel = currentCase.value;
         if (caseModel != null && !interactiveEvaluationGenerated.value && caseModel.type == ClinicalCaseType.interactive) {
           try {
             final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
             messages.add(evalMsg);
             interactiveEvaluationGenerated.value = true;
-            // Reutilizamos vista de evaluación (puede detectar tipo)
-            Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
+            // No navegar automáticamente - dejar que el usuario use el botón
+            Logger.info('Evaluación interactiva generada exitosamente');
           } catch (e) {
             Logger.error('Error generando evaluación interactiva: $e');
           }
@@ -334,7 +335,8 @@ class ClinicalCaseController extends GetxController
                 final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
                 messages.add(evalMsg);
                 interactiveEvaluationGenerated.value = true;
-                Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
+                // No navegar automáticamente - dejar que el usuario use el botón
+                Logger.info('Evaluación interactiva generada exitosamente (límite alcanzado)');
               } catch (e) {
                 Logger.error('Error generando evaluación interactiva (límite): $e');
               }
@@ -508,8 +510,14 @@ class ClinicalCaseController extends GetxController
   Future<void> finalizeAnalyticalFromUser() async {
     final caseModel = currentCase.value;
     if (caseModel == null || caseModel.type != ClinicalCaseType.analytical) return;
-    if (isComplete.value || evaluationInProgress.value) return;
-    await _finalizeAnalyticalCase(caseModel);
+    if (isComplete.value || evaluationInProgress.value || isFinalizingCase.value) return;
+    
+    isFinalizingCase.value = true;
+    try {
+      await _finalizeAnalyticalCase(caseModel);
+    } finally {
+      isFinalizingCase.value = false;
+    }
   }
 
   void _completeAnalyticalEarly(ClinicalCaseModel clinicalCase, String aiText) {
@@ -536,12 +544,14 @@ class ClinicalCaseController extends GetxController
       '4) Plan diagnóstico y terapéutico inicial 5) Errores comunes a evitar 6) Bibliografía (formato breve). '
       'No hagas más preguntas. Marca el final claramente.';
 
+      // Crear mensaje de usuario interno sin agregarlo a la UI visible
       final userClosingMessage = ChatMessageModel.user(
         chatId: clinicalCase.uid,
         text: closingPrompt,
       );
-      messages.add(userClosingMessage);
-      _scrollToBottom();
+      
+      // Guardar en base de datos pero NO añadir a messages visibles
+      clinicalCaseServive.insertMessage(userClosingMessage);
 
       final aiClosing = await clinicalCaseServive.sendMessage(userClosingMessage);
       messages.add(aiClosing);

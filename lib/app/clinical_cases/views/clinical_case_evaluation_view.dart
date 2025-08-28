@@ -1,6 +1,7 @@
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/common/layouts/app_layout.dart';
+import 'package:ema_educacion_medica_avanzada/common/widgets/outline_ai_button.dart';
 import 'package:ema_educacion_medica_avanzada/common/widgets/show_error_widget.dart';
 import 'package:ema_educacion_medica_avanzada/config/routes/app_pages.dart';
 import 'package:flutter/material.dart';
@@ -111,16 +112,18 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
               const SizedBox(height: 16),
               Row(
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: () => setState(() => showUserTurns = !showUserTurns),
-                    icon: Icon(showUserTurns ? Icons.visibility_off : Icons.visibility),
-                    label: Text(showUserTurns ? 'Ocultar intervenciones' : 'Ver intervenciones'),
+                  Expanded(
+                    child: OutlineAiButton(
+                      text: showUserTurns ? 'Ocultar intervenciones' : 'Ver intervenciones',
+                      onPressed: () => setState(() => showUserTurns = !showUserTurns),
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  FilledButton.icon(
-                    onPressed: () => Get.offAllNamed(Routes.home.name),
-                    icon: const Icon(Icons.home),
-                    label: const Text('Inicio'),
+                  Expanded(
+                    child: OutlineAiButton(
+                      text: 'Inicio',
+                      onPressed: () => Get.offAllNamed(Routes.home.name),
+                    ),
                   ),
                 ],
               ),

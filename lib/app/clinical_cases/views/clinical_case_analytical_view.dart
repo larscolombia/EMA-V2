@@ -4,6 +4,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/widgets/chat_message_user
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/widgets/clinical_case_chat_field_box.dart';
 import 'package:ema_educacion_medica_avanzada/common/layouts/app_layout.dart';
+import 'package:ema_educacion_medica_avanzada/common/widgets/outline_ai_button.dart';
 import 'package:ema_educacion_medica_avanzada/common/widgets/show_error_widget.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/material.dart';
@@ -270,10 +271,14 @@ class _ClinicalCaseAnalyticalViewState
                 if (controller.shouldOfferAnalyticalFinalize) {
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
-                    child: FilledButton.icon(
-                      onPressed: () => controller.finalizeAnalyticalFromUser(),
-                      icon: const Icon(Icons.flag),
-                      label: const Text('Finalizar Caso'),
+                    child: OutlineAiButton(
+                      text: controller.isFinalizingCase.value 
+                        ? 'Finalizando...' 
+                        : 'Finalizar Caso',
+                      onPressed: controller.isFinalizingCase.value 
+                        ? null 
+                        : () => controller.finalizeAnalyticalFromUser(),
+                      isLoading: controller.isFinalizingCase.value,
                     ),
                   );
                 }

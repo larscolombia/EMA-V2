@@ -5,14 +5,16 @@ import 'package:flutter/material.dart';
 
 class OutlineAiButton extends StatelessWidget {
   final String text;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool enabled;
+  final bool isLoading;
 
   OutlineAiButton({
     super.key,
     required this.text,
     required this.onPressed,
     this.enabled = true,
+    this.isLoading = false,
   });
 
   final textStyleEnabled = TextStyle(
@@ -29,26 +31,37 @@ class OutlineAiButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // final stateController = WidgetStatesController();
-
+    final isDisabled = !enabled || isLoading || onPressed == null;
+    
     return Align(
       alignment: Alignment.center,
       child: OutlinedButton.icon(
-        onPressed: enabled ? onPressed : null,
+        onPressed: isDisabled ? null : onPressed,
         // statesController:stateController,
 
-        icon: AppIcons.startsAi(
-          height: 24,
-          width: 24,
-          color: enabled
-            ? AppStyles.primary900
-            : AppStyles.grey150,
-        ),
+        icon: isLoading
+          ? SizedBox(
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  enabled ? AppStyles.primary900 : AppStyles.grey150,
+                ),
+              ),
+            )
+          : AppIcons.startsAi(
+              height: 24,
+              width: 24,
+              color: enabled && !isLoading
+                ? AppStyles.primary900
+                : AppStyles.grey150,
+            ),
 
         label: Text(
           text,
           textAlign: TextAlign.center,
-          style: enabled
+          style: enabled && !isLoading
             ? textStyleEnabled
             : textStyleDisabled,
         ),
