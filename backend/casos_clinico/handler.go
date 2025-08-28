@@ -3,6 +3,7 @@ package casos_clinico
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -29,13 +30,15 @@ type Handler struct {
 	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
 	mu             sync.Mutex
 	analyticalTurns map[string]int // thread_id -> number of chat turns served
+	lastAnalyticalDiag []string
+	maxAnalyticalDiagHistory int
 }
 
 // NewHandler lets you inject different assistants (analytical/interactive). If one is nil, the other will be used for both flows.
 func NewHandler(analytical Assistant, interactive Assistant) *Handler {
 	if analytical == nil && interactive == nil {
 		cli := openai.NewClient()
-		return &Handler{aiAnalytical: cli, aiInteractive: cli}
+		return &Handler{aiAnalytical: cli, aiInteractive: cli, analyticalTurns: make(map[string]int), maxAnalyticalDiagHistory: resolveDiagHistoryEnv()}
 	}
 	if analytical == nil {
 		analytical = interactive
@@ -43,7 +46,7 @@ func NewHandler(analytical Assistant, interactive Assistant) *Handler {
 	if interactive == nil {
 		interactive = analytical
 	}
-	return &Handler{aiAnalytical: analytical, aiInteractive: interactive, analyticalTurns: make(map[string]int)}
+	return &Handler{aiAnalytical: analytical, aiInteractive: interactive, analyticalTurns: make(map[string]int), maxAnalyticalDiagHistory: resolveDiagHistoryEnv()}
 }
 
 // DefaultHandler configures assistants from env:
@@ -63,7 +66,7 @@ func DefaultHandler() *Handler {
 	} else {
 		cliI = cliA
 	}
-	return &Handler{aiAnalytical: cliA, aiInteractive: cliI, analyticalTurns: make(map[string]int)}
+	return &Handler{aiAnalytical: cliA, aiInteractive: cliI, analyticalTurns: make(map[string]int), maxAnalyticalDiagHistory: resolveDiagHistoryEnv()}
 }
 
 // RegisterRoutes wires endpoints expected by the Flutter client.
@@ -144,10 +147,19 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 	}
 
 	// Build prompt for JSON-only case
+	// Construir cláusula de evitación de diagnósticos recientes
+	h.mu.Lock()
+	avoidList := append([]string(nil), h.lastAnalyticalDiag...)
+	h.mu.Unlock()
+	avoidClause := ""
+	if len(avoidList) > 0 {
+		avoidClause = "Evita que el diagnóstico final sea exactamente alguno de estos diagnósticos usados recientemente: " + strings.Join(avoidList, "; ") + ". Selecciona una patología distinta plausible dadas las características del paciente."
+	}
 	userPrompt := strings.Join([]string{
 		"Genera un único objeto JSON con la clave 'case' describiendo un caso clínico completo (estático).",
 		"El paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
 		"Incluye anamnesis, examen físico, pruebas diagnósticas, diagnóstico final y plan de manejo.",
+		avoidClause,
 		"No incluyas texto fuera del JSON.",
 	}, " ")
 	instr := strings.Join([]string{
@@ -199,6 +211,30 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		}
 	}
 	parsed["thread_id"] = threadID
+
+	// Registrar diagnóstico final para reducir repeticiones en futuros casos
+	if caseMap, ok := parsed["case"].(map[string]any); ok {
+		if diagRaw, ok2 := caseMap["final_diagnosis"]; ok2 {
+			diag := strings.TrimSpace(fmt.Sprint(diagRaw))
+			if diag != "" {
+				h.mu.Lock()
+				// Evitar duplicados exactos
+				already := false
+				for _, d := range h.lastAnalyticalDiag {
+					if strings.EqualFold(d, diag) { already = true; break }
+				}
+				if !already {
+					h.lastAnalyticalDiag = append(h.lastAnalyticalDiag, diag)
+					if len(h.lastAnalyticalDiag) > h.maxAnalyticalDiagHistory && h.maxAnalyticalDiagHistory > 0 {
+						// recortar al tamaño
+						start := len(h.lastAnalyticalDiag) - h.maxAnalyticalDiagHistory
+						h.lastAnalyticalDiag = append([]string(nil), h.lastAnalyticalDiag[start:]...)
+					}
+				}
+				h.mu.Unlock()
+			}
+		}
+	}
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -534,6 +570,16 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// resolveDiagHistoryEnv lee variable opcional CLINICAL_ANALYTICAL_DIAG_HISTORY
+// para definir cuántos diagnósticos recientes se recuerdan y evita repetir.
+// Valor por defecto: 8. Si es 0 o negativo, se desactiva la función.
+func resolveDiagHistoryEnv() int {
+	v := strings.TrimSpace(os.Getenv("CLINICAL_ANALYTICAL_DIAG_HISTORY"))
+	if v == "" { return 8 }
+	if n, err := strconv.Atoi(v); err == nil { return n }
+	return 8
 }
 
 // --- Repair helpers (JSON) --- //
