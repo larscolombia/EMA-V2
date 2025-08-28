@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"fmt"
 
 	"ema-backend/openai"
 
@@ -31,6 +32,9 @@ type Handler struct {
 	turnCount          map[string]int // thread_id -> number of questions already asked
 	threadMaxQuestions map[string]int // thread_id -> max questions for this specific thread
 	askedQuestions     map[string][]string // thread_id -> list of question texts already asked (to reduce repetition)
+	evalCorrect        map[string]int // thread_id -> count correct answers
+	evalAnswers        map[string]int // thread_id -> total evaluated answers
+	vectorID           string // knowledge vector id for references
 }
 
 // finalQuestion builds the canonical empty question object used when the case is finished.
@@ -57,12 +61,17 @@ func DefaultHandler() *Handler {
 			maxQ = v
 		}
 	}
+	vector := strings.TrimSpace(os.Getenv("INTERACTIVE_VECTOR_ID"))
+	if vector == "" { vector = "vs_680fc484cef081918b2b9588b701e2f4" }
 	return &Handler{
 		ai:                 cli,
 		maxQuestions:       maxQ,
 		turnCount:          make(map[string]int),
 		threadMaxQuestions: make(map[string]int),
 		askedQuestions:     make(map[string][]string),
+		evalCorrect:        make(map[string]int),
+		evalAnswers:        make(map[string]int),
+		vectorID:           vector,
 	}
 }
 
@@ -157,19 +166,16 @@ func (h *Handler) StartCase(c *gin.Context) {
 
 	userPrompt := strings.Join([]string{
 		"INICIO DE SESIÓN (rol system): Recibirás el caso clínico completo y NO comentarás. Guarda para usar más adelante.",
-		"FASE DE ANAMNESIS: En 'feedback' muestra la historia clínica completa (síntomas, antecedentes, contexto social/familiar, evolución)",
-		"con al menos 3-4 párrafos detallados. Después formula una primera pregunta de opción única sobre aproximación diagnóstica.",
-		"El feedback debe incluir: motivo de consulta, historia de la enfermedad actual, antecedentes médicos relevantes, examen físico inicial.",
+		"FASE DE ANAMNESIS: En 'feedback' muestra la historia clínica completa (síntomas, antecedentes, contexto social/familiar, evolución) con 3-4 párrafos detallados.",
+		"Incluye motivo de consulta, historia de la enfermedad actual, antecedentes, examen físico inicial. Al final del feedback añade una línea 'Referencias:' seguida de UNA cita abreviada basada en el vector " + h.vectorID + " (no menciones el id) o un PMID.",
 		"Formato estricto: JSON con keys: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones[4]}}, finish:0. Sin texto fuera del JSON.",
 		"Paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
 	}, " ")
 	instr := strings.Join([]string{
 		"Responde SOLO en JSON válido con claves: feedback, next{hallazgos, pregunta{tipo, texto, opciones}}, finish.",
-		"'feedback' debe contener la historia clínica completa y detallada del paciente (200-300 palabras mínimo).",
+		"'feedback' (200-300 palabras) termina con una línea 'Referencias:' y 1 cita (libro guía o PMID) sin mencionar vectores ni IDs internos.",
 		"No omitas claves ni uses nombres distintos. Sin null ni cadenas vacías. Usa {} si no hay hallazgos. finish=0.",
-		"Cada pregunta debe ser única y coherente con el caso.",
-		"Fuentes: Vector (cita solo el libro) o PubMed con referencia completa. Alterna fuentes entre respuestas.",
-		"Idioma: español. Sin markdown.",
+		"Cada pregunta debe ser única y coherente con el caso. Idioma: español. Sin markdown.",
 	}, " ")
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
@@ -288,9 +294,10 @@ func (h *Handler) Message(c *gin.Context) {
 	if closing {
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{}}, finish(1).",
-			"Objetivo: feedback FINAL evaluando la ÚLTIMA respuesta del usuario, sintetizando errores/aciertos, proponiendo diagnóstico diferencial y plan siguiente paso. Máx 80 palabras.",
-			"NO generes nueva pregunta. 'next.hallazgos' = {} y 'next.pregunta' = {}. finish=1 obligatorio.",
-			"Incluye fuente (Vector o PubMed). Idioma: español. Sin texto fuera del JSON.",
+			"Formato 'feedback': primera línea 'Resumen Final:'; luego síntesis (≤80 palabras) con diagnóstico probable, diferenciales clave, manejo inicial.",
+			"Después añade línea 'Puntaje:' con 'X/Y (<pct>%)' usando las veces etiquetadas como CORRECTO/INCORRECTO en evaluaciones previas (si no conoces datos coloca X=Y=0).",
+			"Finalmente línea 'Referencias:' con 1-2 citas (primera de libro/guía, opcional PMID). NO menciones vectores ni IDs. Sin nueva pregunta. finish=1.",
+			"Idioma: español. Sin texto fuera del JSON.",
 		}, " ")
 	} else {
 		// Build a short memory of prior questions to discourage repetition
@@ -308,12 +315,12 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones}}, finish(0|1).",
-			"'feedback' conciso (máx 50 palabras) evaluando SOLO la respuesta previa y dando explicación breve.",
+			"Formato 'feedback': primera línea 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' (en mayúsculas).",
+			"Luego explicación breve (≤45 palabras) y última línea 'Fuente:' con UNA cita (libro/guía o PMID).",
 			"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
 			prevList,
-			"Si más adelante alcanzamos el límite de preguntas el handler enviará nueva instrucción de cierre.",
 			"Si decides cerrar por coherencia clínica pon finish=1 y NO generes pregunta (pregunta vacía).",
-			"Evita repetir preguntas ya hechas. Fuentes: Vector o PubMed (variar). Sin texto fuera del JSON. Idioma: español.",
+			"Evita repetir preguntas ya hechas. Sin texto fuera del JSON. Idioma: español. No menciones vectores ni IDs internos.",
 		}, " ")
 	}
 
@@ -396,6 +403,17 @@ func (h *Handler) Message(c *gin.Context) {
 			}
 			log.Printf("[InteractiveCase][Message][RepairedQuestion] thread=%s curr=%d max=%d", threadID, curr, maxQuestions)
 		}
+		// parse evaluation correctness (solo si no es cierre y feedback formateado)
+		if threadID != "" {
+			fb, _ := data["feedback"].(string)
+			correct := parseEvalCorrect(fb)
+			if correct >= 0 { // -1 indica no parseado
+				h.mu.Lock()
+				h.evalAnswers[threadID] = h.evalAnswers[threadID] + 1
+				if correct == 1 { h.evalCorrect[threadID] = h.evalCorrect[threadID] + 1 }
+				h.mu.Unlock()
+			}
+		}
 		// record asked question to reduce repetition
 		if q := extractQuestionText(data); q != "" && threadID != "" {
 			h.mu.Lock(); h.askedQuestions[threadID] = append(h.askedQuestions[threadID], q); h.mu.Unlock()
@@ -405,28 +423,11 @@ func (h *Handler) Message(c *gin.Context) {
 
 		// Safety: si tras incrementar alcanzamos o superamos el máximo, forzamos cierre coherente
 		if h.getCount(threadID) >= maxQuestions {
-			fq := finalQuestion()
-			if nx, ok := data["next"].(map[string]any); ok {
-				nx["hallazgos"] = map[string]any{}
-				nx["pregunta"] = fq
-			} else {
-				data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": fq}
-			}
-			data["finish"] = 1
-			data["status"] = "finished"
-			log.Printf("[InteractiveCase][Message][ForceClose] thread=%s count=%d max=%d", threadID, h.getCount(threadID), maxQuestions)
+			forceFinishInteractive(data, threadID, h)
 		}
 	} else {
 		// Force closure normalization: usar estructura vacía esperada por frontend (claves presentes, valores vacíos)
-		fq := finalQuestion()
-		if nx, ok := data["next"].(map[string]any); ok {
-			nx["hallazgos"] = map[string]any{}
-			nx["pregunta"] = fq
-		} else {
-			data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": fq}
-		}
-		data["finish"] = 1
-		data["status"] = "finished" // auxiliar para depuración
+		forceFinishInteractive(data, threadID, h)
 	}
 	log.Printf("[InteractiveCase][Message][Return] thread=%s count=%d max=%d finish=%v closing=%v", threadID, h.getCount(threadID), maxQuestions, data["finish"], closing)
 	c.JSON(http.StatusOK, map[string]any{"data": withThread(data, threadID)})
@@ -553,6 +554,53 @@ func extractQuestionText(data map[string]any) string {
 	preg, ok := next["pregunta"].(map[string]any); if !ok { return "" }
 	txt, _ := preg["texto"].(string)
 	return strings.TrimSpace(txt)
+}
+
+// parseEvalCorrect analiza la primera línea del feedback en busca de 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO'
+// Devuelve 1 correcto, 0 incorrecto, -1 si no se pudo parsear.
+func parseEvalCorrect(feedback string) int {
+	line := strings.Split(strings.TrimSpace(feedback), "\n")[0]
+	l := strings.ToUpper(strings.TrimSpace(line))
+	if strings.Contains(l, "EVALUACIÓN:") {
+		if strings.Contains(l, "CORRECTO") { return 1 }
+		if strings.Contains(l, "INCORRECTO") { return 0 }
+	}
+	return -1
+}
+
+// forceFinishInteractive normaliza estructura de cierre y agrega puntaje si hay datos.
+func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
+	fq := finalQuestion()
+	if nx, ok := data["next"].(map[string]any); ok {
+		nx["hallazgos"] = map[string]any{}
+		nx["pregunta"] = fq
+	} else {
+		data["next"] = map[string]any{"hallazgos": map[string]any{}, "pregunta": fq}
+	}
+	data["finish"] = 1
+	h.mu.Lock()
+	corr := h.evalCorrect[threadID]
+	total := h.evalAnswers[threadID]
+	h.mu.Unlock()
+	if fb, ok := data["feedback"].(string); ok {
+		if !strings.Contains(fb, "Puntaje:") { // evitar duplicar si el assistant ya lo puso
+			pct := 0.0
+			if total > 0 { pct = (float64(corr) / float64(total)) * 100.0 }
+			resumen := fb
+			if !strings.Contains(strings.ToLower(fb), "resumen final") {
+				resumen = "Resumen Final:\n" + fb
+			}
+			summaryLine := fmt.Sprintf("Puntaje: %d/%d (%.1f%%)", corr, total, pct)
+			if !strings.Contains(resumen, summaryLine) {
+				resumen = resumen + "\n" + summaryLine
+			}
+            if !strings.Contains(strings.ToLower(resumen), "referencias:") {
+                resumen = resumen + "\nReferencias: Fuente clínica estándar"
+            }
+            data["feedback"] = resumen
+        }
+    }
+    data["status"] = "finished"
 }
 
 func boolToStr(b bool) string {

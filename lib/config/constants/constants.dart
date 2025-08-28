@@ -4,9 +4,9 @@ import 'package:flutter/foundation.dart';
 /// Permite sobre-escribir la URL base usando --dart-define=API_BASE_URL=https://... al construir.
 const String _envApiBase = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 /// Fuerza backend local automáticamente en compilaciones debug si no se pasó API_BASE_URL.
-/// No afecta a release/profile.
-/// Activado para modo desarrollo solicitado.
-const bool forceLocalInDebug = true; // Activado temporalmente para desarrollo local.
+/// Controlable vía --dart-define=FORCE_LOCAL=1. Por defecto desactivado.
+const String _forceLocalFlag = String.fromEnvironment('FORCE_LOCAL', defaultValue: '0');
+const bool forceLocalInDebug = _forceLocalFlag == '1';
 
 String _computeLocal() {
   if (kIsWeb) return 'http://localhost:8080';
