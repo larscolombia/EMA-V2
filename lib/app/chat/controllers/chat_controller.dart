@@ -33,7 +33,7 @@ class ChatController extends GetxService {
   final isTyping = false.obs;
   final isSending = false.obs;
 
-  // Evita llamadas duplicadas a /asistente/start durante la creación del primer mensaje
+  // Evita llamadas duplicadas a /conversations/start durante la creación del primer mensaje (migrado desde /asistente/start)
   bool _startingNewChat = false;
 
   String threadId = '';
@@ -465,7 +465,7 @@ class ChatController extends GetxService {
         } catch (e) {
           // Fallback: crear thread con prompt vacío y luego enviar el mensaje del usuario vía streaming
           Logger.warn('fallback empty start after error: $e');
-          // Si ya teníamos un threadId (el Start inicial sí funcionó) entonces NO debemos volver a llamar a /asistente/start
+          // Si ya teníamos un threadId (el Start inicial sí funcionó) entonces NO debemos volver a llamar a /conversations/start
           // La excepción casi siempre proviene del primer sendMessage (p.ej. 403 de quota u otro error de red)
           // Reintentar start provoca duplicación de hilos y doble tarjeta de PDF.
           if (threadId.isNotEmpty) {

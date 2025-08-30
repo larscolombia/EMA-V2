@@ -14,6 +14,7 @@ import (
 	"ema-backend/casos_interactivos"
 	"ema-backend/categories"
 	"ema-backend/chat"
+	"ema-backend/conversations_ia"
 	"ema-backend/conn"
 	"ema-backend/countries"
 	"ema-backend/login"
@@ -114,6 +115,16 @@ func main() {
 	// Vector store maintenance & inspection
 	r.POST("/asistente/vector/reset", chatHandler.VectorReset)
 	r.GET("/asistente/vector/files", chatHandler.VectorFiles)
+
+	// Nuevo chat migrado (Assistants v2 estricto)
+	convHandler := conversations_ia.NewHandler(ai)
+	convHandler.SetQuotaValidator(qValidator.ValidateAndConsume)
+	r.POST("/conversations/start", convHandler.Start)
+	r.POST("/conversations/message", convHandler.Message)
+	// Paridad: limpieza y vector store
+	r.POST("/conversations/delete", convHandler.Delete)
+	r.POST("/conversations/vector/reset", convHandler.VectorReset)
+	r.GET("/conversations/vector/files", convHandler.VectorFiles)
 
 	// Quotas endpoint for current user (Authorization token required)
 	r.GET("/me/quotas", func(c *gin.Context) {

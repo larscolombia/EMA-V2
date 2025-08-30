@@ -99,7 +99,19 @@ class ApiClinicalCaseData {
     final storage = const FlutterSecureStorage();
     final threadId = await storage.read(key: 'interactive_strict_thread_id');
 
-    final body = {'thread_id': threadId, 'mensaje': questionWithAnswer.message};
+    final Map<String, dynamic> body = {'thread_id': threadId, 'mensaje': questionWithAnswer.message};
+
+    // Añadir answer_index si es single choice y la opción existe
+    try {
+      if (questionWithAnswer.type.name == 'single_choice' &&
+          questionWithAnswer.userAnswer != null &&
+          questionWithAnswer.userAnswer!.isNotEmpty) {
+        final idx = questionWithAnswer.options.indexOf(questionWithAnswer.userAnswer!);
+        if (idx >= 0) {
+          body['answer_index'] = idx; // índice 0-based int
+        }
+      }
+    } catch (_) {}
 
     Logger.objectValue(
       'body_enviado_al_endpoint: /casos-interactivos/mensaje',

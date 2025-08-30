@@ -38,6 +38,18 @@ class ClinicalCaseController extends GetxController
   final interactiveEvaluationGenerated = false.obs; // Para casos interactivos
   final evaluationInProgress = false.obs; // Evita dobles llamadas
   static const int maxInteractiveQuestions = 15; // Límite de preguntas en modo interactivo
+  final Rx<ChatMessageModel?> _pendingInteractiveSummary = Rx(null); // nuevo: guarda 'Resumen Final:' oculto
+
+  bool get hasHiddenInteractiveSummary => _pendingInteractiveSummary.value != null;
+
+  ChatMessageModel? takeInteractiveSummary() {
+    final m = _pendingInteractiveSummary.value;
+    _pendingInteractiveSummary.value = null;
+    if (m != null) {
+      messages.add(m); // ahora sí lo mostramos
+    }
+    return m;
+  }
 
   @override
   void onInit() {
@@ -308,19 +320,15 @@ class ClinicalCaseController extends GetxController
       // para cerrar el caso clínico.
       if (feedBackAndNewQuestion.question == '') {
         isComplete.value = true;
-        // Generar evaluación final interactiva sin navegar automáticamente
-        final caseModel = currentCase.value;
-        if (caseModel != null && !interactiveEvaluationGenerated.value && caseModel.type == ClinicalCaseType.interactive) {
-          try {
-            final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
-            messages.add(evalMsg);
-            interactiveEvaluationGenerated.value = true;
-            // No navegar automáticamente - dejar que el usuario use el botón
-            Logger.info('Evaluación interactiva generada exitosamente');
-          } catch (e) {
-            Logger.error('Error generando evaluación interactiva: $e');
-          }
+        // Capturar mensaje de resumen final si llegó (prefijo 'Resumen Final:') y guardarlo oculto
+        final summaryText = feedBackAndNewQuestion.fit ?? '';
+        if (summaryText.startsWith('Resumen Final:')) {
+          _pendingInteractiveSummary.value = ChatMessageModel.ai(
+            chatId: questionWithAnswer.quizId,
+            text: summaryText,
+          );
         }
+        interactiveEvaluationGenerated.value = false; // aún no mostrado
         isTyping.value = false; // Make sure to set typing to false
         return;
       } else {
@@ -328,22 +336,18 @@ class ClinicalCaseController extends GetxController
         final totalQuestionsBefore = questions.length; // ya incluye la actual respondida
         if (totalQuestionsBefore >= maxInteractiveQuestions) {
           // Marcar fin forzado: no se agrega nueva pregunta
-          isComplete.value = true;
-          final caseModel = currentCase.value;
-            if (caseModel != null && !interactiveEvaluationGenerated.value && caseModel.type == ClinicalCaseType.interactive) {
-              try {
-                final evalMsg = await clinicalCaseServive.generateInteractiveEvaluation(caseModel, questions);
-                messages.add(evalMsg);
-                interactiveEvaluationGenerated.value = true;
-                // No navegar automáticamente - dejar que el usuario use el botón
-                Logger.info('Evaluación interactiva generada exitosamente (límite alcanzado)');
-              } catch (e) {
-                Logger.error('Error generando evaluación interactiva (límite): $e');
-              }
+            isComplete.value = true;
+            final summaryText = feedBackAndNewQuestion.fit ?? '';
+            if (summaryText.startsWith('Resumen Final:')) {
+              _pendingInteractiveSummary.value = ChatMessageModel.ai(
+                chatId: questionWithAnswer.quizId,
+                text: summaryText,
+              );
             }
-          isTyping.value = false;
-          _scrollToBottom();
-          return;
+            interactiveEvaluationGenerated.value = false;
+            isTyping.value = false;
+            _scrollToBottom();
+            return;
         }
         final aiQuestionMessage = ChatMessageModel.ai(
           chatId: questionWithAnswer.quizId,
@@ -611,6 +615,13 @@ class ClinicalCaseController extends GetxController
         status: RxStatus.error('Ocurrió un error al cargar el caso clínico'),
       );
       Logger.error(e.toString());
+    }
+  }
+
+  Future<void> showInteractiveSummaryIfAvailable() async {
+    if (hasHiddenInteractiveSummary) {
+      takeInteractiveSummary();
+      interactiveEvaluationGenerated.value = true;
     }
   }
 }

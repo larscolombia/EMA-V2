@@ -21,7 +21,8 @@ class ApiChatData implements IApiChatData {
 
   @override
   Future<ChatStartResponse> startChat(String prompt) async {
-    const endpoint = '/asistente/start';
+  // Migrated to new Assistants v2 strict endpoint
+  const endpoint = '/conversations/start';
 
     final response = await _dio.post(endpoint, data: {'prompt': prompt});
 
@@ -60,7 +61,7 @@ class ApiChatData implements IApiChatData {
     CancelToken? cancelToken,
     void Function(String token)? onStream,
   }) async {
-    const endpoint = '/asistente/message';
+  const endpoint = '/conversations/message';
 
     try {
       final data = {'thread_id': threadId, 'prompt': prompt};
@@ -129,7 +130,7 @@ class ApiChatData implements IApiChatData {
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
   }) async {
-    const endpoint = '/asistente/message';
+  const endpoint = '/conversations/message';
     try {
       // Verificamos que el archivo existe
       final pdfFile = File(file.filePath);

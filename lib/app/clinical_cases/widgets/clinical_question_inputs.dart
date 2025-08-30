@@ -30,15 +30,16 @@ class ClinicalQuestionInputs extends StatelessWidget {
       }
 
       if (controller.isComplete.value) {
-        // Si ya se generó la evaluación, mostrar botón para ir a verla
-        if (controller.interactiveEvaluationGenerated.value) {
+        // Caso completo: si hay resumen oculto sin mostrar
+        if (controller.hasHiddenInteractiveSummary && !controller.interactiveEvaluationGenerated.value) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
             child: Column(
               children: [
                 OutlineAiButton(
                   text: 'Ver Evaluación Final',
-                  onPressed: () {
+                  onPressed: () async {
+                    await controller.showInteractiveSummaryIfAvailable();
                     final caseModel = controller.currentCase.value;
                     if (caseModel != null) {
                       Get.toNamed(Routes.clinicalCaseEvaluation.path(caseModel.uid));
@@ -48,36 +49,19 @@ class ClinicalQuestionInputs extends StatelessWidget {
                 const SizedBox(height: 8),
                 OutlineAiButton(
                   text: 'Regresar al Inicio',
-                  onPressed: () {
-                    Get.toNamed(Routes.home.name);
-                  },
+                  onPressed: () => Get.toNamed(Routes.home.name),
                 ),
               ],
             ),
           );
-        } else {
-          // Evaluación aún se está generando
+        }
+        // Si ya se mostró la evaluación
+        if (controller.interactiveEvaluationGenerated.value) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-            child: Column(
-              children: [
-                Text(
-                  'Caso clínico completado. Generando evaluación...',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).primaryColor,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                CircularProgressIndicator(),
-                const SizedBox(height: 12),
-                OutlineAiButton(
-                  text: 'Regresar al Inicio',
-                  onPressed: () {
-                    Get.toNamed(Routes.home.name);
-                  },
-                ),
-              ],
+            child: OutlineAiButton(
+              text: 'Regresar al Inicio',
+              onPressed: () => Get.toNamed(Routes.home.name),
             ),
           );
         }
