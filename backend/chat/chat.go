@@ -50,17 +50,21 @@ func (h *Handler) Start(c *gin.Context) {
 	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") {
 		if tid, err := h.AI.CreateThread(c.Request.Context()); err == nil {
 			threadID = tid
+			log.Printf("[chat][Start] assistant_id=%s thread=%s", h.AI.GetAssistantID(), threadID)
 		} else if h.strictThreads {
+			log.Printf("[chat][Start][error] create_thread err=%v assistant_id=%s", err, h.AI.GetAssistantID())
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no se pudo crear thread assistant", "detail": err.Error()})
 			return
 		}
 	}
 	if threadID == "" { // fallback local id (will map later on first /message if needed)
 		if h.strictThreads {
+			log.Printf("[chat][Start][strict][no-assistant] assistant_id_empty")
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "assistant no disponible"})
 			return
 		}
 		threadID = uuid.NewString()
+		log.Printf("[chat][Start][fallback] assistant_id_empty thread=%s", threadID)
 	}
 	var initial strings.Builder
 	_ = req
@@ -70,6 +74,7 @@ func (h *Handler) Start(c *gin.Context) {
 }
 
 func (h *Handler) Message(c *gin.Context) {
+	startWall := time.Now()
 	// Quota check (counts every message, including uploads) mapped to consultations bucket
 	if h.quotaValidator != nil {
 		if err := h.quotaValidator(c.Request.Context(), c, "chat_message"); err != nil {
@@ -88,6 +93,7 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 	}
 	ct := c.GetHeader("Content-Type")
+	log.Printf("[chat][Message][begin] ct=%s strict=%v assistant_id=%s", ct, h.strictThreads, h.AI.GetAssistantID())
 
 	// Handle multipart/form-data (PDF upload + prompt + thread_id), matching frontend FormData
 	if strings.HasPrefix(ct, "multipart/form-data") {
@@ -101,6 +107,7 @@ func (h *Handler) Message(c *gin.Context) {
 			return
 		}
 		resolvedThreadID := h.resolveAssistantThread(c, clientThreadID)
+		log.Printf("[chat][Message][multipart] client_thread=%s resolved_thread=%s assistant_id=%s has_file=%v", clientThreadID, resolvedThreadID, h.AI.GetAssistantID(), upFile != nil)
 
 		// If it's an audio file, try to transcribe and append to the prompt.
 		if upFile != nil {
@@ -321,6 +328,7 @@ func (h *Handler) Message(c *gin.Context) {
 
 		// If Assistants is configured and thread_id provided, use Assistants flow
 	formThreadID := h.resolveAssistantThread(c, c.PostForm("thread_id"))
+	log.Printf("[chat][Message][multipart.tail] resolved_thread=%s assistant_id=%s prompt_len=%d", formThreadID, h.AI.GetAssistantID(), len(prompt))
 	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
 			// allow client thread id but we create our own thread on /start; we just send the prompt here
 			stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, prompt)
@@ -367,6 +375,7 @@ func (h *Handler) Message(c *gin.Context) {
 		return
 	}
 	start := time.Now()
+	log.Printf("[chat][Message][json] incoming_thread=%s prompt_len=%d assistant_id=%s", req.ThreadID, len(req.Prompt), h.AI.GetAssistantID())
 	if h.strictThreads && (req.ThreadID == "" || !strings.HasPrefix(req.ThreadID, "thread_")) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id inválido (usa /asistente/start)"})
 		return
@@ -392,6 +401,8 @@ func (h *Handler) Message(c *gin.Context) {
 		if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
 		c.Header("X-Thread-ID", resolved)
 		if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+		c.Header("X-RAG", "1")
+		log.Printf("[chat][Message][json][assist] thread=%s elapsed_ms=%d", resolved, time.Since(startWall).Milliseconds())
 		sse.Stream(c, stream)
 		return
 	}
@@ -404,6 +415,8 @@ func (h *Handler) Message(c *gin.Context) {
 	if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
 	c.Header("X-Thread-ID", resolved)
 	if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+	c.Header("X-RAG", "0")
+	log.Printf("[chat][Message][json][fallback-no-assistant] thread=%s elapsed_ms=%d", resolved, time.Since(startWall).Milliseconds())
 	sse.Stream(c, stream)
 }
 

@@ -110,6 +110,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 	}
 	// If API or model is not configured, emit a minimal placeholder stream to avoid server 500s
 	if c.api == nil || c.AssistantID == "" {
+		log.Printf("[openai][StreamMessage] missing_config api_nil=%v assistant_id=%s", c.api == nil, c.AssistantID)
 		ch := make(chan string, 1)
 		go func() {
 			defer close(ch)
@@ -137,7 +138,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 	})
 	if err != nil {
 		// Some models (e.g., gpt-4.1) may not support ChatCompletionStream. Fallback to non-stream.
-		println("[OPENAI STREAM INIT ERROR] ", err.Error())
+		log.Printf("[openai][stream.init.error] %v", err)
 		fbModel := c.Model
 		if fbModel == "" || (len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_") {
 			fbModel = "gpt-4o-mini"
@@ -149,7 +150,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 			},
 		})
 		if err2 != nil {
-			println("[OPENAI FALLBACK ERROR] ", err2.Error())
+			log.Printf("[openai][fallback.error] %v", err2)
 			return nil, err
 		}
 		out := make(chan string, 1)
@@ -158,7 +159,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 			if len(resp.Choices) > 0 {
 				msg := resp.Choices[0].Message.Content
 				if msg != "" {
-					println("[OPENAI FALLBACK MSG] ", msg)
+					log.Printf("[openai][fallback.msg] len=%d", len(msg))
 					out <- msg
 				}
 			}
@@ -176,18 +177,18 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 			resp, err := stream.Recv()
 			if err != nil {
 				if err.Error() != "EOF" {
-					println("[OPENAI STREAM END] ", err.Error())
+					log.Printf("[openai][stream.end] err=%v", err)
 				}
 				break
 			}
 			if len(resp.Choices) == 0 {
-				println("[OPENAI WARNING] empty choices in delta")
+			log.Printf("[openai][stream.warn] empty choices in delta")
 				continue
 			}
 			token := resp.Choices[0].Delta.Content
 			if token != "" {
 				anyToken = true
-				println("[OPENAI TOKEN] ", token)
+			log.Printf("[openai][stream.token] %s", token)
 				ch <- token
 			}
 		}
@@ -205,13 +206,13 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 				},
 			})
 			if err != nil {
-				println("[OPENAI FALLBACK ERROR] ", err.Error())
+				log.Printf("[openai][fallback.error] %v", err)
 				return
 			}
 			if len(resp.Choices) > 0 {
 				msg := resp.Choices[0].Message.Content
 				if msg != "" {
-					println("[OPENAI FALLBACK MSG] ", msg)
+					log.Printf("[openai][fallback.msg] len=%d", len(msg))
 					ch <- msg
 				}
 			}
