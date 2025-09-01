@@ -406,7 +406,8 @@ func (h *Handler) Message(c *gin.Context) {
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones, correct_index}}, finish(0).",
 			"Formato 'feedback': primera línea 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' (en mayúsculas).",
-			"Luego explicación breve (≤45 palabras) y última línea 'Fuente:' con UNA cita (libro/guía o PMID).",
+			"Luego una explicación académica y más profunda (120-220 palabras) que explique el razonamiento clínico: por qué la opción es correcta/incorrecta, qué hallazgos la sustentan, y referencias concisas al final.",
+			"La última línea debe empezar con 'Fuente:' y contener 1-2 citas (libro/guía o PMID).",
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
 			prevList,
@@ -564,15 +565,19 @@ func (h *Handler) Message(c *gin.Context) {
 	}
 	// Attach structured evaluation object (latest answer + cumulative)
 	if threadID != "" {
-		h.mu.Lock()
-		corr := h.evalCorrect[threadID]
-		ans := h.evalAnswers[threadID]
-		ci := h.lastCorrectIndex[threadID]
-		opts := h.lastOptions[threadID]
-		h.mu.Unlock()
+			h.mu.Lock()
+			corr := h.evalCorrect[threadID]
+			ans := h.evalAnswers[threadID]
+			ci, okCI := h.lastCorrectIndex[threadID]
+			opts := h.lastOptions[threadID]
+			h.mu.Unlock()
 		userAns := strings.TrimSpace(req.Mensaje)
-		correctAns := ""
-		if ci >= 0 && ci < len(opts) { correctAns = opts[ci] }
+			correctAns := ""
+			if !okCI {
+				ci = -1
+			} else if ci >= 0 && ci < len(opts) {
+				correctAns = opts[ci]
+			}
 		// Determinista: tomar resultado de evaluateLastAnswer almacenado en data
 		isCorrectPtr := interface{}(nil)
 		if v, ok := data["last_is_correct"].(bool); ok { isCorrectPtr = v }

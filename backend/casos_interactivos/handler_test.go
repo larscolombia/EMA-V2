@@ -87,6 +87,16 @@ func TestMessage_OK(t *testing.T) {
 		t.Fatalf("expected evaluation line with CORRECTO, got: %s", fb)
 	}
 	if _, ok := data["evaluation"].(map[string]any); !ok { t.Fatalf("missing evaluation object on message") }
+
+	// Refuerzos: comprobar evaluation.correct_index, correct_answer, is_correct y totales
+	evalObj, _ := data["evaluation"].(map[string]any)
+	if evalObj == nil { t.Fatalf("missing evaluation object after message") }
+	if v, ok := evalObj["correct_index"].(float64); !ok || int(v) != 2 { t.Fatalf("expected correct_index=2, got %#v", evalObj["correct_index"]) }
+	if ca, _ := evalObj["correct_answer"].(string); ca != "Op3" { t.Fatalf("expected correct_answer 'Op3', got: %v", ca) }
+	if isC, ok := evalObj["is_correct"].(bool); !ok || !isC { t.Fatalf("expected is_correct=true, got %#v", evalObj["is_correct"]) }
+	if totC, ok := evalObj["total_correct"].(float64); !ok || int(totC) < 1 { t.Fatalf("expected total_correct>=1, got %#v", evalObj["total_correct"]) }
+	if totA, ok := evalObj["total_answered"].(float64); !ok || int(totA) < 1 { t.Fatalf("expected total_answered>=1, got %#v", evalObj["total_answered"]) }
+
 }
 
 // Additional mock to simulate multiple sequential messages and closing behavior
@@ -286,6 +296,10 @@ func TestEvaluationPendingAndRecovery(t *testing.T) {
 	// como se recuperó el índice, is_correct debería ser boolean (true/false) y no pending
 	if _, hasPending := evalObj["pending"]; hasPending { t.Fatalf("pending should be cleared after recovery") }
 	if _, ok := evalObj["is_correct"].(bool); !ok { t.Fatalf("expected boolean is_correct after recovery") }
+	// recovered correct_index must be present and valid
+	if ciF, ok := evalObj["correct_index"].(float64); !ok || int(ciF) < 0 { t.Fatalf("expected recovered correct_index >=0, got %#v", evalObj["correct_index"]) }
+	// and correct_answer should be non-empty when recovered
+	if ca, _ := evalObj["correct_answer"].(string); strings.TrimSpace(ca) == "" { t.Fatalf("expected non-empty correct_answer after recovery, got: %v", ca) }
 	// métrica de missing_correct_index_events debe ser >=1 al cierre
 	// forzamos cierre manual para inspeccionar final_evaluation
 	dataForce := map[string]any{"feedback":"","next": map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{"tipo":"","texto":"","opciones":[]string{}}}, "finish": float64(0)}
