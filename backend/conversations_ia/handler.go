@@ -11,6 +11,7 @@ package conversations_ia
 
 import (
     "context"
+    "log"
     "mime/multipart"
     "net/http"
     "os"
@@ -52,38 +53,57 @@ func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context,
 
 // Start: crea SIEMPRE un thread real Assistants. Error si no hay assistant configurado.
 func (h *Handler) Start(c *gin.Context) {
-    if h.AI.GetAssistantID() == "" { c.JSON(http.StatusServiceUnavailable, gin.H{"error":"assistant no configurado"}); return }
+    if h.AI.GetAssistantID() == "" {
+        log.Printf("[conv][Start][error] assistant_id_empty")
+        c.JSON(http.StatusServiceUnavailable, gin.H{"error":"assistant no configurado"}); return
+    }
     start := time.Now()
+    log.Printf("[conv][Start][begin] assistant_id=%s", h.AI.GetAssistantID())
     tid, err := h.AI.CreateThread(c.Request.Context())
-    if err != nil || !strings.HasPrefix(tid, "thread_") { c.JSON(http.StatusServiceUnavailable, gin.H{"error":"no se pudo crear thread","detail":errMsg(err)}); return }
-    c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+    if err != nil || !strings.HasPrefix(tid, "thread_") {
+        log.Printf("[conv][Start][error] create_thread err=%v", err)
+        c.JSON(http.StatusServiceUnavailable, gin.H{"error":"no se pudo crear thread","detail":errMsg(err)}); return
+    }
+    elapsed := time.Since(start)
+    log.Printf("[conv][Start][ok] thread=%s elapsed_ms=%d", tid, elapsed.Milliseconds())
+    c.Header("X-Assistant-Start-Ms", elapsed.String())
     c.JSON(http.StatusOK, gin.H{"thread_id": tid, "strict_threads": true, "text":""})
 }
 
 // Message: soporta JSON simple o multipart (PDF/audio)
 func (h *Handler) Message(c *gin.Context) {
+    wall := time.Now()
     if h.quotaValidator != nil {
         if err := h.quotaValidator(c.Request.Context(), c, "chat_message"); err != nil {
             field,_ := c.Get("quota_error_field"); reason,_ := c.Get("quota_error_reason")
             resp := gin.H{"error":"chat quota exceeded"}
             if f,ok:=field.(string);ok&&f!=""{resp["field"]=f}
             if r,ok:=reason.(string);ok&&r!=""{resp["reason"]=r}
+            log.Printf("[conv][Message][quota][denied] field=%v reason=%v", field, reason)
             c.JSON(http.StatusForbidden, resp); return
         }
+        if v,ok:=c.Get("quota_remaining"); ok { log.Printf("[conv][Message][quota] remaining=%v", v) }
     }
     ct := c.GetHeader("Content-Type")
+    log.Printf("[conv][Message][begin] ct=%s", ct)
     if strings.HasPrefix(ct, "multipart/form-data") { h.handleMultipart(c); return }
     var req struct { ThreadID string `json:"thread_id"`; Prompt string `json:"prompt"` }
     if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") {
+        log.Printf("[conv][Message][json][error] bind_or_thread_invalid thread=%s err=%v", req.ThreadID, err)
         c.JSON(http.StatusBadRequest, gin.H{"error":"parámetros inválidos"}); return
     }
     start := time.Now()
+    log.Printf("[conv][Message][json][assist.begin] thread=%s prompt_len=%d", req.ThreadID, len(req.Prompt))
     stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), req.ThreadID, req.Prompt)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil {
+        log.Printf("[conv][Message][json][assist.error] thread=%s err=%v", req.ThreadID, err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return
+    }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", req.ThreadID)
     c.Header("X-Strict-Threads", "1")
+    log.Printf("[conv][Message][json][assist.stream] thread=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
     sseMaybeCapture(c, stream, req.ThreadID)
 }
 
@@ -91,61 +111,73 @@ func (h *Handler) Message(c *gin.Context) {
 func (h *Handler) handleMultipart(c *gin.Context) {
     prompt := c.PostForm("prompt")
     threadID := c.PostForm("thread_id")
-    if !strings.HasPrefix(threadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+    if !strings.HasPrefix(threadID, "thread_") { log.Printf("[conv][Message][multipart][error] invalid_thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
     upFile, _ := c.FormFile("file")
     start := time.Now()
+    log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile!=nil, len(prompt))
     if upFile == nil { // solo texto
         stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-        if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+        if err != nil { log.Printf("[conv][Message][multipart][assist.error] thread=%s err=%v", threadID, err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
         c.Header("X-Strict-Threads", "1")
+        log.Printf("[conv][Message][multipart][assist.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
         sseMaybeCapture(c, stream, threadID); return
     }
     ext := strings.ToLower(filepath.Ext(upFile.Filename))
     tmpDir := "./tmp"; _ = os.MkdirAll(tmpDir, 0o755)
     tmp := filepath.Join(tmpDir, upFile.Filename)
-    if err := c.SaveUploadedFile(upFile, tmp); err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":"upload failed"}); return }
+    if err := c.SaveUploadedFile(upFile, tmp); err != nil { log.Printf("[conv][Message][multipart][error] save_upload err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error":"upload failed"}); return }
+    log.Printf("[conv][Message][multipart][file] thread=%s name=%s size=%d ext=%s", threadID, upFile.Filename, upFile.Size, ext)
     // Audio -> transcripción
     if isAudioExt(ext) {
         if text, err := h.AI.TranscribeFile(c, tmp); err == nil && strings.TrimSpace(text) != "" {
             if strings.TrimSpace(prompt) != "" { prompt += "\n\n[Transcripción]:\n" + text } else { prompt = text }
+            log.Printf("[conv][Message][multipart][audio.transcribed] chars=%d", len(text))
         }
         stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-        if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+        if err != nil { log.Printf("[conv][Message][multipart][audio.error] err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
         c.Header("X-Strict-Threads", "1")
+        log.Printf("[conv][Message][multipart][audio.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
         sseMaybeCapture(c, stream, threadID); return
     }
     if ext == ".pdf" { h.handlePDF(c, threadID, prompt, upFile, tmp, start); return }
     // Otros archivos: solo manda prompt (ignora archivo)
     stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][Message][multipart][other.error] err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", threadID)
     c.Header("X-Strict-Threads", "1")
+    log.Printf("[conv][Message][multipart][other.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
     sseMaybeCapture(c, stream, threadID)
 }
 
 func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *multipart.FileHeader, tmp string, start time.Time) {
-    if upFile.Size <= 0 { c.JSON(http.StatusBadRequest, gin.H{"error":"archivo vacío"}); return }
+    if upFile.Size <= 0 { log.Printf("[conv][PDF][error] empty_file thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"archivo vacío"}); return }
     maxFiles, _ := strconv.Atoi(os.Getenv("VS_MAX_FILES"))
     maxMB, _ := strconv.Atoi(os.Getenv("VS_MAX_MB"))
-    if maxFiles > 0 && h.AI.CountThreadFiles(threadID) >= maxFiles { c.JSON(http.StatusBadRequest, gin.H{"error":"límite de archivos alcanzado"}); return }
-    if maxMB > 0 { nextMB := (h.AI.GetSessionBytes(threadID)+upFile.Size)/(1024*1024); if int(nextMB) > maxMB { c.JSON(http.StatusBadRequest, gin.H{"error":"límite de tamaño por sesión superado"}); return } }
+    if maxFiles > 0 && h.AI.CountThreadFiles(threadID) >= maxFiles { log.Printf("[conv][PDF][error] max_files thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"límite de archivos alcanzado"}); return }
+    if maxMB > 0 { nextMB := (h.AI.GetSessionBytes(threadID)+upFile.Size)/(1024*1024); if int(nextMB) > maxMB { log.Printf("[conv][PDF][error] max_mb thread=%s nextMB=%d max=%d", threadID, nextMB, maxMB); c.JSON(http.StatusBadRequest, gin.H{"error":"límite de tamaño por sesión superado"}); return } }
     vsID, err := h.AI.EnsureVectorStore(c.Request.Context(), threadID)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][PDF][error] ensure_vector err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    log.Printf("[conv][PDF][vs.ready] thread=%s vs=%s", threadID, vsID)
     fileID, err := h.AI.UploadAssistantFile(c.Request.Context(), threadID, tmp)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][PDF][error] upload err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    log.Printf("[conv][PDF][upload.ok] thread=%s file_id=%s name=%s size=%d", threadID, fileID, upFile.Filename, upFile.Size)
     pollSec := 8; if v:=os.Getenv("VS_POLL_SEC"); v!="" { if n,err:=strconv.Atoi(v); err==nil && n>=0 { pollSec = n } }
+    pStart := time.Now()
     if err := h.AI.PollFileProcessed(c.Request.Context(), fileID, time.Duration(pollSec)*time.Second); err != nil {
+        log.Printf("[conv][PDF][processing] thread=%s file_id=%s waited_ms=%d", threadID, fileID, time.Since(pStart).Milliseconds())
         c.JSON(http.StatusAccepted, gin.H{"status":"processing","file_id":fileID}); return
     }
-    if err := h.AI.AddFileToVectorStore(c.Request.Context(), vsID, fileID); err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    log.Printf("[conv][PDF][processed] thread=%s file_id=%s process_wait_ms=%d", threadID, fileID, time.Since(pStart).Milliseconds())
+    if err := h.AI.AddFileToVectorStore(c.Request.Context(), vsID, fileID); err != nil { log.Printf("[conv][PDF][error] add_to_vs err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    log.Printf("[conv][PDF][vs.added] thread=%s vs=%s file_id=%s", threadID, vsID, fileID)
     h.AI.AddSessionBytes(threadID, upFile.Size)
     // Consumir cuota de archivo como en chat original
     if h.quotaValidator != nil {
@@ -154,8 +186,9 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
             resp := gin.H{"error":"file quota exceeded"}
             if f,ok:=field.(string);ok&&f!=""{resp["field"]=f}
             if r,ok:=reason.(string);ok&&r!=""{resp["reason"]=r}
+            log.Printf("[conv][PDF][quota][denied] field=%v reason=%v", field, reason)
             c.JSON(http.StatusForbidden, resp); return
-        }
+        } else { if v,ok:=c.Get("quota_remaining"); ok { log.Printf("[conv][PDF][quota] remaining=%v", v) } }
     }
     base := strings.TrimSpace(prompt)
     structured := os.Getenv("STRUCTURED_PDF_SUMMARY") == "1"
@@ -180,7 +213,7 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
         if pre := strings.TrimSpace(os.Getenv("DOC_SUMMARY_PREAMBLE")); pre != "" { base = pre + "\n\n" + base }
     }
     stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, base)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][PDF][error] stream err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-RAG","1")
     c.Header("X-RAG-File", filepath.Base(upFile.Filename))
@@ -188,6 +221,7 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", threadID)
     c.Header("X-Strict-Threads", "1")
+    log.Printf("[conv][PDF][stream] thread=%s file=%s rag_prompt=%s elapsed_ms=%d", threadID, upFile.Filename, ragPromptTag, time.Since(start).Milliseconds())
     sseMaybeCapture(c, stream, threadID)
 }
 
@@ -221,26 +255,33 @@ func sanitize(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s,
 // Delete: limpieza de artifacts (paridad)
 func (h *Handler) Delete(c *gin.Context) {
     var req struct { ThreadID string `json:"thread_id"` }
-    if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ThreadID)=="" { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
+    if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ThreadID)=="" { log.Printf("[conv][Delete][error] bind thread_id=%s err=%v", req.ThreadID, err); c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
+    log.Printf("[conv][Delete][begin] thread=%s", req.ThreadID)
     _ = h.AI.DeleteThreadArtifacts(c.Request.Context(), req.ThreadID)
+    log.Printf("[conv][Delete][done] thread=%s", req.ThreadID)
     c.Status(http.StatusNoContent)
 }
 
 // VectorReset: fuerza vector store limpio
 func (h *Handler) VectorReset(c *gin.Context) {
     var req struct { ThreadID string `json:"thread_id"` }
-    if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+    if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") { log.Printf("[conv][VectorReset][error] bind_or_invalid thread=%s err=%v", req.ThreadID, err); c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+    log.Printf("[conv][VectorReset][begin] thread=%s", req.ThreadID)
     vsID, err := h.AI.ForceNewVectorStore(c.Request.Context(), req.ThreadID)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][VectorReset][error] force_new err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error":errMsg(err)}); return }
+    log.Printf("[conv][VectorReset][done] thread=%s vs=%s", req.ThreadID, vsID)
     c.JSON(http.StatusOK, gin.H{"status":"reset","vector_store_id":vsID})
 }
 
 // VectorFiles: lista archivos
 func (h *Handler) VectorFiles(c *gin.Context) {
     threadID := strings.TrimSpace(c.Query("thread_id"))
-    if !strings.HasPrefix(threadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+    if !strings.HasPrefix(threadID, "thread_") { log.Printf("[conv][VectorFiles][error] invalid_thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+    log.Printf("[conv][VectorFiles][begin] thread=%s", threadID)
     files, err := h.AI.ListVectorStoreFiles(c.Request.Context(), threadID)
-    if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":errMsg(err)}); return }
+    if err != nil { log.Printf("[conv][VectorFiles][error] list err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error":errMsg(err)}); return }
     vsID := h.AI.GetVectorStoreID(threadID)
+    log.Printf("[conv][VectorFiles][ok] thread=%s vs=%s files=%d", threadID, vsID, len(files))
     c.JSON(http.StatusOK, gin.H{"thread_id":threadID, "vector_store_id":vsID, "files":files})
 }
+
