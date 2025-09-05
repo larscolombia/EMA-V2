@@ -74,9 +74,13 @@ func (h *Handler) Start(c *gin.Context) {
     tid, err := h.AI.CreateThread(c.Request.Context())
     if err != nil || !strings.HasPrefix(tid, "thread_") {
     code := classifyErr(err)
-    log.Printf("[conv][Start][error] create_thread code=%s err=%v", code, err)
+    // Incluimos más detalles para facilitar debug remoto
+    log.Printf("[conv][Start][error] create_thread code=%s err=%v assistant_id=%s", code, err, h.AI.GetAssistantID())
     status := http.StatusInternalServerError
     if code == "assistant_not_configured" { status = http.StatusServiceUnavailable }
+    // Añadimos headers porque algunos clientes/proxies pueden ocultar body en 500
+    c.Header("X-Conv-Error-Code", code)
+    if err != nil { c.Header("X-Conv-Error-Detail", sanitize(err.Error())) }
     c.JSON(status, gin.H{"error":"no se pudo crear thread","code":code,"detail":errMsg(err)}); return
     }
     elapsed := time.Since(start)

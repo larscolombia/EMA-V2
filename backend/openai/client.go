@@ -587,13 +587,23 @@ func (c *Client) doMultipart(ctx context.Context, method, path string, form map[
 
 // CreateThread creates a new Assistants thread and returns the id.
 func (c *Client) CreateThread(ctx context.Context) (string, error) {
+	if c.key == "" {
+		log.Printf("[openai][CreateThread][error] missing_api_key")
+		return "", fmt.Errorf("openai api key not configured")
+	}
+	if c.AssistantID == "" {
+		log.Printf("[openai][CreateThread][error] missing_assistant_id")
+		return "", fmt.Errorf("assistant not configured")
+	}
 	resp, err := c.doJSON(ctx, http.MethodPost, "/threads", map[string]any{})
 	if err != nil {
+		log.Printf("[openai][CreateThread][transport.error] %v", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		log.Printf("[openai][CreateThread][status.error] code=%d body=%s", resp.StatusCode, sanitizeBody(string(b)))
 		return "", fmt.Errorf("create thread failed: %s", string(b))
 	}
 	var data struct {
@@ -1090,4 +1100,11 @@ func (c *Client) maybeCleanupVectorStores() {
 	}
 	c.lastCleanup = now
 	c.vsMu.Unlock()
+}
+
+// sanitizeBody trims whitespace and limits size for log output
+func sanitizeBody(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 400 { return s[:400] + "..." }
+	return s
 }
