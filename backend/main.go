@@ -30,9 +30,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// BuildCommit is injected at build time via: -ldflags "-X main.BuildCommit=$(git rev-parse --short HEAD)"
+// If empty (e.g., during `go run`), it falls back to "dev".
+var BuildCommit string
+
 func main() {
-	// BuildCommit can be injected at build time with: -ldflags "-X main.BuildCommit=$(git rev-parse --short HEAD)"
-	// Default when running `go run` will be empty; set fallback.
+	// Ensure BuildCommit has a fallback for local runs.
 	if BuildCommit == "" { BuildCommit = "dev" }
 	// Load environment variables from .env if present
 	if err := godotenv.Load(); err != nil {
@@ -71,7 +74,11 @@ func main() {
 	// Request logging middleware (minimal)
 	r.Use(func(c *gin.Context){ start := time.Now(); path := c.Request.URL.Path; method := c.Request.Method; c.Next(); dur := time.Since(start).Milliseconds(); log.Printf("[req] %s %s status=%d dur_ms=%d", method, path, c.Writer.Status(), dur) })
 
-	// Health check extendido
+	// Initialize OpenAI client BEFORE routes that reference it
+	openai.SetPersistDB(db)
+	ai := openai.NewClient()
+
+	// Health check extendido (needs ai)
 	r.GET("/health", func(c *gin.Context) {
 		assistantID := ai.GetAssistantID()
 		c.JSON(http.StatusOK, gin.H{
@@ -114,9 +121,7 @@ func main() {
 	catHandler := categories.NewHandler(catRepo)
 	catHandler.RegisterRoutes(r)
 
-	// Chat/OpenAI endpoints (optional if keys provided)
-	openai.SetPersistDB(db)
-	ai := openai.NewClient()
+	// Chat/OpenAI endpoints (optional if keys provided) - client already initialized above
 	chatHandler := chat.NewHandler(ai)
 	chatHandler.SetQuotaValidator(qValidator.ValidateAndConsume)
 	r.POST("/asistente/start", chatHandler.Start)
