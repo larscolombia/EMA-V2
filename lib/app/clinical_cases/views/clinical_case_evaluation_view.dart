@@ -57,8 +57,8 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
     }
   }
 
-  Widget _interactiveDeterministicStats() {
-    // Construir métricas desde las preguntas (determinismo local)
+  Widget _interactiveResultsStats() {
+    // Construir métricas desde las preguntas respondidas
     final caseType = controller.currentCase.value?.type;
     if (caseType != ClinicalCaseType.interactive) return const SizedBox.shrink();
     final answered = controller.questions.where((q) => q.userAnswer != null && q.userAnswer!.isNotEmpty).toList();
@@ -95,7 +95,7 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
             children: [
               Icon(Icons.assessment_outlined, color: badgeColor),
               const SizedBox(width: 8),
-              Text('Resultado local (determinista)', style: TextStyle(fontWeight: FontWeight.bold, color: badgeColor)),
+              Text('Resultado de la evaluación', style: TextStyle(fontWeight: FontWeight.bold, color: badgeColor)),
             ],
           ),
           const SizedBox(height: 8),
@@ -221,7 +221,7 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
               const SizedBox(height: 12),
               Text(caseModel.anamnesis, style: Theme.of(context).textTheme.bodySmall, maxLines: 3, overflow: TextOverflow.ellipsis),
               const Divider(height: 32),
-              if (caseModel.type == ClinicalCaseType.interactive) _interactiveDeterministicStats(),
+              if (caseModel.type == ClinicalCaseType.interactive) _interactiveResultsStats(),
               GptMarkdown(evalMsg.text),
               const SizedBox(height: 32),
               AnimatedCrossFade(
