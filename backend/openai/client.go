@@ -1102,6 +1102,114 @@ func (c *Client) maybeCleanupVectorStores() {
 	c.vsMu.Unlock()
 }
 
+// SearchInVectorStore busca información específica en un vector store dado
+func (c *Client) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
+	if c.key == "" || c.AssistantID == "" {
+		return "", errors.New("assistants not configured")
+	}
+	
+	// Crear un thread temporal para la búsqueda
+	threadID, err := c.CreateThread(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary thread: %v", err)
+	}
+	
+	// Intentar asociar el vector store específico a este thread temporal
+	searchPrompt := fmt.Sprintf(`Busca información relevante sobre: "%s"
+
+IMPORTANTE: 
+- Devuelve SOLO la información encontrada en los documentos del vector store
+- No elabores ni agregues información externa
+- Si no encuentras información relevante, responde únicamente: "NO_FOUND"
+- Incluye fragmentos textuales específicos cuando sea posible
+`, query)
+	
+	// Usamos el assistant con instrucciones específicas para búsqueda
+	text, err := c.runAndWaitWithVectorStore(ctx, threadID, searchPrompt, vectorStoreID)
+	if err != nil {
+		return "", fmt.Errorf("vector store search failed: %v", err)
+	}
+	
+	// Limpiar el thread temporal
+	_ = c.DeleteThreadArtifacts(ctx, threadID)
+	
+	if strings.Contains(strings.ToUpper(text), "NO_FOUND") {
+		return "", nil // No se encontró información
+	}
+	
+	return text, nil
+}
+
+// SearchPubMed busca información en PubMed usando el assistant con acceso web
+func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error) {
+	if c.key == "" || c.AssistantID == "" {
+		return "", errors.New("assistants not configured")
+	}
+	
+	// Crear un thread temporal para la búsqueda en PubMed
+	threadID, err := c.CreateThread(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary thread: %v", err)
+	}
+	
+	pubmedPrompt := fmt.Sprintf(`Busca información médica sobre: "%s" en PubMed (https://pubmed.ncbi.nlm.nih.gov/)
+
+IMPORTANTE:
+- Busca SOLO en PubMed oficial
+- Incluye PMIDs cuando estén disponibles
+- Prioriza estudios recientes y de alta calidad
+- Si no encuentras información relevante, responde: "NO_PUBMED_FOUND"
+- Incluye citas bibliográficas específicas
+- Mantén rigor científico
+`, query)
+	
+	text, err := c.runAndWait(ctx, threadID, pubmedPrompt, "")
+	if err != nil {
+		return "", fmt.Errorf("pubmed search failed: %v", err)
+	}
+	
+	// Limpiar el thread temporal
+	_ = c.DeleteThreadArtifacts(ctx, threadID)
+	
+	if strings.Contains(strings.ToUpper(text), "NO_PUBMED_FOUND") {
+		return "", nil // No se encontró información en PubMed
+	}
+	
+	return text, nil
+}
+
+// StreamAssistantWithSpecificVectorStore ejecuta el assistant con un vector store específico
+func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error) {
+	if c.key == "" || c.AssistantID == "" {
+		return nil, errors.New("assistants not configured")
+	}
+	
+	if err := c.addMessage(ctx, threadID, prompt); err != nil {
+		return nil, err
+	}
+	
+	log.Printf("[assist][StreamWithSpecificVector][start] thread=%s vs=%s", threadID, vectorStoreID)
+	out := make(chan string, 1)
+	go func() {
+		defer close(out)
+		text, err := c.runAndWaitWithVectorStore(ctx, threadID, prompt, vectorStoreID)
+		if err == nil && text != "" {
+			log.Printf("[assist][StreamWithSpecificVector][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
+			out <- text
+		}
+		if err != nil {
+			log.Printf("[assist][StreamWithSpecificVector][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
+		}
+	}()
+	return out, nil
+}
+
+// runAndWaitWithVectorStore ejecuta un run del assistant con un vector store específico
+func (c *Client) runAndWaitWithVectorStore(ctx context.Context, threadID, instructions, vectorStoreID string) (string, error) {
+	// Usar el método existente que ya maneja todo el polling y la lógica de run
+	return c.runAndWait(ctx, threadID, instructions, vectorStoreID)
+}
+
 // sanitizeBody trims whitespace and limits size for log output
 func sanitizeBody(s string) string {
 	s = strings.TrimSpace(s)

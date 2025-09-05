@@ -42,11 +42,97 @@ type AIClient interface {
     ForceNewVectorStore(ctx context.Context, threadID string) (string, error)
     ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error)
     GetVectorStoreID(threadID string) string
+    // Nuevos métodos para búsqueda específica en RAG y PubMed
+    SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
+    SearchPubMed(ctx context.Context, query string) (string, error)
+    StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
 }
 
 type Handler struct {
     AI AIClient
     quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
+}
+
+// SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
+func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
+    const targetVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
+    
+    // Primero intentar búsqueda en el vector store específico
+    log.Printf("[conv][SmartMessage][start] thread=%s target_vector=%s", threadID, targetVectorID)
+    
+    ragResult, err := h.AI.SearchInVectorStore(ctx, targetVectorID, prompt)
+    if err == nil && strings.TrimSpace(ragResult) != "" {
+        // Encontramos información en el RAG, usamos el assistant con este vector específico
+        log.Printf("[conv][SmartMessage][rag_found] thread=%s chars=%d", threadID, len(ragResult))
+        
+        ragPrompt := fmt.Sprintf(`Responde la siguiente pregunta usando EXCLUSIVAMENTE la información encontrada en el vector store: "%s"
+
+Pregunta: %s
+
+Información encontrada: %s
+
+IMPORTANTE: 
+- Solo usa la información proporcionada arriba
+- Cita textualmente fragmentos relevantes
+- Al final indica claramente: "Fuente: Base de conocimiento médico interno"
+- Si la información no es suficiente para responder completamente, indica qué aspectos no se pueden responder
+`, targetVectorID, prompt, ragResult)
+
+        stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, ragPrompt, targetVectorID)
+        return stream, "rag", err
+    }
+    
+    // Si no encontramos en el RAG, buscar en PubMed
+    log.Printf("[conv][SmartMessage][rag_empty] thread=%s, trying_pubmed", threadID)
+    
+    pubmedResult, err := h.AI.SearchPubMed(ctx, prompt)
+    if err == nil && strings.TrimSpace(pubmedResult) != "" {
+        log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
+        
+        pubmedPrompt := fmt.Sprintf(`Responde la siguiente pregunta usando EXCLUSIVAMENTE la información de PubMed proporcionada:
+
+Pregunta: %s
+
+Información de PubMed: %s
+
+IMPORTANTE: 
+- Solo usa la información de PubMed proporcionada arriba
+- Incluye las referencias PMID cuando estén disponibles
+- Al final indica claramente: "Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)"
+- Mantén el rigor científico y cita estudios específicos cuando sea posible
+`, prompt, pubmedResult)
+
+        // Para el caso de PubMed, crear un stream simple que devuelva el resultado formateado
+        ch := make(chan string, 1)
+        go func() {
+            defer close(ch)
+            ch <- pubmedPrompt
+        }()
+        return ch, "pubmed", nil
+    }
+    
+    // Si no encontramos en ninguna fuente, responder que no hay información
+    log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
+    
+    noInfoPrompt := fmt.Sprintf(`La pregunta "%s" no pudo ser respondida porque:
+
+1. No se encontró información relevante en la base de conocimiento médico interno
+2. No se encontró información relevante en PubMed
+
+Recomendaciones:
+- Reformula tu pregunta con términos más específicos
+- Verifica la ortografía de términos médicos
+- Considera consultar fuentes médicas adicionales o un profesional de la salud
+
+Fuente: Búsqueda sin resultados en fuentes configuradas`, prompt)
+
+    ch := make(chan string, 1)
+    go func() {
+        defer close(ch)
+        ch <- noInfoPrompt
+    }()
+    
+    return ch, "none", nil
 }
 
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
@@ -120,11 +206,13 @@ func (h *Handler) Message(c *gin.Context) {
         c.JSON(http.StatusBadRequest, gin.H{"error":"parámetros inválidos"}); return
     }
     start := time.Now()
-    log.Printf("[conv][Message][json][assist.begin] thread=%s prompt_len=%d", req.ThreadID, len(req.Prompt))
-    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), req.ThreadID, req.Prompt)
+    log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d", req.ThreadID, len(req.Prompt))
+    
+    // Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
+    stream, source, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt)
     if err != nil {
         code := classifyErr(err)
-        log.Printf("[conv][Message][json][assist.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
+        log.Printf("[conv][Message][json][smart.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
         status := http.StatusInternalServerError
         if code == "assistant_not_configured" { status = http.StatusServiceUnavailable }
         c.JSON(status, gin.H{"error": errMsg(err), "code": code}); return
@@ -133,7 +221,8 @@ func (h *Handler) Message(c *gin.Context) {
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", req.ThreadID)
     c.Header("X-Strict-Threads", "1")
-    log.Printf("[conv][Message][json][assist.stream] thread=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
+    c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+    log.Printf("[conv][Message][json][smart.stream] thread=%s source=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, source, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
     sseMaybeCapture(c, stream, req.ThreadID)
 }
 
@@ -162,14 +251,15 @@ func (h *Handler) handleMultipart(c *gin.Context) {
     }
     start := time.Now()
     log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile!=nil, len(prompt))
-    if upFile == nil { // solo texto
-    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-    if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][assist.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
+    if upFile == nil { // solo texto - usar flujo inteligente
+        stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
+        if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][smart.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
         c.Header("X-Strict-Threads", "1")
-        log.Printf("[conv][Message][multipart][assist.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
+        c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+        log.Printf("[conv][Message][multipart][smart.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
         sseMaybeCapture(c, stream, threadID); return
     }
     ext := strings.ToLower(filepath.Ext(upFile.Filename))
@@ -183,24 +273,26 @@ func (h *Handler) handleMultipart(c *gin.Context) {
             if strings.TrimSpace(prompt) != "" { prompt += "\n\n[Transcripción]:\n" + text } else { prompt = text }
             log.Printf("[conv][Message][multipart][audio.transcribed] chars=%d", len(text))
         }
-    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-    if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][audio.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
+        stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
+        if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][audio.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
         c.Header("X-Strict-Threads", "1")
-        log.Printf("[conv][Message][multipart][audio.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
+        c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+        log.Printf("[conv][Message][multipart][audio.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
         sseMaybeCapture(c, stream, threadID); return
     }
     if ext == ".pdf" { h.handlePDF(c, threadID, prompt, upFile, tmp, start); return }
-    // Otros archivos: solo manda prompt (ignora archivo)
-    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
+    // Otros archivos: solo manda prompt (ignora archivo) - usar flujo inteligente
+    stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
     if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][other.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", threadID)
     c.Header("X-Strict-Threads", "1")
-    log.Printf("[conv][Message][multipart][other.stream] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
+    c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+    log.Printf("[conv][Message][multipart][other.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
     sseMaybeCapture(c, stream, threadID)
 }
 
