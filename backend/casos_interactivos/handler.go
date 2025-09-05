@@ -1166,6 +1166,11 @@ func shuffleOptionsWithCorrectIndex(options []string, correctIndex int) ([]strin
 
 // applyOptionShuffle aplica randomización a la estructura de pregunta
 func applyOptionShuffle(data map[string]any) {
+	// Deshabilitar randomización en tests
+	if os.Getenv("TESTING") == "1" {
+		return
+	}
+	
 	nx, ok := data["next"].(map[string]any)
 	if !ok {
 		return

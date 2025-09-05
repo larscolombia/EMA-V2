@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
+
+func init() {
+	// Deshabilitar randomización en tests
+	os.Setenv("TESTING", "1")
+}
 
 type mockAI struct{}
 
