@@ -406,7 +406,7 @@ func (h *Handler) Message(c *gin.Context) {
 		prevList := ""
 		if len(prevQs) > 0 {
 			for i, q := range prevQs { prevQs[i] = strings.TrimSpace(q) }
-			prevList = "Preguntas previas (NO repetir ni variantes triviales): " + strings.Join(prevQs, " | ") + "."
+			prevList = "PREGUNTAS YA HECHAS (JAMÁS repetir estos temas ni variantes): " + strings.Join(prevQs, " | ") + ". PROGRESA a temas NUEVOS completamente diferentes."
 		}
 		
 		// Obtener información diagnóstica progresiva
@@ -420,8 +420,9 @@ func (h *Handler) Message(c *gin.Context) {
 			"La última línea debe empezar con 'Fuente:' y contener 1-2 citas (libro/guía o PMID).",
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
-			"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
+			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
 			prevList,
+			"VARIEDAD TEMÁTICA OBLIGATORIA: cada pregunta debe abordar aspecto COMPLETAMENTE diferente (diagnóstico→manejo→pronóstico→complicaciones→seguimiento).",
 			"No cierres todavía: siempre finish=0 hasta que el sistema solicite el resumen final.",
 			"Evita repetir preguntas ya hechas. Sin texto fuera del JSON. Idioma: español. No menciones vectores ni IDs internos.",
 		}, " ")
