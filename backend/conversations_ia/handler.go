@@ -65,6 +65,7 @@ func (h *Handler) DebugConfig(c *gin.Context) {
 
 // Start: crea SIEMPRE un thread real Assistants. Error si no hay assistant configurado.
 func (h *Handler) Start(c *gin.Context) {
+    c.Header("X-Route-Matched", "/conversations/start")
     if h.AI.GetAssistantID() == "" {
         log.Printf("[conv][Start][error] assistant_id_empty")
         c.JSON(http.StatusServiceUnavailable, gin.H{"error":"assistant no configurado"}); return

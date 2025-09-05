@@ -68,6 +68,21 @@ func main() {
 	go mk.Start()
 
 	r := gin.Default()
+	// Replace default Recovery with custom JSON-aware recovery for /conversations/*
+	r.Use(func(c *gin.Context) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[panic] path=%s method=%s err=%v", c.Request.URL.Path, c.Request.Method, rec)
+				// If conversations endpoint, force JSON body so client sees code
+				if strings.HasPrefix(c.Request.URL.Path, "/conversations/") {
+					c.AbortWithStatusJSON(500, gin.H{"error": "internal_panic", "detail": fmt.Sprintf("%v", rec)})
+					return
+				}
+				c.AbortWithStatus(500)
+			}
+		}()
+		c.Next()
+	})
 	// Attach token expiry header middleware globally
 	r.Use(login.TokenExpiryHeader())
 
