@@ -451,13 +451,11 @@ func (h *Handler) Message(c *gin.Context) {
 		data = h.minTurn()
 	}
 	
-	// Aplicar randomización de opciones ANTES de almacenar índices
-	if !closing {
-		applyOptionShuffle(data)
-	}
-	
 	// If not closing: handle validation / repair of premature closure & ensure a question exists
 	if !closing {
+		// Aplicar randomización de opciones ANTES de almacenar índices
+		applyOptionShuffle(data)
+		
 		// Evaluación local determinista usando correct_index almacenado (recuperando si falta)
 		if threadID != "" {
 			h.mu.Lock()
@@ -543,6 +541,7 @@ func (h *Handler) Message(c *gin.Context) {
 		if q := extractQuestionText(data); q != "" && threadID != "" {
 			h.mu.Lock()
 			h.askedQuestions[threadID] = append(h.askedQuestions[threadID], q)
+			// IMPORTANTE: capturar correct_index y opciones DESPUÉS del shuffle
 			if nx, ok := data["next"].(map[string]any); ok {
 				if pq, ok := nx["pregunta"].(map[string]any); ok {
 					if ci, ok := pq["correct_index"].(float64); ok { h.lastCorrectIndex[threadID] = int(ci) }
