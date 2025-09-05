@@ -121,6 +121,8 @@ func main() {
 	convHandler.SetQuotaValidator(qValidator.ValidateAndConsume)
 	r.POST("/conversations/start", convHandler.Start)
 	r.POST("/conversations/message", convHandler.Message)
+	// Debug config (non-secret) – can be protected later behind ENV
+	r.GET("/conversations/debug/config", convHandler.DebugConfig)
 	// Paridad: limpieza y vector store
 	r.POST("/conversations/delete", convHandler.Delete)
 	r.POST("/conversations/vector/reset", convHandler.VectorReset)
