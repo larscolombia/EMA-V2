@@ -31,6 +31,9 @@ import (
 )
 
 func main() {
+	// BuildCommit can be injected at build time with: -ldflags "-X main.BuildCommit=$(git rev-parse --short HEAD)"
+	// Default when running `go run` will be empty; set fallback.
+	if BuildCommit == "" { BuildCommit = "dev" }
 	// Load environment variables from .env if present
 	if err := godotenv.Load(); err != nil {
 		log.Printf("no .env file found, using environment variables: %v", err)
@@ -65,9 +68,17 @@ func main() {
 	// Attach token expiry header middleware globally
 	r.Use(login.TokenExpiryHeader())
 
-	// Health check
+	// Request logging middleware (minimal)
+	r.Use(func(c *gin.Context){ start := time.Now(); path := c.Request.URL.Path; method := c.Request.Method; c.Next(); dur := time.Since(start).Milliseconds(); log.Printf("[req] %s %s status=%d dur_ms=%d", method, path, c.Writer.Status(), dur) })
+
+	// Health check extendido
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		assistantID := ai.GetAssistantID()
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"build": BuildCommit,
+			"assistant_configured": strings.HasPrefix(assistantID, "asst_"),
+		})
 	})
 
 	// Auth routes expected by Flutter
