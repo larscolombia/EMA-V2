@@ -73,6 +73,12 @@ func (h *Handler) Start(c *gin.Context) {
 // Message: soporta JSON simple o multipart (PDF/audio)
 func (h *Handler) Message(c *gin.Context) {
     wall := time.Now()
+    // Fail fast when Assistants are not configured for this handler
+    if h.AI.GetAssistantID() == "" {
+        log.Printf("[conv][Message][error] assistant_id_empty")
+        c.JSON(http.StatusServiceUnavailable, gin.H{"error": "assistant no configurado"})
+        return
+    }
     if h.quotaValidator != nil {
         if err := h.quotaValidator(c.Request.Context(), c, "chat_message"); err != nil {
             field,_ := c.Get("quota_error_field"); reason,_ := c.Get("quota_error_reason")
