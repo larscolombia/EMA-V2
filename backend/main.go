@@ -90,6 +90,28 @@ func main() {
 	// Request logging middleware (minimal)
 	r.Use(func(c *gin.Context){ start := time.Now(); path := c.Request.URL.Path; method := c.Request.Method; c.Next(); dur := time.Since(start).Milliseconds(); log.Printf("[req] %s %s status=%d dur_ms=%d", method, path, c.Writer.Status(), dur) })
 
+	// Middleware to handle 413 errors with better messages for file uploads
+	r.Use(func(c *gin.Context) {
+		c.Next()
+		
+		// Check if response was 413 and convert to JSON if it's a conversations endpoint
+		if c.Writer.Status() == 413 && strings.HasPrefix(c.Request.URL.Path, "/conversations/") {
+			// Clear any existing response and send JSON
+			c.Header("Content-Type", "application/json")
+			log.Printf("[413] file_too_large path=%s", c.Request.URL.Path)
+			
+			// Don't write if response already started
+			if !c.Writer.Written() {
+				c.JSON(413, gin.H{
+					"error": "archivo demasiado grande",
+					"code": "file_too_large_nginx",
+					"detail": "El archivo excede el límite permitido de 100 MB.",
+					"max_size_mb": 100,
+				})
+			}
+		}
+	})
+
 	// Initialize OpenAI client BEFORE routes that reference it
 	openai.SetPersistDB(db)
 	ai := openai.NewClient()

@@ -11,6 +11,7 @@ package conversations_ia
 
 import (
     "context"
+    "fmt"
     "log"
     "mime/multipart"
     "net/http"
@@ -141,7 +142,24 @@ func (h *Handler) handleMultipart(c *gin.Context) {
     prompt := c.PostForm("prompt")
     threadID := c.PostForm("thread_id")
     if !strings.HasPrefix(threadID, "thread_") { log.Printf("[conv][Message][multipart][error] invalid_thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
-    upFile, _ := c.FormFile("file")
+    upFile, err := c.FormFile("file")
+    
+    // Si no hay archivo pero tampoco hay error, probablemente fue rechazado por Nginx por tamaño
+    if upFile == nil && err != nil {
+        log.Printf("[conv][Message][multipart][error] no_file_received err=%v", err)
+        // Si parece ser un error de tamaño (common en uploads grandes)
+        if strings.Contains(strings.ToLower(err.Error()), "size") || strings.Contains(strings.ToLower(err.Error()), "large") {
+            c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+                "error": "archivo demasiado grande",
+                "code": "file_too_large_nginx", 
+                "detail": "El archivo fue rechazado por ser muy grande. El límite máximo es 100 MB.",
+                "max_size_mb": 100,
+            })
+            return
+        }
+        c.JSON(http.StatusBadRequest, gin.H{"error": "no se pudo recibir el archivo", "detail": err.Error()})
+        return
+    }
     start := time.Now()
     log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile!=nil, len(prompt))
     if upFile == nil { // solo texto
@@ -188,6 +206,21 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 
 func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *multipart.FileHeader, tmp string, start time.Time) {
     if upFile.Size <= 0 { log.Printf("[conv][PDF][error] empty_file thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"archivo vacío"}); return }
+    
+    // Verificar tamaño individual del archivo (100MB = 104857600 bytes)
+    maxFileSizeBytes := int64(100 * 1024 * 1024) // 100MB
+    if upFile.Size > maxFileSizeBytes {
+        sizeMB := float64(upFile.Size) / (1024 * 1024)
+        log.Printf("[conv][PDF][error] file_too_large thread=%s size_mb=%.1f max_mb=100", threadID, sizeMB)
+        c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+            "error": "archivo demasiado grande", 
+            "code": "file_too_large",
+            "detail": fmt.Sprintf("El archivo pesa %.1f MB. El límite máximo es 100 MB.", sizeMB),
+            "max_size_mb": 100,
+        })
+        return
+    }
+    
     maxFiles, _ := strconv.Atoi(os.Getenv("VS_MAX_FILES"))
     maxMB, _ := strconv.Atoi(os.Getenv("VS_MAX_MB"))
     if maxFiles > 0 && h.AI.CountThreadFiles(threadID) >= maxFiles { log.Printf("[conv][PDF][error] max_files thread=%s", threadID); c.JSON(http.StatusBadRequest, gin.H{"error":"límite de archivos alcanzado"}); return }
@@ -294,6 +327,8 @@ func classifyErr(err error) string {
         return "openai_timeout"
     case strings.Contains(e, "rate limit"):
         return "openai_rate_limited"
+    case strings.Contains(e, "413") || strings.Contains(e, "entity too large") || strings.Contains(e, "file too large"):
+        return "file_too_large"
     default:
         return "openai_error"
     }
