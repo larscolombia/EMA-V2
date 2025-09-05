@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
