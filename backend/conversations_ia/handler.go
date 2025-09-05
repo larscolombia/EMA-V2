@@ -73,8 +73,11 @@ func (h *Handler) Start(c *gin.Context) {
     log.Printf("[conv][Start][begin] assistant_id=%s", h.AI.GetAssistantID())
     tid, err := h.AI.CreateThread(c.Request.Context())
     if err != nil || !strings.HasPrefix(tid, "thread_") {
-        log.Printf("[conv][Start][error] create_thread err=%v", err)
-        c.JSON(http.StatusServiceUnavailable, gin.H{"error":"no se pudo crear thread","detail":errMsg(err)}); return
+    code := classifyErr(err)
+    log.Printf("[conv][Start][error] create_thread code=%s err=%v", code, err)
+    status := http.StatusInternalServerError
+    if code == "assistant_not_configured" { status = http.StatusServiceUnavailable }
+    c.JSON(status, gin.H{"error":"no se pudo crear thread","code":code,"detail":errMsg(err)}); return
     }
     elapsed := time.Since(start)
     log.Printf("[conv][Start][ok] thread=%s elapsed_ms=%d", tid, elapsed.Milliseconds())
@@ -114,8 +117,11 @@ func (h *Handler) Message(c *gin.Context) {
     log.Printf("[conv][Message][json][assist.begin] thread=%s prompt_len=%d", req.ThreadID, len(req.Prompt))
     stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), req.ThreadID, req.Prompt)
     if err != nil {
-        log.Printf("[conv][Message][json][assist.error] thread=%s err=%v", req.ThreadID, err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return
+        code := classifyErr(err)
+        log.Printf("[conv][Message][json][assist.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
+        status := http.StatusInternalServerError
+        if code == "assistant_not_configured" { status = http.StatusServiceUnavailable }
+        c.JSON(status, gin.H{"error": errMsg(err), "code": code}); return
     }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
@@ -134,8 +140,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
     start := time.Now()
     log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile!=nil, len(prompt))
     if upFile == nil { // solo texto
-        stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-        if err != nil { log.Printf("[conv][Message][multipart][assist.error] thread=%s err=%v", threadID, err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
+    if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][assist.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
@@ -154,8 +160,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
             if strings.TrimSpace(prompt) != "" { prompt += "\n\n[Transcripción]:\n" + text } else { prompt = text }
             log.Printf("[conv][Message][multipart][audio.transcribed] chars=%d", len(text))
         }
-        stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-        if err != nil { log.Printf("[conv][Message][multipart][audio.error] err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
+    if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][audio.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
         if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
         c.Header("X-Assistant-Start-Ms", time.Since(start).String())
         c.Header("X-Thread-ID", threadID)
@@ -166,7 +172,7 @@ func (h *Handler) handleMultipart(c *gin.Context) {
     if ext == ".pdf" { h.handlePDF(c, threadID, prompt, upFile, tmp, start); return }
     // Otros archivos: solo manda prompt (ignora archivo)
     stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, prompt)
-    if err != nil { log.Printf("[conv][Message][multipart][other.error] err=%v", err); c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)}); return }
+    if err != nil { code:=classifyErr(err); log.Printf("[conv][Message][multipart][other.error] thread=%s code=%s err=%v", threadID, code, err); status:=http.StatusInternalServerError; if code=="assistant_not_configured" {status=http.StatusServiceUnavailable}; c.JSON(status, gin.H{"error": errMsg(err), "code":code}); return }
     if v,ok:=c.Get("quota_remaining");ok { c.Header("X-Quota-Remaining", toString(v)) }
     c.Header("X-Assistant-Start-Ms", time.Since(start).String())
     c.Header("X-Thread-ID", threadID)
@@ -269,6 +275,24 @@ func sseMaybeCapture(c *gin.Context, ch <-chan string, threadID string) {
 }
 
 func sanitize(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ") }
+
+// classifyErr produce un code simbólico para facilitar observabilidad lado cliente.
+func classifyErr(err error) string {
+    if err == nil { return "" }
+    e := strings.ToLower(err.Error())
+    switch {
+    case strings.Contains(e, "not configured"):
+        return "assistant_not_configured"
+    case strings.Contains(e, "401") || strings.Contains(e, "unauthorized"):
+        return "openai_unauthorized"
+    case strings.Contains(e, "timeout"):
+        return "openai_timeout"
+    case strings.Contains(e, "rate limit"):
+        return "openai_rate_limited"
+    default:
+        return "openai_error"
+    }
+}
 
 // Delete: limpieza de artifacts (paridad)
 func (h *Handler) Delete(c *gin.Context) {
