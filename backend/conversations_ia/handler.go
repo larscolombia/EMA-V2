@@ -51,6 +51,18 @@ type Handler struct {
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
 func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) { h.quotaValidator = fn }
 
+// DebugConfig: expone estado mínimo de configuración (sin filtrar secretos) para diagnóstico remoto.
+// Retorna si assistant está configurado y un prefijo enmascarado del ID.
+func (h *Handler) DebugConfig(c *gin.Context) {
+    id := strings.TrimSpace(h.AI.GetAssistantID())
+    masked := ""
+    if len(id) > 10 { masked = id[:6] + "..." + id[len(id)-4:] } else { masked = id }
+    c.JSON(http.StatusOK, gin.H{
+        "assistant_configured": strings.HasPrefix(id, "asst_"),
+        "assistant_id_masked": masked,
+    })
+}
+
 // Start: crea SIEMPRE un thread real Assistants. Error si no hay assistant configurado.
 func (h *Handler) Start(c *gin.Context) {
     if h.AI.GetAssistantID() == "" {
