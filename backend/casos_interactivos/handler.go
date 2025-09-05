@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"regexp"
@@ -227,6 +228,7 @@ func (h *Handler) StartCase(c *gin.Context) {
 		"Responde SOLO en JSON válido con claves: feedback, next{hallazgos, pregunta{tipo, texto, opciones, correct_index}}, finish.",
 		"'feedback' (200-300 palabras) termina con una línea 'Referencias:' y 1 cita (libro guía o PMID) sin mencionar vectores ni IDs internos.",
 		"Cada valor de 'opciones' debe ser un enunciado clínico completo; NO uses únicamente letras (A,B,C,D) ni las repitas. No añadas prefijos de letra, solo el texto de la opción.",
+		"IMPORTANTE: Las opciones se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas y plausibles.",
 		"No omitas claves ni uses nombres distintos. Sin null ni cadenas vacías. Usa {} si no hay hallazgos. finish=0.",
 		"Cada pregunta debe ser única y coherente con el caso. Idioma: español. Sin markdown.",
 	}, " ")
@@ -255,6 +257,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 	if !validInteractiveTurn(data) {
 		data = h.minTurn()
 	}
+
+	// Aplicar randomización de opciones ANTES de almacenar índices
+	applyOptionShuffle(data)
 
 	// Initialize turn counter: first question was asked in this turn
 	if threadID != "" {
@@ -403,12 +408,18 @@ func (h *Handler) Message(c *gin.Context) {
 			for i, q := range prevQs { prevQs[i] = strings.TrimSpace(q) }
 			prevList = "Preguntas previas (NO repetir ni variantes triviales): " + strings.Join(prevQs, " | ") + "."
 		}
+		
+		// Obtener información diagnóstica progresiva
+		currentTurn := h.getCount(threadID) + 1
+		diagnosticInfo := generateProgressiveDiagnostics(currentTurn, threadID)
+		
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones, correct_index}}, finish(0).",
 			"Formato 'feedback': primera línea 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' (en mayúsculas).",
-			"Luego una explicación académica y más profunda (120-220 palabras) que explique el razonamiento clínico: por qué la opción es correcta/incorrecta, qué hallazgos la sustentan, y referencias concisas al final.",
+			"Luego una explicación académica y más profunda (120-220 palabras) que explique el razonamiento clínico: por qué la opción es correcta/incorrecta, qué hallazgos la sustentan, y referencias concisas al final." + diagnosticInfo,
 			"La última línea debe empezar con 'Fuente:' y contener 1-2 citas (libro/guía o PMID).",
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
+			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"NO repitas historia clínica inicial ni preguntas previas. Progresa lógicamente.",
 			prevList,
 			"No cierres todavía: siempre finish=0 hasta que el sistema solicite el resumen final.",
@@ -439,6 +450,12 @@ func (h *Handler) Message(c *gin.Context) {
 	if !validInteractiveTurn(data) {
 		data = h.minTurn()
 	}
+	
+	// Aplicar randomización de opciones ANTES de almacenar índices
+	if !closing {
+		applyOptionShuffle(data)
+	}
+	
 	// If not closing: handle validation / repair of premature closure & ensure a question exists
 	if !closing {
 		// Evaluación local determinista usando correct_index almacenado (recuperando si falta)
@@ -1111,4 +1128,136 @@ func toStringSafe(v any) string {
 	case string: return t
 	default: return ""
 	}
+}
+
+// shuffleOptionsWithCorrectIndex randomiza las opciones y actualiza el índice correcto
+func shuffleOptionsWithCorrectIndex(options []string, correctIndex int) ([]string, int) {
+	if len(options) <= 1 || correctIndex < 0 || correctIndex >= len(options) {
+		return options, correctIndex
+	}
+	
+	// Crear copia para no modificar el original
+	shuffled := make([]string, len(options))
+	copy(shuffled, options)
+	
+	// Recordar cuál es la opción correcta
+	correctOption := options[correctIndex]
+	
+	// Usar seed basado en tiempo para randomización
+	rand.Seed(time.Now().UnixNano())
+	
+	// Algoritmo Fisher-Yates para shuffle
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+	
+	// Encontrar nueva posición de la opción correcta
+	newCorrectIndex := -1
+	for i, opt := range shuffled {
+		if opt == correctOption {
+			newCorrectIndex = i
+			break
+		}
+	}
+	
+	return shuffled, newCorrectIndex
+}
+
+// applyOptionShuffle aplica randomización a la estructura de pregunta
+func applyOptionShuffle(data map[string]any) {
+	nx, ok := data["next"].(map[string]any)
+	if !ok {
+		return
+	}
+	
+	pregunta, ok := nx["pregunta"].(map[string]any)
+	if !ok {
+		return
+	}
+	
+	// Extraer opciones y correct_index
+	rawOpts, hasOpts := pregunta["opciones"]
+	correctIdx, hasIdx := pregunta["correct_index"]
+	
+	if !hasOpts || !hasIdx {
+		return
+	}
+	
+	// Convertir opciones a slice de strings
+	var options []string
+	switch opts := rawOpts.(type) {
+	case []any:
+		for _, v := range opts {
+			if s, ok := v.(string); ok {
+				options = append(options, s)
+			}
+		}
+	case []string:
+		options = opts
+	default:
+		return
+	}
+	
+	// Convertir correct_index a int
+	var correctIndex int
+	switch idx := correctIdx.(type) {
+	case float64:
+		correctIndex = int(idx)
+	case int:
+		correctIndex = idx
+	default:
+		return
+	}
+	
+	// Aplicar randomización
+	shuffledOptions, newCorrectIndex := shuffleOptionsWithCorrectIndex(options, correctIndex)
+	
+	// Actualizar la estructura
+	pregunta["opciones"] = shuffledOptions
+	pregunta["correct_index"] = newCorrectIndex
+}
+
+// generateProgressiveDiagnostics genera contenido diagnóstico basado en el turno
+func generateProgressiveDiagnostics(turnNumber int, threadID string) string {
+	var diagnostics []string
+	
+	switch {
+	case turnNumber == 1:
+		// Primer turno: solo anamnesis y examen físico
+		return ""
+	case turnNumber == 2:
+		// Segundo turno: laboratorios básicos
+		diagnostics = append(diagnostics, 
+			"LABORATORIOS DISPONIBLES:",
+			"- Hemograma completo, química sanguínea básica",
+			"- Gases arteriales, electrolitos",
+			"- Marcadores inflamatorios (PCR, VSG)")
+	case turnNumber == 3:
+		// Tercer turno: laboratorios específicos
+		diagnostics = append(diagnostics, 
+			"LABORATORIOS ESPECÍFICOS:",
+			"- Marcadores cardíacos (troponinas, CK-MB)",
+			"- Función renal y hepática completa",
+			"- Coagulación (PT, PTT, INR)")
+	case turnNumber == 4:
+		// Cuarto turno: imágenes básicas
+		diagnostics = append(diagnostics,
+			"IMÁGENES DIAGNÓSTICAS:",
+			"- Radiografía de tórax",
+			"- Electrocardiograma",
+			"- Ecografía abdominal")
+	case turnNumber >= 5:
+		// Turnos avanzados: estudios especializados
+		diagnostics = append(diagnostics,
+			"ESTUDIOS ESPECIALIZADOS:",
+			"- TAC o RM según indicación clínica",
+			"- Estudios funcionales específicos",
+			"- Interconsultas especializadas")
+	}
+	
+	if len(diagnostics) > 0 {
+		return "\n\n" + strings.Join(diagnostics, "\n")
+	}
+	return ""
 }
