@@ -48,6 +48,20 @@ type AIClient interface {
     StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
 }
 
+// VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
+type VectorSearchResult struct {
+    Content   string `json:"content"`
+    Source    string `json:"source"`     // Título del documento o nombre del archivo
+    VectorID  string `json:"vector_id"`  // ID del vector store
+    HasResult bool   `json:"has_result"` // Indica si se encontró información relevante
+}
+
+// AIClientWithMetadata extiende AIClient con capacidades de metadatos
+type AIClientWithMetadata interface {
+    AIClient
+    SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error)
+}
+
 type Handler struct {
     AI AIClient
     quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
@@ -57,52 +71,82 @@ type Handler struct {
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
     const targetVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
     
-    // Primero intentar búsqueda en el vector store específico
+    // Primero intentar búsqueda en el vector store específico con metadatos
     log.Printf("[conv][SmartMessage][start] thread=%s target_vector=%s", threadID, targetVectorID)
     
-    ragResult, err := h.AI.SearchInVectorStore(ctx, targetVectorID, prompt)
-    if err == nil && strings.TrimSpace(ragResult) != "" {
-        // Encontramos información en el RAG, usamos el assistant con este vector específico
-        log.Printf("[conv][SmartMessage][rag_found] thread=%s chars=%d", threadID, len(ragResult))
+    // Verificar si el cliente soporta metadatos
+    var searchResult *VectorSearchResult
+    var err error
+    
+    if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
+        searchResult, err = clientWithMeta.SearchInVectorStoreWithMetadata(ctx, targetVectorID, prompt)
+    } else {
+        // Fallback al método original
+        ragContent, searchErr := h.AI.SearchInVectorStore(ctx, targetVectorID, prompt)
+        if searchErr == nil && strings.TrimSpace(ragContent) != "" {
+            searchResult = &VectorSearchResult{
+                Content:   ragContent,
+                Source:    "Base de conocimiento médico",
+                VectorID:  targetVectorID,
+                HasResult: true,
+            }
+        } else {
+            searchResult = &VectorSearchResult{
+                Content:   "",
+                Source:    "",
+                VectorID:  targetVectorID,
+                HasResult: false,
+            }
+        }
+        err = searchErr
+    }
+    
+    if err == nil && searchResult.HasResult && strings.TrimSpace(searchResult.Content) != "" {
+        // Encontramos información en el RAG, construir prompt enriquecido
+        log.Printf("[conv][SmartMessage][rag_found] thread=%s source=%s chars=%d", threadID, searchResult.Source, len(searchResult.Content))
         
-        ragPrompt := fmt.Sprintf(`Responde la siguiente pregunta usando EXCLUSIVAMENTE la información encontrada en el vector store: "%s"
+        ragPrompt := fmt.Sprintf(`Con base en el libro "%s" (vector %s), responde la siguiente pregunta usando EXCLUSIVAMENTE la información encontrada:
 
 Pregunta: %s
 
-Información encontrada: %s
+Información encontrada en "%s": %s
 
-IMPORTANTE: 
-- Solo usa la información proporcionada arriba
-- Cita textualmente fragmentos relevantes
-- Al final indica claramente: "Fuente: Base de conocimiento médico interno"
-- Si la información no es suficiente para responder completamente, indica qué aspectos no se pueden responder
-`, targetVectorID, prompt, ragResult)
+INSTRUCCIONES IMPORTANTES: 
+- Usa ÚNICAMENTE la información proporcionada arriba del libro "%s"
+- Cita textualmente fragmentos relevantes cuando sea apropiado
+- Si el fragmento encontrado NO cubre completamente la pregunta, responde que no hay información suficiente en la fuente consultada
+- Al final indica claramente: "Fuente: %s (vector %s)"
+- NO agregues conocimiento externo o información no presente en el fragmento
+- Si la información es parcial, especifica qué aspectos no se pueden responder con la fuente consultada
+`, searchResult.Source, searchResult.VectorID, prompt, searchResult.Source, searchResult.Content, searchResult.Source, searchResult.Source, searchResult.VectorID)
 
         stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, ragPrompt, targetVectorID)
         return stream, "rag", err
     }
     
-    // Si no encontramos en el RAG, buscar en PubMed
-    log.Printf("[conv][SmartMessage][rag_empty] thread=%s, trying_pubmed", threadID)
+    // Si no encontramos en el RAG, responder claramente que no hay información
+    log.Printf("[conv][SmartMessage][rag_empty] thread=%s, no results found", threadID)
+    
+    log.Printf("[conv][SmartMessage][trying_pubmed] thread=%s", threadID)
     
     pubmedResult, err := h.AI.SearchPubMed(ctx, prompt)
     if err == nil && strings.TrimSpace(pubmedResult) != "" {
         log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
         
-        pubmedPrompt := fmt.Sprintf(`Responde la siguiente pregunta usando EXCLUSIVAMENTE la información de PubMed proporcionada:
+        pubmedPrompt := fmt.Sprintf(`La información solicitada sobre "%s" no se encontró en la base de conocimiento interno.
 
-Pregunta: %s
+Sin embargo, se encontró la siguiente información en PubMed:
 
-Información de PubMed: %s
+%s
 
 IMPORTANTE: 
-- Solo usa la información de PubMed proporcionada arriba
+- Esta información proviene de PubMed, no de la base de conocimiento interna
 - Incluye las referencias PMID cuando estén disponibles
-- Al final indica claramente: "Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)"
+- Indica claramente: "Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)"
 - Mantén el rigor científico y cita estudios específicos cuando sea posible
+- Esta es información complementaria de fuentes externas
 `, prompt, pubmedResult)
 
-        // Para el caso de PubMed, crear un stream simple que devuelva el resultado formateado
         ch := make(chan string, 1)
         go func() {
             defer close(ch)
@@ -111,20 +155,21 @@ IMPORTANTE:
         return ch, "pubmed", nil
     }
     
-    // Si no encontramos en ninguna fuente, responder que no hay información
+    // Si no encontramos en ninguna fuente, responder claramente
     log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
     
-    noInfoPrompt := fmt.Sprintf(`La pregunta "%s" no pudo ser respondida porque:
+    noInfoPrompt := fmt.Sprintf(`No se encontró información relevante sobre "%s" en ninguna de las fuentes configuradas:
 
-1. No se encontró información relevante en la base de conocimiento médico interno
-2. No se encontró información relevante en PubMed
+1. ❌ Base de conocimiento médico interno (vector %s): Sin resultados
+2. ❌ PubMed (https://pubmed.ncbi.nlm.nih.gov/): Sin resultados
 
 Recomendaciones:
 - Reformula tu pregunta con términos más específicos
 - Verifica la ortografía de términos médicos
 - Considera consultar fuentes médicas adicionales o un profesional de la salud
+- Usa sinónimos o términos alternativos para el concepto que buscas
 
-Fuente: Búsqueda sin resultados en fuentes configuradas`, prompt)
+Estado: Búsqueda sin resultados en fuentes verificadas`, prompt, targetVectorID)
 
     ch := make(chan string, 1)
     go func() {
@@ -206,7 +251,7 @@ func (h *Handler) Message(c *gin.Context) {
         c.JSON(http.StatusBadRequest, gin.H{"error":"parámetros inválidos"}); return
     }
     start := time.Now()
-    log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d", req.ThreadID, len(req.Prompt))
+    log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d prompt_preview=\"%s\"", req.ThreadID, len(req.Prompt), sanitizePreview(req.Prompt))
     
     // Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
     stream, source, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt)
@@ -405,6 +450,15 @@ func sseMaybeCapture(c *gin.Context, ch <-chan string, threadID string) {
 }
 
 func sanitize(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ") }
+
+// sanitizePreview limita y sanitiza texto para logs
+func sanitizePreview(s string) string {
+    clean := sanitize(s)
+    if len(clean) > 100 {
+        return clean[:100] + "..."
+    }
+    return clean
+}
 
 // classifyErr produce un code simbólico para facilitar observabilidad lado cliente.
 func classifyErr(err error) string {

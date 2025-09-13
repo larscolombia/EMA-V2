@@ -12,6 +12,7 @@ type MockAIClient struct {
 	AssistantID string
 	MockRAGResponse string
 	MockPubMedResponse string
+	MockSource string
 	ShouldFailRAG bool
 	ShouldFailPubMed bool
 }
@@ -54,146 +55,154 @@ func (m *MockAIClient) SearchPubMed(ctx context.Context, query string) (string, 
 
 func (m *MockAIClient) StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error) {
 	ch := make(chan string, 1)
-	ch <- m.MockRAGResponse
+	ch <- prompt // Devuelve el prompt para verificar en tests
 	close(ch)
 	return ch, nil
 }
 
-func TestSmartMessage_RAGFound(t *testing.T) {
-	// Setup
-	mockClient := &MockAIClient{
-		AssistantID: "asst_test",
-		MockRAGResponse: "Información encontrada en RAG sobre diabetes mellitus",
-		ShouldFailRAG: false,
+// MockAIClientWithMetadata implementa AIClientWithMetadata para tests avanzados
+type MockAIClientWithMetadata struct {
+	*MockAIClient
+}
+
+func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
+	if m.ShouldFailRAG {
+		return &VectorSearchResult{
+			Content:   "",
+			Source:    "",
+			VectorID:  vectorStoreID,
+			HasResult: false,
+		}, nil
+	}
+	
+	source := m.MockSource
+	if source == "" {
+		source = "Manual de Medicina Interna Harrison"
+	}
+	
+	return &VectorSearchResult{
+		Content:   m.MockRAGResponse,
+		Source:    source,
+		VectorID:  vectorStoreID,
+		HasResult: true,
+	}, nil
+}
+
+// Tests para el flujo SmartMessage
+
+func TestSmartMessage_WithRAGResults(t *testing.T) {
+	// Test con resultados del RAG
+	mockClient := &MockAIClientWithMetadata{
+		MockAIClient: &MockAIClient{
+			AssistantID:     "asst_test",
+			MockRAGResponse: "La diabetes mellitus es una enfermedad metabólica caracterizada por...",
+			MockSource:      "Harrison's Principles of Internal Medicine",
+		},
 	}
 	
 	handler := &Handler{AI: mockClient}
 	
-	// Test
-	ctx := context.Background()
-	stream, source, err := handler.SmartMessage(ctx, "thread_test", "¿Qué es la diabetes?")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?")
 	
-	// Assertions
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Errorf("No se esperaba error: %v", err)
 	}
 	
 	if source != "rag" {
-		t.Errorf("Expected source 'rag', got '%s'", source)
+		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
 	}
 	
-	// Leer respuesta del stream
-	var response string
-	select {
-	case response = <-stream:
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for response")
+	// Verificar que el stream contiene la información esperada
+	response := <-stream
+	if !strings.Contains(response, "Harrison's Principles of Internal Medicine") {
+		t.Errorf("La respuesta debe contener el nombre de la fuente")
 	}
 	
-	if !strings.Contains(response, "diabetes mellitus") {
-		t.Errorf("Expected response to contain diabetes mellitus, got: %s", response)
+	if !strings.Contains(response, "vs_680fc484cef081918b2b9588b701e2f4") {
+		t.Errorf("La respuesta debe contener el ID del vector store")
 	}
 }
 
-func TestSmartMessage_PubMedFallback(t *testing.T) {
-	// Setup
+func TestSmartMessage_NoRAGResultsPubMedFallback(t *testing.T) {
+	// Test sin resultados del RAG, con fallback a PubMed
 	mockClient := &MockAIClient{
-		AssistantID: "asst_test",
-		MockPubMedResponse: "Estudio de PubMed PMID:12345 sobre hipertensión",
-		ShouldFailRAG: true, // RAG no encuentra nada
-		ShouldFailPubMed: false,
+		AssistantID:        "asst_test",
+		MockPubMedResponse: "Estudio de PubMed sobre diabetes...",
+		ShouldFailRAG:      true,
 	}
 	
 	handler := &Handler{AI: mockClient}
 	
-	// Test
-	ctx := context.Background()
-	stream, source, err := handler.SmartMessage(ctx, "thread_test", "¿Qué es la hipertensión?")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?")
 	
-	// Assertions
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Errorf("No se esperaba error: %v", err)
 	}
 	
 	if source != "pubmed" {
-		t.Errorf("Expected source 'pubmed', got '%s'", source)
+		t.Errorf("Se esperaba source 'pubmed', se obtuvo: %s", source)
 	}
 	
-	// Leer respuesta del stream
-	var response string
-	select {
-	case response = <-stream:
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for response")
-	}
-	
+	// Verificar que el stream contiene la información de PubMed
+	response := <-stream
 	if !strings.Contains(response, "PubMed") {
-		t.Errorf("Expected response to contain PubMed, got: %s", response)
+		t.Errorf("La respuesta debe indicar que proviene de PubMed")
 	}
 }
 
-func TestSmartMessage_NoSourcesFound(t *testing.T) {
-	// Setup
+func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
+	// Test sin resultados en ninguna fuente
 	mockClient := &MockAIClient{
-		AssistantID: "asst_test",
-		ShouldFailRAG: true, // RAG no encuentra nada
-		ShouldFailPubMed: true, // PubMed no encuentra nada
+		AssistantID:      "asst_test",
+		ShouldFailRAG:    true,
+		ShouldFailPubMed: true,
 	}
 	
 	handler := &Handler{AI: mockClient}
 	
-	// Test
-	ctx := context.Background()
-	stream, source, err := handler.SmartMessage(ctx, "thread_test", "¿Qué es algo muy específico?")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "término inexistente xyz123")
 	
-	// Assertions
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Errorf("No se esperaba error: %v", err)
 	}
 	
 	if source != "none" {
-		t.Errorf("Expected source 'none', got '%s'", source)
+		t.Errorf("Se esperaba source 'none', se obtuvo: %s", source)
 	}
 	
-	// Leer respuesta del stream
-	var response string
-	select {
-	case response = <-stream:
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for response")
+	// Verificar que el stream contiene mensaje de no encontrado
+	response := <-stream
+	if !strings.Contains(response, "No se encontró información relevante") {
+		t.Errorf("La respuesta debe indicar que no se encontró información")
 	}
 	
-	if !strings.Contains(response, "no pudo ser respondida") {
-		t.Errorf("Expected response to contain 'no pudo ser respondida', got: %s", response)
+	if !strings.Contains(response, "vs_680fc484cef081918b2b9588b701e2f4") {
+		t.Errorf("La respuesta debe mencionar el vector store consultado")
 	}
 }
 
-func TestVectorStoreIDUsage(t *testing.T) {
-	// Setup
+func TestSmartMessage_BackwardCompatibility(t *testing.T) {
+	// Test de compatibilidad con clientes que no soportan metadatos
 	mockClient := &MockAIClient{
-		AssistantID: "asst_test",
-		MockRAGResponse: "Respuesta del vector específico",
-		ShouldFailRAG: false,
+		AssistantID:     "asst_test",
+		MockRAGResponse: "Información médica encontrada...",
 	}
 	
 	handler := &Handler{AI: mockClient}
 	
-	// Test
-	ctx := context.Background()
-	_, source, err := handler.SmartMessage(ctx, "thread_test", "test query")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "pregunta médica")
 	
-	// Assertions
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Errorf("No se esperaba error: %v", err)
 	}
 	
 	if source != "rag" {
-		t.Errorf("Expected to use RAG source, got '%s'", source)
+		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
 	}
 	
-	// Verificar que se está usando el vector store específico
-	const expectedVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
-	
-	// En una implementación real, podríamos capturar las llamadas al mock
-	// Por ahora, verificamos que la función funciona sin errores
+	// Verificar que funciona con el método legacy
+	response := <-stream
+	if !strings.Contains(response, "Base de conocimiento médico") {
+		t.Errorf("La respuesta debe contener fuente genérica cuando no hay metadatos")
+	}
 }

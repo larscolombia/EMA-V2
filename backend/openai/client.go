@@ -1102,19 +1102,46 @@ func (c *Client) maybeCleanupVectorStores() {
 	c.vsMu.Unlock()
 }
 
-// SearchInVectorStore busca información específica en un vector store dado
+// VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
+type VectorSearchResult struct {
+	Content   string `json:"content"`
+	Source    string `json:"source"`     // Título del documento o nombre del archivo
+	VectorID  string `json:"vector_id"`  // ID del vector store
+	HasResult bool   `json:"has_result"` // Indica si se encontró información relevante
+}
+
+// SearchInVectorStore busca información específica en un vector store dado y devuelve metadatos
 func (c *Client) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
+	result, err := c.SearchInVectorStoreWithMetadata(ctx, vectorStoreID, query)
+	if err != nil {
+		return "", err
+	}
+	if !result.HasResult {
+		return "", nil // No se encontró información
+	}
+	return result.Content, nil
+}
+
+// SearchInVectorStoreWithMetadata busca información y devuelve metadatos completos
+func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
 	if c.key == "" || c.AssistantID == "" {
-		return "", errors.New("assistants not configured")
+		return nil, errors.New("assistants not configured")
 	}
 	
 	// Crear un thread temporal para la búsqueda
 	threadID, err := c.CreateThread(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temporary thread: %v", err)
+		return nil, fmt.Errorf("failed to create temporary thread: %v", err)
 	}
 	
-	// Intentar asociar el vector store específico a este thread temporal
+	// Obtener información de los archivos en el vector store para generar metadatos
+	files, err := c.listVectorStoreFilesWithNames(ctx, vectorStoreID)
+	if err != nil {
+		log.Printf("[vector][search][warning] could not get file metadata: %v", err)
+		files = []string{"Documento médico"} // Fallback genérico
+	}
+	
+	// Construir prompt enriquecido que incluye solicitud de metadatos
 	searchPrompt := fmt.Sprintf(`Busca información relevante sobre: "%s"
 
 IMPORTANTE: 
@@ -1122,22 +1149,104 @@ IMPORTANTE:
 - No elabores ni agregues información externa
 - Si no encuentras información relevante, responde únicamente: "NO_FOUND"
 - Incluye fragmentos textuales específicos cuando sea posible
-`, query)
+- Al inicio de tu respuesta, indica de qué documento(s) proviene la información
+
+Documentos disponibles en este vector store: %s
+`, query, strings.Join(files, ", "))
 	
 	// Usamos el assistant con instrucciones específicas para búsqueda
 	text, err := c.runAndWaitWithVectorStore(ctx, threadID, searchPrompt, vectorStoreID)
 	if err != nil {
-		return "", fmt.Errorf("vector store search failed: %v", err)
+		return nil, fmt.Errorf("vector store search failed: %v", err)
 	}
 	
 	// Limpiar el thread temporal
 	_ = c.DeleteThreadArtifacts(ctx, threadID)
 	
-	if strings.Contains(strings.ToUpper(text), "NO_FOUND") {
-		return "", nil // No se encontró información
+	result := &VectorSearchResult{
+		VectorID:  vectorStoreID,
+		HasResult: false,
 	}
 	
-	return text, nil
+	if strings.Contains(strings.ToUpper(text), "NO_FOUND") {
+		result.Content = ""
+		result.Source = ""
+		return result, nil
+	}
+	
+	// Extraer fuente del contenido si está presente
+	source := "Base de conocimiento médico"
+	if len(files) > 0 {
+		source = files[0] // Usar el primer archivo como fuente principal
+	}
+	
+	result.Content = text
+	result.Source = source
+	result.HasResult = true
+	
+	return result, nil
+}
+
+// listVectorStoreFilesWithNames obtiene nombres de archivos en el vector store
+func (c *Client) listVectorStoreFilesWithNames(ctx context.Context, vectorStoreID string) ([]string, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vectorStoreID+"/files?limit=20", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list files failed: %s", string(b))
+	}
+	
+	var data struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Object string `json:"object"`
+		} `json:"data"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	
+	names := make([]string, 0)
+	for _, file := range data.Data {
+		// Obtener detalles del archivo para el nombre
+		if fileName, err := c.getFileName(ctx, file.ID); err == nil && fileName != "" {
+			names = append(names, fileName)
+		}
+	}
+	
+	if len(names) == 0 {
+		names = []string{"Documento médico"}
+	}
+	
+	return names, nil
+}
+
+// getFileName obtiene el nombre de un archivo por su ID
+func (c *Client) getFileName(ctx context.Context, fileID string) (string, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/files/"+fileID, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("get file failed")
+	}
+	
+	var file struct {
+		Filename string `json:"filename"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
+		return "", err
+	}
+	
+	return file.Filename, nil
 }
 
 // SearchPubMed busca información en PubMed usando el assistant con acceso web
