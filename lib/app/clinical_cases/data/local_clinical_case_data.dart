@@ -18,6 +18,53 @@ class LocalClinicalCaseData extends ILocalData<ClinicalCaseModel> implements ICl
 
     return quizzes;
   }
+
+  /// Obtiene los N casos más recientes con sus resúmenes para detección de similitud
+  Future<List<ClinicalCaseModel>> getRecentCasesForSimilarity(int userId, {int limit = 20}) async {
+    final where = 'userId = ? AND summary IS NOT NULL AND summary != ""';
+    final whereArgs = [userId];
+    
+    final items = await getItems(
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: 'createdAt DESC',
+      limit: limit,
+    );
+    
+    return items;
+  }
+
+  /// Busca casos que contengan palabras clave similares en el resumen
+  Future<List<ClinicalCaseModel>> findSimilarCases(
+    int userId, 
+    String searchText, 
+    {int limit = 10}
+  ) async {
+    // Extraer palabras clave del texto de búsqueda
+    final keywords = searchText
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\w\s]'), '')
+        .split(' ')
+        .where((word) => word.length > 3)
+        .take(5)
+        .toList();
+    
+    if (keywords.isEmpty) return [];
+    
+    // Crear consulta LIKE para buscar cualquiera de las palabras clave
+    final likeConditions = keywords.map((_) => 'summary LIKE ?').join(' OR ');
+    final where = 'userId = ? AND summary IS NOT NULL AND ($likeConditions)';
+    final whereArgs = [userId, ...keywords.map((k) => '%$k%')];
+    
+    final items = await getItems(
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: 'createdAt DESC',
+      limit: limit,
+    );
+    
+    return items;
+  }
  
   @override
   ClinicalCaseModel fromApi(Map<String, dynamic> map) {
@@ -55,7 +102,8 @@ class LocalClinicalCaseData extends ILocalData<ClinicalCaseModel> implements ICl
         management TEXT,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
-        feedback TEXT
+        feedback TEXT,
+        summary TEXT
       );
     ''';
   }

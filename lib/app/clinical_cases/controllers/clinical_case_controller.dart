@@ -67,6 +67,7 @@ class ClinicalCaseController extends GetxController
     required ClinicalCaseType type,
     required LifeStage lifeStage,
     required SexAndStatus sexAndStatus,
+    String userPrompt = '', // Nuevo parámetro para detección de similitud
   }) async {
     // Prevent multiple simultaneous calls
     if (isTyping.value) {
@@ -129,7 +130,7 @@ class ClinicalCaseController extends GetxController
 
       Get.offAndToNamed(route);
 
-      _startClinicalCase(temporalCase);
+      _startClinicalCase(temporalCase, userPrompt);
 
   // Quota consumption now centralized in backend (analytical_generate / interactive_generate flows)
     } catch (e) {
@@ -143,9 +144,19 @@ class ClinicalCaseController extends GetxController
     }
   }
 
-  Future<void> _startClinicalCase(ClinicalCaseModel temporalCase) async {
+  Future<void> _startClinicalCase(ClinicalCaseModel temporalCase, [String userPrompt = '']) async {
     try {
-      final generated = await clinicalCaseServive.generateCase(temporalCase);
+      // Usar detección de similitud si se proporciona un prompt del usuario
+      ClinicalCaseGenerateData generated;
+      if (userPrompt.isNotEmpty) {
+        generated = await clinicalCaseServive.generateCaseWithSimilarityCheck(
+          temporalCase,
+          userPrompt,
+        );
+      } else {
+        generated = await clinicalCaseServive.generateCase(temporalCase);
+      }
+      
       final clinicalCase = generated.clinicalCase;
 
       Logger.mini('_startClinicalCase');
@@ -615,6 +626,20 @@ class ClinicalCaseController extends GetxController
         status: RxStatus.error('Ocurrió un error al cargar el caso clínico'),
       );
       Logger.error(e.toString());
+    }
+  }
+
+  /// Obtiene estadísticas de casos del usuario actual
+  Future<Map<String, int>> getUserCaseStatistics() async {
+    final userId = userService.currentUser.value.id;
+    return await clinicalCaseServive.getCaseStatistics(userId);
+  }
+
+  /// Detecta casos similares para mostrar al usuario antes de generar
+  Future<List<ClinicalCaseModel>> checkSimilarCases(String userPrompt) async {
+    final userId = userService.currentUser.value.id;
+    return await clinicalCaseServive.detectSimilarCases(userId, userPrompt);
+  }
     }
   }
 

@@ -28,16 +28,147 @@ class ClinicalCasesServices {
     return clinicalCase;
   }
 
+  /// Detecta si hay casos similares al prompt del usuario
+  Future<List<ClinicalCaseModel>> detectSimilarCases(
+    int userId,
+    String userPrompt,
+    {int maxResults = 5}
+  ) async {
+    // Buscar casos similares basados en palabras clave
+    final similarCases = await _localClinicalCaseData.findSimilarCases(
+      userId,
+      userPrompt,
+      limit: maxResults,
+    );
+    
+    return similarCases;
+  }
+
+  /// Genera un prompt anti-repetición basado en casos similares encontrados
+  String generateAntiRepetitionContext(
+    List<ClinicalCaseModel> similarCases,
+    String originalPrompt,
+  ) {
+    if (similarCases.isEmpty) return originalPrompt;
+    
+    final buffer = StringBuffer();
+    buffer.writeln('CASOS PREVIOS A EVITAR (genera algo completamente diferente):');
+    
+    for (int i = 0; i < similarCases.length; i++) {
+      final case_ = similarCases[i];
+      buffer.writeln('${i + 1}. ${case_.summary ?? case_.title}');
+    }
+    
+    buffer.writeln('\nPROMPT ORIGINAL: $originalPrompt');
+    buffer.writeln('\nIMPORTANTE: Genera un caso clínico que sea temáticamente DIFERENTE a los listados arriba. Cambia especialidad, grupo etario, fisiopatología o enfoque clínico.');
+    
+    return buffer.toString();
+  }
+
+  /// Obtiene estadísticas de casos para control de crecimiento
+  Future<Map<String, int>> getCaseStatistics(int userId) async {
+    final recentCases = await _localClinicalCaseData.getRecentCasesForSimilarity(
+      userId,
+      limit: 100, // Últimos 100 casos para estadísticas
+    );
+    
+    final now = DateTime.now();
+    final lastWeek = now.subtract(Duration(days: 7));
+    final lastMonth = now.subtract(Duration(days: 30));
+    
+    int weeklyCount = 0;
+    int monthlyCount = 0;
+    
+    for (final case_ in recentCases) {
+      if (case_.createdAt.isAfter(lastWeek)) {
+        weeklyCount++;
+      }
+      if (case_.createdAt.isAfter(lastMonth)) {
+        monthlyCount++;
+      }
+    }
+    
+    return {
+      'total': recentCases.length,
+      'weekly': weeklyCount,
+      'monthly': monthlyCount,
+    };
+  }
+
+  /// Limpia casos antiguos si hay demasiados (TTL básico)
+  Future<void> cleanupOldCases(int userId, {int maxCases = 200}) async {
+    final allCases = await _localClinicalCaseData.getRecentCasesForSimilarity(
+      userId,
+      limit: maxCases * 2,
+    );
+    
+    if (allCases.length > maxCases) {
+      final casesToDelete = allCases.skip(maxCases).toList();
+      for (final case_ in casesToDelete) {
+        final where = 'uid = ?';
+        final whereArgs = [case_.uid];
+        await _localClinicalCaseData.delete(where, whereArgs);
+      }
+      print('🧹 Limpieza: eliminados ${casesToDelete.length} casos antiguos');
+    }
+  }
+
   Future<ClinicalCaseGenerateData> generateCase(
     ClinicalCaseModel temporalCase,
   ) async {
     final generated = await _apiClinicalCaseData.generateCase(temporalCase);
 
-    await _localClinicalCaseData.insertOne(generated.clinicalCase);
+    // Generar resumen automáticamente antes de guardar
+    final summary = generated.clinicalCase.generateSummary();
+    final caseWithSummary = generated.clinicalCase.copyWith(summary: summary);
+    
+    await _localClinicalCaseData.insertOne(caseWithSummary);
 
     _initialQuestion = generated.question;
 
-    return generated;
+    return ClinicalCaseGenerateData(
+      clinicalCase: caseWithSummary,
+      question: generated.question,
+    );
+  }
+
+  /// Genera un caso con detección de similitud previa
+  Future<ClinicalCaseGenerateData> generateCaseWithSimilarityCheck(
+    ClinicalCaseModel temporalCase,
+    String userPrompt,
+  ) async {
+    // 1. Limpieza automática de casos antiguos (cada 10 generaciones aprox.)
+    final random = DateTime.now().millisecond % 10;
+    if (random == 0) {
+      await cleanupOldCases(temporalCase.userId);
+    }
+
+    // 2. Detectar casos similares
+    final similarCases = await detectSimilarCases(
+      temporalCase.userId,
+      userPrompt,
+      maxResults: 5,
+    );
+
+    // 3. Si hay casos similares, crear contexto anti-repetición
+    ClinicalCaseModel caseToGenerate = temporalCase;
+    if (similarCases.isNotEmpty) {
+      final antiRepetitionPrompt = generateAntiRepetitionContext(
+        similarCases,
+        userPrompt,
+      );
+      
+      // Modificar el caso temporal con contexto mejorado
+      // Nota: Esto requeriría modificar la API para aceptar contexto adicional
+      // Por ahora, registramos la similitud en logs
+      print('🔍 Casos similares detectados: ${similarCases.length}');
+      for (final similar in similarCases) {
+        print('  - ${similar.summary ?? similar.title}');
+      }
+    }
+
+    // 4. Generar el caso normalmente
+    return await generateCase(caseToGenerate);
   }
 
   Future<List<QuestionResponseModel>> loadQuestionsByCaseId(

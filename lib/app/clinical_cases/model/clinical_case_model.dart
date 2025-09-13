@@ -32,6 +32,7 @@ class ClinicalCaseModel {
   final DateTime updatedAt;
 
   final String? feedback;
+  final String? summary; // Resumen corto del caso (máx. 2 líneas)
 
   ClinicalCaseModel({
     required this.uid,
@@ -51,7 +52,8 @@ class ClinicalCaseModel {
     required this.management,
     required this.createdAt,
     required this.updatedAt,
-    this.feedback
+    this.feedback,
+    this.summary,
   });
 
   ClinicalCaseModel copyWith({
@@ -73,6 +75,7 @@ class ClinicalCaseModel {
     DateTime? createdAt,
     DateTime? updatedAt,
     String? feedback,
+    String? summary,
   }) {
     return ClinicalCaseModel(
       uid: uid ?? this.uid,
@@ -93,6 +96,7 @@ class ClinicalCaseModel {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       feedback: feedback ?? this.feedback,
+      summary: summary ?? this.summary,
     );
   }
 
@@ -157,6 +161,7 @@ class ClinicalCaseModel {
           ? DateTime.parse(data['updated_at'] as String)
           : DateTime.now(),
       feedback: data['feedback'] != null ? map['feedback'] as String : null,
+      summary: null, // Los casos remotos no tienen summary local
     );
   }
 
@@ -180,6 +185,7 @@ class ClinicalCaseModel {
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['createdAt'] as int),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(map['updatedAt'] as int),
       feedback: map['feedback'] != null ? map['feedback'] as String : null,
+      summary: map['summary'] != null ? map['summary'] as String : null,
     );
   }
 
@@ -216,6 +222,7 @@ class ClinicalCaseModel {
       'createdAt': createdAt.millisecondsSinceEpoch,
       'updatedAt': updatedAt.millisecondsSinceEpoch,
       'feedback': feedback,
+      'summary': summary,
     };
   }
   
@@ -259,6 +266,28 @@ class ClinicalCaseModel {
     prompt += '**management:** $management.';
 
     return prompt;
+  }
+
+  /// Genera un resumen de máximo 2 líneas del caso clínico
+  String generateSummary() {
+    final words = <String>[];
+    
+    // Tomar palabras clave de anamnesis (primeras 15 palabras)
+    words.addAll(anamnesis.split(' ').take(15));
+    
+    // Añadir diagnóstico final si está disponible
+    if (finalDiagnosis.isNotEmpty) {
+      words.add(' - Diagnóstico:');
+      words.addAll(finalDiagnosis.split(' ').take(10));
+    }
+    
+    // Limitar a máximo 250 caracteres (aprox. 2 líneas)
+    String summary = words.join(' ');
+    if (summary.length > 250) {
+      summary = summary.substring(0, 247) + '...';
+    }
+    
+    return summary;
   }
 
   String toJson() => json.encode(toMap());
