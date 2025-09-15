@@ -41,6 +41,15 @@ class _ClinicalCaseMessageListState extends State<ClinicalCaseMessageList> {
 
         itemBuilder: (context, index) {
           final message = controller.messages[index];
+          // Ocultar el prompt interno usado para generar la evaluación final analítica
+          // cuando el caso ya está finalizado (o se generó la evaluación). Evitamos
+          // mostrar texto largo y técnico que no aporta al usuario.
+          if (!message.aiMessage && controller.isComplete.value) {
+            final lower = message.text.trimLeft().toLowerCase();
+            if (lower.startsWith('genera una evaluación final detallada') || lower.startsWith('[[hidden_eval_prompt]]')) {
+              return const SizedBox.shrink();
+            }
+          }
           return message.aiMessage
             ? ChatMessageAi(message: message)
             : ChatMessageUser(message: message);

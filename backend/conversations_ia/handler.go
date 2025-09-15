@@ -147,15 +147,11 @@ IMPORTANTE:
 - Esta es información complementaria de fuentes externas
 `, prompt, pubmedResult)
 
-        ch := make(chan string, 1)
-        go func() {
-            defer close(ch)
-            ch <- pubmedPrompt
-        }()
-        return ch, "pubmed", nil
+        stream, err := h.AI.StreamAssistantMessage(ctx, threadID, pubmedPrompt)
+        return stream, "pubmed", err
     }
     
-    // Si no encontramos en ninguna fuente, responder claramente
+    // Si no encontramos en ninguna fuente, usar el Assistant para dar una respuesta natural
     log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
     
     noInfoPrompt := fmt.Sprintf(`No se encontró información relevante sobre "%s" en ninguna de las fuentes configuradas:
@@ -163,21 +159,16 @@ IMPORTANTE:
 1. ❌ Base de conocimiento médico interno (vector %s): Sin resultados
 2. ❌ PubMed (https://pubmed.ncbi.nlm.nih.gov/): Sin resultados
 
-Recomendaciones:
-- Reformula tu pregunta con términos más específicos
-- Verifica la ortografía de términos médicos
-- Considera consultar fuentes médicas adicionales o un profesional de la salud
-- Usa sinónimos o términos alternativos para el concepto que buscas
+Por favor, proporciona una respuesta útil sobre este tema basándose en conocimiento médico general y recomienda:
+- Reformular la pregunta con términos más específicos
+- Verificar la ortografía de términos médicos
+- Considerar consultar fuentes médicas adicionales o un profesional de la salud
+- Usar sinónimos o términos alternativos para el concepto buscado
 
-Estado: Búsqueda sin resultados en fuentes verificadas`, prompt, targetVectorID)
+Pregunta original: %s`, prompt, targetVectorID, prompt)
 
-    ch := make(chan string, 1)
-    go func() {
-        defer close(ch)
-        ch <- noInfoPrompt
-    }()
-    
-    return ch, "none", nil
+    stream, err := h.AI.StreamAssistantMessage(ctx, threadID, noInfoPrompt)
+    return stream, "general", err
 }
 
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
