@@ -21,8 +21,8 @@ class ApiChatData implements IApiChatData {
 
   @override
   Future<ChatStartResponse> startChat(String prompt) async {
-  // Migrated to new Assistants v2 strict endpoint
-  const endpoint = '/conversations/start';
+    // Migrated to new Assistants v2 strict endpoint
+    const endpoint = '/conversations/start';
 
     final response = await _dio.post(endpoint, data: {'prompt': prompt});
 
@@ -61,7 +61,7 @@ class ApiChatData implements IApiChatData {
     CancelToken? cancelToken,
     void Function(String token)? onStream,
   }) async {
-  const endpoint = '/conversations/message';
+    const endpoint = '/conversations/message';
 
     try {
       final data = {'thread_id': threadId, 'prompt': prompt};
@@ -96,7 +96,9 @@ class ApiChatData implements IApiChatData {
             // remove only the single space after the colon to restore the exact token from OpenAI.
             var content = line.substring(5); // " <msg>" or " [DONE]"
             if (content.startsWith(' ')) content = content.substring(1);
-            print('📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)');
+            print(
+              '📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
+            );
             if (content == '[DONE]') {
               print('📡 [API] Received DONE marker, ending stream');
               break;
@@ -109,7 +111,9 @@ class ApiChatData implements IApiChatData {
 
       final finalText = buffer.toString();
       print('📡 [API] Final buffer length: ${finalText.length} characters');
-      print('📡 [API] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"');
+      print(
+        '📡 [API] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"',
+      );
       return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
@@ -130,7 +134,7 @@ class ApiChatData implements IApiChatData {
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
   }) async {
-  const endpoint = '/conversations/message';
+    const endpoint = '/conversations/message';
     try {
       // Verificamos que el archivo existe
       final pdfFile = File(file.filePath);
@@ -169,13 +173,30 @@ class ApiChatData implements IApiChatData {
             'Accept': 'text/event-stream',
           },
           responseType: ResponseType.stream,
+          // No lanzar excepción automática; manejamos estados manualmente
+          validateStatus: (code) => true,
         ),
       );
 
       _cancelTokens.remove(threadId);
       final body = response.data;
       if (body == null) {
-        throw Exception('Respuesta de streaming vacía');
+        throw Exception('Respuesta del servidor vacía');
+      }
+
+      // Manejo de estados no 200 (p. ej., 202 processing, 4xx/5xx errores)
+      if (response.statusCode != 200) {
+        final text = await _readResponseBody(body);
+        if (response.statusCode == 202) {
+          final preview =
+              text.isNotEmpty
+                  ? text
+                  : 'Estamos procesando tu documento. Vuelve a intentarlo en unos segundos.';
+          return ChatMessageModel.ai(chatId: threadId, text: preview);
+        }
+        throw Exception(
+          'Error del servidor (${response.statusCode}): ${text.isNotEmpty ? text : 'sin detalle'}',
+        );
       }
       final stream = utf8.decoder.bind(body.stream);
       final buffer = StringBuffer();
@@ -184,7 +205,9 @@ class ApiChatData implements IApiChatData {
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
-            print('📡 [API2] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)');
+            print(
+              '📡 [API2] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
+            );
             if (content == '[DONE]') {
               print('📡 [API2] Received DONE marker, ending stream');
               break;
@@ -196,15 +219,45 @@ class ApiChatData implements IApiChatData {
       }
       final finalText = buffer.toString();
       print('📡 [API2] Final buffer length: ${finalText.length} characters');
-      print('📡 [API2] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"');
+      print(
+        '📡 [API2] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"',
+      );
       return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         rethrow; // Let the controller handle cancellation
       }
+      // Mejorar diagnóstico: incluir status y body si disponible
+      if (e.response?.data is dio.ResponseBody) {
+        try {
+          final rb = e.response!.data as dio.ResponseBody;
+          final text = await _readResponseBody(rb);
+          throw Exception(
+            'Error en la comunicación (${e.response?.statusCode}): ${text.isNotEmpty ? text : e.message}',
+          );
+        } catch (_) {
+          throw Exception(
+            'Error en la comunicación (${e.response?.statusCode}): ${e.message}',
+          );
+        }
+      }
       throw Exception('Error en la comunicación: ${e.message}');
     } catch (e) {
       throw Exception('Error inesperado: $e');
     }
+  }
+}
+
+// Helper to read a ResponseBody stream fully into a String safely
+Future<String> _readResponseBody(dio.ResponseBody body) async {
+  try {
+    final chunks = <List<int>>[];
+    await for (final chunk in body.stream) {
+      chunks.add(chunk);
+    }
+    final bytes = chunks.expand((e) => e).toList(growable: false);
+    return utf8.decode(bytes, allowMalformed: true);
+  } catch (_) {
+    return '';
   }
 }

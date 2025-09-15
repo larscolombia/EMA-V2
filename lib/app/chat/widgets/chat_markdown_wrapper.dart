@@ -6,10 +6,10 @@ import 'package:gpt_markdown/gpt_markdown.dart';
 class ChatMarkdownWrapper extends StatefulWidget {
   final String text;
   final TextStyle style;
-  
+
   const ChatMarkdownWrapper({
-    super.key, 
-    required this.text, 
+    super.key,
+    required this.text,
     required this.style,
   });
 
@@ -18,28 +18,25 @@ class ChatMarkdownWrapper extends StatefulWidget {
 }
 
 class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
-  bool _isExpanded = false;
-  bool _isLongContent = false;
   late String _processedText;
-  
+
   @override
   void initState() {
     super.initState();
     _checkContentLength();
   }
-  
+
   void _checkContentLength() {
     // Check if content is potentially complex based on markers
     final text = widget.text;
-    
-    _isLongContent = text.length > 1000 || 
-                     text.contains('| ---') || // Markdown tables
-                     text.contains('```') ||  // Code blocks
-                     text.contains('**Resumen estructurado**') || // Structured content
-                     text.split('\n').length > 20; // Many lines
-    
-    // Always start expanded for better visibility
-    _isExpanded = true;
+
+    // Mantener heurística pero sin guardar flags locales
+    final _ =
+        text.length > 1000 ||
+        text.contains('| ---') || // Markdown tables
+        text.contains('```') || // Code blocks
+        text.contains('**Resumen estructurado**') || // Structured content
+        text.split('\n').length > 20; // Many lines
 
     _processedText = _hardWrapLongTokens(text);
   }
@@ -59,17 +56,27 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    Widget md = GptMarkdown(_processedText);
+    Widget content = GptMarkdown(_processedText);
 
     if (_processedText.contains('| ---') || _processedText.contains('```')) {
-      md = SingleChildScrollView(
+      content = SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 0),
-          child: md,
+          child: content,
         ),
       );
     }
-    return SelectionArea(child: md);
+    // Forzar color y estilo por defecto (blanco) sobre todo el markdown
+    final themed = Theme(
+      data: Theme.of(context).copyWith(
+        textTheme: Theme.of(context).textTheme.apply(
+          bodyColor: widget.style.color,
+          displayColor: widget.style.color,
+        ),
+      ),
+      child: DefaultTextStyle.merge(style: widget.style, child: content),
+    );
+    return SelectionArea(child: themed);
   }
 }
