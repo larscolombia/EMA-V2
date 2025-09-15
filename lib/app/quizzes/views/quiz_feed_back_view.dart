@@ -6,8 +6,7 @@ import 'package:ema_educacion_medica_avanzada/common/widgets/show_error_widget.d
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
-
+import 'package:ema_educacion_medica_avanzada/app/quizzes/widgets/full_feedback_animated.dart';
 
 class QuizFeedBackView extends GetView<QuizController> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -16,7 +15,6 @@ class QuizFeedBackView extends GetView<QuizController> {
 
   @override
   Widget build(BuildContext context) {
-
     final body = controller.obx(
       (quiz) {
         if (quiz == null || quiz.feedback.isEmpty) {
@@ -26,58 +24,38 @@ class QuizFeedBackView extends GetView<QuizController> {
           );
         }
 
-        if (quiz.animated) {
-          return SingleChildScrollView(
-            child: Column(
-              children: [
-                ContentHeader(subtitle: quiz.title, breadcrumb: quiz.shortTitle),
-                GptMarkdown(quiz.feedback),
-              ],
-            )
-          );
-        } else {
-          // controller.markAsAnimated(quiz.uid);
-          final textAnimationProgress = ValueNotifier<int>(0);
-
-          return SingleChildScrollView(
-            reverse: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                ContentHeader(subtitle: quiz.title, breadcrumb: quiz.shortTitle),
-                TweenAnimationBuilder<int>(
-                  tween: IntTween(begin: 1, end: quiz.feedback.length),
-                  // Ajusta la duración según la longitud del texto
-                  duration: Duration(seconds: quiz.feedback.length ~/ 80),
-                  builder: (context, value, child) {
-                    // Actualiza el ValueNotifier para que AnimatedBuilder se reconstruya
-                    return AnimatedBuilder(
-                      animation: textAnimationProgress,
-                      builder: (context, _) {
-                        textAnimationProgress.value = value;
-                        final displayedText = quiz.feedback.substring(0, textAnimationProgress.value);
-                        return GptMarkdown(displayedText);
-                      },
-                    );
-                  },
+        // Mostrar todo el feedback (puntaje, retro, preguntas y referencias) con animación de escritura.
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ContentHeader(subtitle: quiz.title, breadcrumb: quiz.shortTitle),
+              Padding(
+                padding: const EdgeInsets.only(top: 12.0),
+                child: FullFeedbackAnimated(
+                  fitGlobal: quiz.feedback,
+                  questions: quiz.questions,
+                  animate: true,
                 ),
-              ],
-            ),
-          );
-        }
+              ),
+            ],
+          ),
+        );
       },
-    
-      onLoading: Obx(() =>StateMessageWidget(
-        message: controller.textLoading.value,
-        type: StateMessageType.download,
-        showLoading: true,
-      )),
-    
+
+      onLoading: Obx(
+        () => StateMessageWidget(
+          message: controller.textLoading.value,
+          type: StateMessageType.download,
+          showLoading: true,
+        ),
+      ),
+
       onEmpty: const StateMessageWidget(
         message: 'No se encontró el feedback.',
         type: StateMessageType.noSearchResults,
       ),
-    
+
       onError: (error) {
         return StateMessageWidget(
           message: 'Error al cargar el feedback',

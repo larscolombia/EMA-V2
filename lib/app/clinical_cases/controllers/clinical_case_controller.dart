@@ -5,6 +5,7 @@ import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/sex_and_s
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/services/clinical_cases_services.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/models/answer_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/models/question_response_model.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/clinical_case_generate_data.dart';
 import 'package:ema_educacion_medica_avanzada/config/routes/app_pages.dart';
 import 'package:ema_educacion_medica_avanzada/core/logger/logger.dart';
 import 'package:ema_educacion_medica_avanzada/core/notify/notify.dart';
@@ -37,10 +38,14 @@ class ClinicalCaseController extends GetxController
   final evaluationGenerated = false.obs; // Evita duplicar evaluación final
   final interactiveEvaluationGenerated = false.obs; // Para casos interactivos
   final evaluationInProgress = false.obs; // Evita dobles llamadas
-  static const int maxInteractiveQuestions = 15; // Límite de preguntas en modo interactivo
-  final Rx<ChatMessageModel?> _pendingInteractiveSummary = Rx(null); // nuevo: guarda 'Resumen Final:' oculto
+  static const int maxInteractiveQuestions =
+      15; // Límite de preguntas en modo interactivo
+  final Rx<ChatMessageModel?> _pendingInteractiveSummary = Rx(
+    null,
+  ); // nuevo: guarda 'Resumen Final:' oculto
 
-  bool get hasHiddenInteractiveSummary => _pendingInteractiveSummary.value != null;
+  bool get hasHiddenInteractiveSummary =>
+      _pendingInteractiveSummary.value != null;
 
   ChatMessageModel? takeInteractiveSummary() {
     final m = _pendingInteractiveSummary.value;
@@ -78,11 +83,11 @@ class ClinicalCaseController extends GetxController
     }
 
     try {
-  // Reset state flags to avoid leftover completion blocking input
-  isComplete.value = false;
-  evaluationGenerated.value = false;
-  interactiveEvaluationGenerated.value = false;
-  analyticalAiTurns.value = 0;
+      // Reset state flags to avoid leftover completion blocking input
+      isComplete.value = false;
+      evaluationGenerated.value = false;
+      interactiveEvaluationGenerated.value = false;
+      analyticalAiTurns.value = 0;
       if (!profileController.canCreateMoreClinicalCases()) {
         Get.snackbar(
           'Límite alcanzado',
@@ -132,7 +137,7 @@ class ClinicalCaseController extends GetxController
 
       _startClinicalCase(temporalCase, userPrompt);
 
-  // Quota consumption now centralized in backend (analytical_generate / interactive_generate flows)
+      // Quota consumption now centralized in backend (analytical_generate / interactive_generate flows)
     } catch (e) {
       print('❌ [ClinicalCaseController] Error in generateCase: $e');
       change(
@@ -144,7 +149,10 @@ class ClinicalCaseController extends GetxController
     }
   }
 
-  Future<void> _startClinicalCase(ClinicalCaseModel temporalCase, [String userPrompt = '']) async {
+  Future<void> _startClinicalCase(
+    ClinicalCaseModel temporalCase, [
+    String userPrompt = '',
+  ]) async {
     try {
       // Usar detección de similitud si se proporciona un prompt del usuario
       ClinicalCaseGenerateData generated;
@@ -156,7 +164,7 @@ class ClinicalCaseController extends GetxController
       } else {
         generated = await clinicalCaseServive.generateCase(temporalCase);
       }
-      
+
       final clinicalCase = generated.clinicalCase;
 
       Logger.mini('_startClinicalCase');
@@ -167,7 +175,7 @@ class ClinicalCaseController extends GetxController
           clinicalCase,
         );
         _insertMessages(newMessages);
-  analyticalAiTurns.value = newMessages.length; // usualmente 1
+        analyticalAiTurns.value = newMessages.length; // usualmente 1
       } else {
         final newQuestion = await clinicalCaseServive.startInteractive(
           clinicalCase,
@@ -344,21 +352,22 @@ class ClinicalCaseController extends GetxController
         return;
       } else {
         // Chequear límite antes de agregar una nueva pregunta
-        final totalQuestionsBefore = questions.length; // ya incluye la actual respondida
+        final totalQuestionsBefore =
+            questions.length; // ya incluye la actual respondida
         if (totalQuestionsBefore >= maxInteractiveQuestions) {
           // Marcar fin forzado: no se agrega nueva pregunta
-            isComplete.value = true;
-            final summaryText = feedBackAndNewQuestion.fit ?? '';
-            if (summaryText.startsWith('Resumen Final:')) {
-              _pendingInteractiveSummary.value = ChatMessageModel.ai(
-                chatId: questionWithAnswer.quizId,
-                text: summaryText,
-              );
-            }
-            interactiveEvaluationGenerated.value = false;
-            isTyping.value = false;
-            _scrollToBottom();
-            return;
+          isComplete.value = true;
+          final summaryText = feedBackAndNewQuestion.fit ?? '';
+          if (summaryText.startsWith('Resumen Final:')) {
+            _pendingInteractiveSummary.value = ChatMessageModel.ai(
+              chatId: questionWithAnswer.quizId,
+              text: summaryText,
+            );
+          }
+          interactiveEvaluationGenerated.value = false;
+          isTyping.value = false;
+          _scrollToBottom();
+          return;
         }
         final aiQuestionMessage = ChatMessageModel.ai(
           chatId: questionWithAnswer.quizId,
@@ -413,7 +422,8 @@ class ClinicalCaseController extends GetxController
         return;
       }
       // Bloquear más mensajes si ya se completó el caso analítico
-      if (isComplete.value && clinicalCase?.type == ClinicalCaseType.analytical) {
+      if (isComplete.value &&
+          clinicalCase?.type == ClinicalCaseType.analytical) {
         return;
       }
       if (clinicalCase == null) {
@@ -437,11 +447,14 @@ class ClinicalCaseController extends GetxController
       if (clinicalCase.type == ClinicalCaseType.analytical) {
         analyticalAiTurns.value += 1;
         // Si alcanzó el máximo, generar cierre automático
-        if (analyticalAiTurns.value >= maxAnalyticalAiTurns && !isComplete.value) {
+        if (analyticalAiTurns.value >= maxAnalyticalAiTurns &&
+            !isComplete.value) {
           await _finalizeAnalyticalCase(clinicalCase);
         }
         // Heurística: si el modelo ya entregó retroalimentación completa (bibliografía / resumen / diagnóstico) antes del máximo
-  else if (!isComplete.value && analyticalAiTurns.value > 1 && _looksLikeAnalyticalClosure(aiMessage.text)) {
+        else if (!isComplete.value &&
+            analyticalAiTurns.value > 1 &&
+            _looksLikeAnalyticalClosure(aiMessage.text)) {
           _completeAnalyticalEarly(clinicalCase, aiMessage.text);
         }
       }
@@ -465,7 +478,8 @@ class ClinicalCaseController extends GetxController
   /// incluso después de haber marcado el caso como completo.
   Future<void> generateFinalEvaluation() async {
     final clinicalCase = currentCase.value;
-    if (clinicalCase == null || clinicalCase.type != ClinicalCaseType.analytical) {
+    if (clinicalCase == null ||
+        clinicalCase.type != ClinicalCaseType.analytical) {
       return;
     }
     if (evaluationInProgress.value || evaluationGenerated.value) {
@@ -477,13 +491,18 @@ class ClinicalCaseController extends GetxController
       // Navegar primero para mostrar loader blanco
       Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
       // Generar evaluación (puede tardar, la vista muestra loader)
-      final evaluationMessage = await clinicalCaseServive.generateAnalyticalEvaluation(clinicalCase);
+      final evaluationMessage = await clinicalCaseServive
+          .generateAnalyticalEvaluation(clinicalCase);
       messages.add(evaluationMessage);
       _scrollToBottom();
       evaluationGenerated.value = true;
     } catch (e) {
       Logger.error('Error al generar evaluación analítica: $e');
-      Notify.snackbar('Casos clínicos', 'No se pudo generar la evaluación final.', NotifyType.error);
+      Notify.snackbar(
+        'Casos clínicos',
+        'No se pudo generar la evaluación final.',
+        NotifyType.error,
+      );
     } finally {
       evaluationInProgress.value = false;
       isTyping.value = false;
@@ -493,23 +512,42 @@ class ClinicalCaseController extends GetxController
   bool _looksLikeAnalyticalClosure(String text) {
     final lower = text.toLowerCase();
     final hasBibliography = lower.contains('bibliograf');
-    final hasSummary = lower.contains('resumen') || lower.contains('conclusión') || lower.contains('conclusion');
-    final hasDiagnosis = lower.contains('diagnóstico') || lower.contains('diagnostico');
+    final hasSummary =
+        lower.contains('resumen') ||
+        lower.contains('conclusión') ||
+        lower.contains('conclusion');
+    final hasDiagnosis =
+        lower.contains('diagnóstico') || lower.contains('diagnostico');
     final mentionsPlan = lower.contains('plan') || lower.contains('manejo');
-    final looksFinalPhrase = lower.contains('fin del caso') || lower.contains('caso finalizado');
+    final looksFinalPhrase =
+        lower.contains('fin del caso') || lower.contains('caso finalizado');
     // No parece estar solicitando más (ausencia de signo de interrogación múltiple y palabras de pregunta al final)
     final questionMarks = RegExp(r'[?¿]').allMatches(lower).length;
-    final endsWithQuestion = lower.trim().endsWith('?') || lower.trim().endsWith('¿');
-    final hasPromptForMore = lower.contains('otra pregunta') || lower.contains('algo más') || lower.contains('algo mas');
-    final closureSignals = (hasBibliography && hasDiagnosis) || looksFinalPhrase || (hasSummary && hasDiagnosis && mentionsPlan);
-    return closureSignals && questionMarks < 2 && !endsWithQuestion && !hasPromptForMore;
+    final endsWithQuestion =
+        lower.trim().endsWith('?') || lower.trim().endsWith('¿');
+    final hasPromptForMore =
+        lower.contains('otra pregunta') ||
+        lower.contains('algo más') ||
+        lower.contains('algo mas');
+    final closureSignals =
+        (hasBibliography && hasDiagnosis) ||
+        looksFinalPhrase ||
+        (hasSummary && hasDiagnosis && mentionsPlan);
+    return closureSignals &&
+        questionMarks < 2 &&
+        !endsWithQuestion &&
+        !hasPromptForMore;
   }
 
   /// Indica si debemos ofrecer al usuario un botón para finalizar el caso analítico.
   bool get shouldOfferAnalyticalFinalize {
     final caseModel = currentCase.value;
-    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical) return false;
-    if (isComplete.value || evaluationInProgress.value || evaluationGenerated.value) return false;
+    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical)
+      return false;
+    if (isComplete.value ||
+        evaluationInProgress.value ||
+        evaluationGenerated.value)
+      return false;
     // Si ya hubo suficientes turnos de la IA
     if (analyticalAiTurns.value >= 4) return true; // umbral configurable
     // O si el último mensaje AI parece de cierre
@@ -524,9 +562,13 @@ class ClinicalCaseController extends GetxController
   /// Finaliza caso analítico desde la UI (botón del usuario)
   Future<void> finalizeAnalyticalFromUser() async {
     final caseModel = currentCase.value;
-    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical) return;
-    if (isComplete.value || evaluationInProgress.value || isFinalizingCase.value) return;
-    
+    if (caseModel == null || caseModel.type != ClinicalCaseType.analytical)
+      return;
+    if (isComplete.value ||
+        evaluationInProgress.value ||
+        isFinalizingCase.value)
+      return;
+
     isFinalizingCase.value = true;
     try {
       await _finalizeAnalyticalCase(caseModel);
@@ -543,35 +585,39 @@ class ClinicalCaseController extends GetxController
       messages.add(
         ChatMessageModel.ai(
           chatId: clinicalCase.uid,
-          text: 'Fin del caso clínico. Si deseas, puedes iniciar un nuevo caso para continuar practicando.',
+          text:
+              'Fin del caso clínico. Si deseas, puedes iniciar un nuevo caso para continuar practicando.',
         ),
       );
     }
-  generateFinalEvaluation();
+    generateFinalEvaluation();
   }
 
   Future<void> _finalizeAnalyticalCase(ClinicalCaseModel clinicalCase) async {
     try {
       isTyping.value = true;
       // Prompt para cierre: resume hallazgos, diagnóstico probable, diferenciales, plan inicial y bibliografía.
-    const closingPrompt = 'Genera un resumen final estructurado del caso: '
-      '1) Resumen clínico conciso 2) Diagnóstico más probable y diferenciales clave 3) Justificación clínica '
-      '4) Plan diagnóstico y terapéutico inicial 5) Errores comunes a evitar 6) Bibliografía (formato breve). '
-      'No hagas más preguntas. Marca el final claramente.';
+      const closingPrompt =
+          'Genera un resumen final estructurado del caso: '
+          '1) Resumen clínico conciso 2) Diagnóstico más probable y diferenciales clave 3) Justificación clínica '
+          '4) Plan diagnóstico y terapéutico inicial 5) Errores comunes a evitar 6) Bibliografía (formato breve). '
+          'No hagas más preguntas. Marca el final claramente.';
 
       // Crear mensaje de usuario interno sin agregarlo a la UI visible
       final userClosingMessage = ChatMessageModel.user(
         chatId: clinicalCase.uid,
         text: closingPrompt,
       );
-      
+
       // Guardar en base de datos pero NO añadir a messages visibles
       clinicalCaseServive.insertMessage(userClosingMessage);
 
-      final aiClosing = await clinicalCaseServive.sendMessage(userClosingMessage);
+      final aiClosing = await clinicalCaseServive.sendMessage(
+        userClosingMessage,
+      );
       messages.add(aiClosing);
       isComplete.value = true;
-  await generateFinalEvaluation();
+      await generateFinalEvaluation();
     } catch (e) {
       // Si falla el cierre, no bloquear al usuario (podría intentar nuevamente manualmente)
       Logger.error('Error al generar cierre analítico: $e');
@@ -639,8 +685,6 @@ class ClinicalCaseController extends GetxController
   Future<List<ClinicalCaseModel>> checkSimilarCases(String userPrompt) async {
     final userId = userService.currentUser.value.id;
     return await clinicalCaseServive.detectSimilarCases(userId, userPrompt);
-  }
-    }
   }
 
   Future<void> showInteractiveSummaryIfAvailable() async {

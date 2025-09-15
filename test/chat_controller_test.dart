@@ -43,13 +43,32 @@ void main() {
     // ChatsService with streaming behavior
     Get.put<ChatsService>(FakeChatsService());
     // AttachmentService stub
-  Get.put<AttachmentService>(AttachmentService(validateFile: (file) async {}));
+    Get.put<AttachmentService>(AttachmentService());
     // UI observer stub
-  Get.put<UiObserverService>(UiObserverService(isKeyboardVisible: Stream<bool>.value(false)));
+    final uiService = UiObserverService();
+    Get.put<UiObserverService>(uiService);
     // ProfileController stub: unlimited quotas
-  Get.put<ProfileController>(ProfileController(initialProfile: Profile(id: 1, authToken: 'token')));
+    Get.put<ProfileController>(ProfileController());
     // UserService stub
-  Get.put<UserService>(UserService(currentUser: Rx(UserModel(id: 1, authToken: 'token'))));
+    final userService = UserService();
+    // Seed a minimal valid user
+    userService.currentUser.value =
+        UserModel(
+          id: 1,
+          firstName: 'Test',
+          lastName: 'User',
+          email: 'test@example.com',
+          status: true,
+          language: 'es',
+          darkMode: false,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          fullName: 'Test User',
+          profileImage: '',
+          authToken: 'token',
+          media: const [],
+        ).copyWith();
+    Get.put<UserService>(userService);
     // Instantiate controller
     controller = ChatController();
     Get.put(controller);

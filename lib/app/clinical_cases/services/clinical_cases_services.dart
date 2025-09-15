@@ -31,16 +31,16 @@ class ClinicalCasesServices {
   /// Detecta si hay casos similares al prompt del usuario
   Future<List<ClinicalCaseModel>> detectSimilarCases(
     int userId,
-    String userPrompt,
-    {int maxResults = 5}
-  ) async {
+    String userPrompt, {
+    int maxResults = 5,
+  }) async {
     // Buscar casos similares basados en palabras clave
     final similarCases = await _localClinicalCaseData.findSimilarCases(
       userId,
       userPrompt,
       limit: maxResults,
     );
-    
+
     return similarCases;
   }
 
@@ -50,35 +50,40 @@ class ClinicalCasesServices {
     String originalPrompt,
   ) {
     if (similarCases.isEmpty) return originalPrompt;
-    
+
     final buffer = StringBuffer();
-    buffer.writeln('CASOS PREVIOS A EVITAR (genera algo completamente diferente):');
-    
+    buffer.writeln(
+      'CASOS PREVIOS A EVITAR (genera algo completamente diferente):',
+    );
+
     for (int i = 0; i < similarCases.length; i++) {
       final case_ = similarCases[i];
       buffer.writeln('${i + 1}. ${case_.summary ?? case_.title}');
     }
-    
+
     buffer.writeln('\nPROMPT ORIGINAL: $originalPrompt');
-    buffer.writeln('\nIMPORTANTE: Genera un caso clínico que sea temáticamente DIFERENTE a los listados arriba. Cambia especialidad, grupo etario, fisiopatología o enfoque clínico.');
-    
+    buffer.writeln(
+      '\nIMPORTANTE: Genera un caso clínico que sea temáticamente DIFERENTE a los listados arriba. Cambia especialidad, grupo etario, fisiopatología o enfoque clínico.',
+    );
+
     return buffer.toString();
   }
 
   /// Obtiene estadísticas de casos para control de crecimiento
   Future<Map<String, int>> getCaseStatistics(int userId) async {
-    final recentCases = await _localClinicalCaseData.getRecentCasesForSimilarity(
-      userId,
-      limit: 100, // Últimos 100 casos para estadísticas
-    );
-    
+    final recentCases = await _localClinicalCaseData
+        .getRecentCasesForSimilarity(
+          userId,
+          limit: 100, // Últimos 100 casos para estadísticas
+        );
+
     final now = DateTime.now();
     final lastWeek = now.subtract(Duration(days: 7));
     final lastMonth = now.subtract(Duration(days: 30));
-    
+
     int weeklyCount = 0;
     int monthlyCount = 0;
-    
+
     for (final case_ in recentCases) {
       if (case_.createdAt.isAfter(lastWeek)) {
         weeklyCount++;
@@ -87,7 +92,7 @@ class ClinicalCasesServices {
         monthlyCount++;
       }
     }
-    
+
     return {
       'total': recentCases.length,
       'weekly': weeklyCount,
@@ -101,13 +106,13 @@ class ClinicalCasesServices {
       userId,
       limit: maxCases * 2,
     );
-    
+
     if (allCases.length > maxCases) {
       final casesToDelete = allCases.skip(maxCases).toList();
       for (final case_ in casesToDelete) {
         final where = 'uid = ?';
         final whereArgs = [case_.uid];
-        await _localClinicalCaseData.delete(where, whereArgs);
+        await _localClinicalCaseData.delete(where: where, whereArgs: whereArgs);
       }
       print('🧹 Limpieza: eliminados ${casesToDelete.length} casos antiguos');
     }
@@ -121,7 +126,7 @@ class ClinicalCasesServices {
     // Generar resumen automáticamente antes de guardar
     final summary = generated.clinicalCase.generateSummary();
     final caseWithSummary = generated.clinicalCase.copyWith(summary: summary);
-    
+
     await _localClinicalCaseData.insertOne(caseWithSummary);
 
     _initialQuestion = generated.question;
@@ -153,11 +158,12 @@ class ClinicalCasesServices {
     // 3. Si hay casos similares, crear contexto anti-repetición
     ClinicalCaseModel caseToGenerate = temporalCase;
     if (similarCases.isNotEmpty) {
-      final antiRepetitionPrompt = generateAntiRepetitionContext(
+      // Generar prompt anti-repetición (por ahora solo para logging y futura extensión)
+      final promptForDebug = generateAntiRepetitionContext(
         similarCases,
         userPrompt,
       );
-      
+
       // Modificar el caso temporal con contexto mejorado
       // Nota: Esto requeriría modificar la API para aceptar contexto adicional
       // Por ahora, registramos la similitud en logs
@@ -165,6 +171,9 @@ class ClinicalCasesServices {
       for (final similar in similarCases) {
         print('  - ${similar.summary ?? similar.title}');
       }
+      // También registramos el prompt anti-repetición generado para diagnóstico
+      print('🛡️ Prompt anti-repetición generado (debug):');
+      print(promptForDebug);
     }
 
     // 4. Generar el caso normalmente
@@ -332,9 +341,10 @@ IMPORTANTE:
     }
 
     // Limitar a las últimas 15 intervenciones para controlar longitud
-    final lastTurns = userTurns.length > 15
-        ? userTurns.sublist(userTurns.length - 15)
-        : userTurns;
+    final lastTurns =
+        userTurns.length > 15
+            ? userTurns.sublist(userTurns.length - 15)
+            : userTurns;
 
     final buffer = StringBuffer();
     for (int i = 0; i < lastTurns.length; i++) {
@@ -345,7 +355,8 @@ IMPORTANTE:
 
     final evaluationPrompt = ChatMessageModel.user(
       chatId: clinicalCase.uid,
-      text: 'Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
+      text:
+          'Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
           'Usa SOLO las intervenciones listadas (no inventes nuevas). Devuelve en Markdown con EXACTAS estas secciones y encabezados:'
           '\n# Resumen Clínico (2-4 frases concisas)'
           '\n## Desempeño global (2-3 frases evaluando razonamiento clínico, estructura y priorización)'
@@ -373,7 +384,10 @@ IMPORTANTE:
     List<QuestionResponseModel> questions,
   ) async {
     // Filtrar preguntas respondidas válidas
-    final answered = questions.where((q) => (q.userAnswer != null && q.userAnswer!.isNotEmpty)).toList();
+    final answered =
+        questions
+            .where((q) => (q.userAnswer != null && q.userAnswer!.isNotEmpty))
+            .toList();
     final total = answered.length;
     int correct = 0;
     for (final q in answered) {
@@ -390,8 +404,10 @@ IMPORTANTE:
       final user = (q.userAnswer ?? '').trim();
       final isOk = ans.isNotEmpty && ans.toLowerCase() == user.toLowerCase();
       final feedback = (q.fit ?? '').trim();
-      final truncatedFb = feedback.length > 220 ? feedback.substring(0, 220) + '…' : feedback;
-      bulletLines += '\n${idx}. ${q.question}\n  Tu respuesta: ${user.isEmpty ? '(vacía)' : user}'
+      final truncatedFb =
+          feedback.length > 220 ? feedback.substring(0, 220) + '…' : feedback;
+      bulletLines +=
+          '\n${idx}. ${q.question}\n  Tu respuesta: ${user.isEmpty ? '(vacía)' : user}'
           '  |  Correcta: ${ans.isEmpty ? 'N/D' : ans}'
           '  => ${isOk ? '✅' : '❌'}';
       if (truncatedFb.isNotEmpty) {
@@ -414,20 +430,26 @@ IMPORTANTE:
       mejoras.add('Revisar las preguntas marcadas con ❌');
     }
     if (fortalezas.isEmpty) fortalezas.add('Participación activa en el caso');
-    if (mejoras.isEmpty) mejoras.add('Profundizar en bibliografía recomendada para consolidar conocimiento');
+    if (mejoras.isEmpty)
+      mejoras.add(
+        'Profundizar en bibliografía recomendada para consolidar conocimiento',
+      );
 
-    final resumen = StringBuffer()
-      ..writeln('Evaluación final interactiva')
-      ..writeln('Puntuación: $correct / $total ($scorePct%)')
-      ..writeln('\nFortalezas:')
-      ..writeln(fortalezas.map((e) => '- $e').join('\n'))
-      ..writeln('\nÁreas de mejora:')
-      ..writeln(mejoras.map((e) => '- $e').join('\n'))
-      ..writeln('\nDetalle de preguntas:')
-      ..writeln(bulletLines)
-      ..writeln('\nReferencias sugeridas (genéricas):')
-      ..writeln('- Guías clínicas actualizadas de la especialidad')
-      ..writeln('- Revisión sistemática reciente en base de datos reconocida');
+    final resumen =
+        StringBuffer()
+          ..writeln('Evaluación final interactiva')
+          ..writeln('Puntuación: $correct / $total ($scorePct%)')
+          ..writeln('\nFortalezas:')
+          ..writeln(fortalezas.map((e) => '- $e').join('\n'))
+          ..writeln('\nÁreas de mejora:')
+          ..writeln(mejoras.map((e) => '- $e').join('\n'))
+          ..writeln('\nDetalle de preguntas:')
+          ..writeln(bulletLines)
+          ..writeln('\nReferencias sugeridas (genéricas):')
+          ..writeln('- Guías clínicas actualizadas de la especialidad')
+          ..writeln(
+            '- Revisión sistemática reciente en base de datos reconocida',
+          );
 
     final evaluation = ChatMessageModel.ai(
       chatId: clinicalCase.uid,

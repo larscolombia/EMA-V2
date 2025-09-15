@@ -1,7 +1,6 @@
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
 import 'animations/slide_in_left.dart';
 import 'chat_markdown_wrapper.dart';
 
@@ -46,10 +45,14 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   @override
   Widget build(BuildContext context) {
     final String timeStr = DateFormat('HH:mm').format(widget.message.createdAt);
-    
+
     // Debug: imprimir la longitud del texto del mensaje
-    print('🔍 [ChatMessageAi] Mensaje recibido - Longitud: ${widget.message.text.length}');
-    print('🔍 [ChatMessageAi] Primeros 200 caracteres: ${widget.message.text.length > 200 ? widget.message.text.substring(0, 200) + "..." : widget.message.text}');
+    print(
+      '🔍 [ChatMessageAi] Mensaje recibido - Longitud: ${widget.message.text.length}',
+    );
+    print(
+      '🔍 [ChatMessageAi] Primeros 200 caracteres: ${widget.message.text.length > 200 ? widget.message.text.substring(0, 200) + "..." : widget.message.text}',
+    );
 
     // Si no hay texto útil, no renderizar la burbuja para evitar espacios en blanco y overflows innecesarios
     if (widget.message.text.trim().isEmpty) {

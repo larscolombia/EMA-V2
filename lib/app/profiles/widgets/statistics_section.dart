@@ -9,16 +9,14 @@ import 'package:get/get.dart';
 class StatisticsSection extends StatelessWidget {
   StatisticsSection({super.key});
 
-  TextStyle _titleStyle(BuildContext context) =>
-      Theme.of(context).textTheme.titleLarge!.copyWith(
-            color: AppStyles.primaryColor,
-            fontWeight: FontWeight.bold,
-          );
-
-  TextStyle _labelStyle(BuildContext context) => Theme.of(context)
+  TextStyle _titleStyle(BuildContext context) => Theme.of(context)
       .textTheme
-      .bodySmall!
-      .copyWith(color: AppStyles.primary900);
+      .titleLarge!
+      .copyWith(color: AppStyles.primaryColor, fontWeight: FontWeight.bold);
+
+  TextStyle _labelStyle(BuildContext context) => Theme.of(
+    context,
+  ).textTheme.bodySmall!.copyWith(color: AppStyles.primary900);
 
   TextStyle _countStyle(BuildContext context) => Theme.of(context)
       .textTheme
@@ -38,7 +36,7 @@ class StatisticsSection extends StatelessWidget {
     final ProfileController profileController = Get.find<ProfileController>();
     final hasStatistics =
         profileController.currentProfile.value.activeSubscription?.statistics ==
-            1;
+        1;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28),
@@ -46,16 +44,14 @@ class StatisticsSection extends StatelessWidget {
         children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: Text(
-              'TUS ESTADÍSTICAS',
-              style: _titleStyle(context),
-            ),
+            child: Text('TUS ESTADÍSTICAS', style: _titleStyle(context)),
           ),
           const SizedBox(height: 16),
           if (hasStatistics)
             Obx(() {
               final profileController = Get.find<ProfileController>();
-              final sub = profileController.currentProfile.value.activeSubscription;
+              final sub =
+                  profileController.currentProfile.value.activeSubscription;
               final totalChatsQuota = sub?.consultations ?? 0;
               final totalTestsQuota = sub?.questionnaires ?? 0;
               final totalClinicalQuota = sub?.clinicalCases ?? 0;
@@ -95,24 +91,27 @@ class StatisticsSection extends StatelessWidget {
             })
           else
             Row(
-              children: MockStatisticsData.basicStatistics.map((stat) {
-                return Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: _buildStatisticCard(
-                      context,
-                      stat['label'],
-                      stat['count'],
-                      stat['label'] == 'Chats'
-                          ? AppIcons.chats(height: 32, width: 32)
-                          : stat['label'] == 'Cuestionarios'
+              children:
+                  MockStatisticsData.basicStatistics.map((stat) {
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: _buildStatisticCard(
+                          context,
+                          stat['label'],
+                          stat['count'],
+                          stat['label'] == 'Chats'
+                              ? AppIcons.chats(height: 32, width: 32)
+                              : stat['label'] == 'Cuestionarios'
                               ? AppIcons.quizzesGeneral(height: 32, width: 32)
                               : AppIcons.clinicalCaseAnalytical(
-                                  height: 32, width: 32),
-                    ),
-                  ),
-                );
-              }).toList(),
+                                height: 32,
+                                width: 32,
+                              ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
             ),
           const SizedBox(height: 16),
           _buildStaticPointsWidget(context, hasStatistics),
@@ -149,11 +148,15 @@ class StatisticsSection extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Puntos conseguidos',
-                      style: _sectionTitleStyle(context)),
+                  Text(
+                    'Puntos conseguidos',
+                    style: _sectionTitleStyle(context),
+                  ),
                   const SizedBox(height: 4),
-                  Text('$totalEarned / $totalPossible',
-                      style: _countStyle(context)),
+                  Text(
+                    '$totalEarned / $totalPossible',
+                    style: _countStyle(context),
+                  ),
                 ],
               ),
               Icon(Icons.emoji_events, color: Colors.yellow[700], size: 36),
@@ -177,8 +180,10 @@ class StatisticsSection extends StatelessWidget {
               children: [
                 Text('Puntos conseguidos', style: _sectionTitleStyle(context)),
                 const SizedBox(height: 4),
-                Text('${points['earned']} / ${points['possible']}',
-                    style: _countStyle(context)),
+                Text(
+                  '${points['earned']} / ${points['possible']}',
+                  style: _countStyle(context),
+                ),
               ],
             ),
             Icon(Icons.emoji_events, color: Colors.yellow[700], size: 36),
@@ -211,8 +216,11 @@ class StatisticsSection extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.insights,
-                          size: 40, color: AppStyles.primaryColor),
+                      Icon(
+                        Icons.insights,
+                        size: 40,
+                        color: AppStyles.primaryColor,
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         '¡Aún no hay datos de tu progreso!',
@@ -241,11 +249,7 @@ class StatisticsSection extends StatelessWidget {
         final puntosPorMes =
             dynamicScores.map((score) => score.puntos).toList();
 
-        return _buildPointsBarChart(
-          context,
-          puntosPorMes,
-          monthNumbers,
-        );
+        return _buildPointsBarChart(context, puntosPorMes, monthNumbers);
       });
     } else {
       final monthlyPoints = MockStatisticsData.basicMonthlyPoints;
@@ -253,8 +257,11 @@ class StatisticsSection extends StatelessWidget {
     }
   }
 
-  Widget _buildPointsBarChart(BuildContext context, List<int> pointsByMonth,
-      [List<int>? monthNumbers]) {
+  Widget _buildPointsBarChart(
+    BuildContext context,
+    List<int> pointsByMonth, [
+    List<int>? monthNumbers,
+  ]) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -271,10 +278,12 @@ class StatisticsSection extends StatelessWidget {
             child: BarChart(
               BarChartData(
                 alignment: BarChartAlignment.spaceAround,
-                maxY: (pointsByMonth.isNotEmpty
-                        ? pointsByMonth.reduce((a, b) => a > b ? a : b) * 1.2
-                        : 250)
-                    .toDouble(),
+                maxY:
+                    (pointsByMonth.isNotEmpty
+                            ? pointsByMonth.reduce((a, b) => a > b ? a : b) *
+                                1.2
+                            : 250)
+                        .toDouble(),
                 barGroups: List.generate(
                   pointsByMonth.length,
                   (index) => BarChartGroupData(
@@ -284,18 +293,21 @@ class StatisticsSection extends StatelessWidget {
                         toY: pointsByMonth[index].toDouble(),
                         color: AppStyles.primaryColor,
                         width: 14,
-                        borderRadius:
-                            const BorderRadius.all(Radius.circular(4)),
+                        borderRadius: const BorderRadius.all(
+                          Radius.circular(4),
+                        ),
                       ),
                     ],
                   ),
                 ),
                 titlesData: FlTitlesData(
                   show: true,
-                  topTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles:
-                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
@@ -321,10 +333,11 @@ class StatisticsSection extends StatelessWidget {
                       reservedSize: 40,
                       interval: 1,
                       getTitlesWidget: (value, meta) {
-                        final monthNumber = monthNumbers != null &&
-                                monthNumbers.length > value.toInt()
-                            ? monthNumbers[value.toInt()]
-                            : value.toInt() + 1;
+                        final monthNumber =
+                            monthNumbers != null &&
+                                    monthNumbers.length > value.toInt()
+                                ? monthNumbers[value.toInt()]
+                                : value.toInt() + 1;
                         final monthLetters = [
                           'E',
                           'F',
@@ -337,7 +350,7 @@ class StatisticsSection extends StatelessWidget {
                           'S',
                           'O',
                           'N',
-                          'D'
+                          'D',
                         ];
                         return Column(
                           children: [
@@ -345,14 +358,17 @@ class StatisticsSection extends StatelessWidget {
                               monthNumber.toString(),
                               style: _labelStyle(context).copyWith(
                                 fontSize: 10,
-                                color: AppStyles.primary900.withValues(alpha: 0.5),
+                                color: AppStyles.primary900.withValues(
+                                  alpha: 0.5,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 2),
                             Text(
                               monthLetters[monthNumber - 1],
-                              style:
-                                  _labelStyle(context).copyWith(fontSize: 12),
+                              style: _labelStyle(
+                                context,
+                              ).copyWith(fontSize: 12),
                             ),
                           ],
                         );
@@ -365,11 +381,12 @@ class StatisticsSection extends StatelessWidget {
                   drawVerticalLine: false,
                   horizontalInterval: 50,
                   checkToShowHorizontalLine: (value) => value % 50 == 0,
-                  getDrawingHorizontalLine: (value) => FlLine(
-                    color: AppStyles.grey220,
-                    strokeWidth: 1,
-                    dashArray: [5, 5],
-                  ),
+                  getDrawingHorizontalLine:
+                      (value) => FlLine(
+                        color: AppStyles.grey220,
+                        strokeWidth: 1,
+                        dashArray: [5, 5],
+                      ),
                 ),
                 borderData: FlBorderData(
                   show: true,
@@ -382,8 +399,10 @@ class StatisticsSection extends StatelessWidget {
                   enabled: true,
                   handleBuiltInTouches: true,
                   touchTooltipData: BarTouchTooltipData(
-                    tooltipPadding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    tooltipPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     tooltipMargin: 8,
                     getTooltipItem: (group, groupIndex, rod, rodIndex) {
                       return BarTooltipItem(
@@ -442,8 +461,10 @@ class StatisticsSection extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Categoría más estudiada',
-                    style: _sectionTitleStyle(context)),
+                Text(
+                  'Categoría más estudiada',
+                  style: _sectionTitleStyle(context),
+                ),
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -455,10 +476,9 @@ class StatisticsSection extends StatelessWidget {
                     Expanded(
                       child: Text(
                         '¡Empieza a estudiar para ver tu categoría top!',
-                        style: _labelStyle(context).copyWith(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: _labelStyle(
+                          context,
+                        ).copyWith(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                     ),
                   ],
@@ -478,8 +498,10 @@ class StatisticsSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Categoría más estudiada',
-                  style: _sectionTitleStyle(context)),
+              Text(
+                'Categoría más estudiada',
+                style: _sectionTitleStyle(context),
+              ),
               const SizedBox(height: 16),
               Row(
                 children: [
@@ -491,10 +513,9 @@ class StatisticsSection extends StatelessWidget {
                   Expanded(
                     child: Text(
                       category.categoryName,
-                      style: _labelStyle(context).copyWith(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: _labelStyle(
+                        context,
+                      ).copyWith(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],
@@ -514,8 +535,10 @@ class StatisticsSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Categorías más estudiadas',
-                style: _sectionTitleStyle(context)),
+            Text(
+              'Categorías más estudiadas',
+              style: _sectionTitleStyle(context),
+            ),
             const SizedBox(height: 16),
             ListView.builder(
               shrinkWrap: true,
@@ -527,8 +550,9 @@ class StatisticsSection extends StatelessWidget {
                   margin: const EdgeInsets.symmetric(vertical: 8),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: (category['color'] as Color)
-                        .withAlpha((0.1 * 255).toInt()),
+                    color: (category['color'] as Color).withAlpha(
+                      (0.1 * 255).toInt(),
+                    ),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -544,14 +568,16 @@ class StatisticsSection extends StatelessWidget {
                       Expanded(
                         child: Text(
                           category['name'] as String,
-                          style: _labelStyle(context).copyWith(
-                              fontSize: 16, fontWeight: FontWeight.bold),
+                          style: _labelStyle(
+                            context,
+                          ).copyWith(fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                       ),
                       Text(
                         '${index + 1}°',
-                        style: _sectionTitleStyle(context).copyWith(
-                            fontSize: 14, fontWeight: FontWeight.bold),
+                        style: _sectionTitleStyle(
+                          context,
+                        ).copyWith(fontSize: 14, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
@@ -565,13 +591,24 @@ class StatisticsSection extends StatelessWidget {
   }
 
   Widget _buildStatisticCard(
-      BuildContext context, String label, int count, Widget icon, {
-      int? total,
-    }) {
-  final showTotal = total != null && total > 0;
-  final double progress = showTotal && total != 0
-    ? (count / total!).clamp(0.0, 1.0).toDouble()
-    : 0.0;
+    BuildContext context,
+    String label,
+    int count,
+    Widget icon, {
+    int? total,
+  }) {
+    final showTotal = total != null && total > 0;
+    int safeTotal;
+    if (showTotal) {
+      // Here analyzer knows total is non-null
+      safeTotal = total; // ignore: null_check_always_fails
+    } else {
+      safeTotal = 0;
+    }
+    final double progress =
+        showTotal && safeTotal != 0
+            ? (count / safeTotal).clamp(0.0, 1.0).toDouble()
+            : 0.0;
     return Container(
       constraints: const BoxConstraints(minHeight: 100),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -598,10 +635,10 @@ class StatisticsSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-            Text(
-              showTotal ? '$count / $total' : '$count',
-              style: _countStyle(context),
-            ),
+          Text(
+            showTotal ? '$count / $total' : '$count',
+            style: _countStyle(context),
+          ),
           if (showTotal) ...[
             const SizedBox(height: 6),
             ClipRRect(

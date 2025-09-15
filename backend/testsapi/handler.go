@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
+	randpkg "math/rand"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"math"
 
 	"ema-backend/openai"
 
@@ -29,7 +30,7 @@ type Handler struct {
 	assistantID string
 	// Optional: resolver to map category IDs to names
 	resolveCategoryNames func(ctx context.Context, ids []int) ([]string, error)
-	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
+	quotaValidator       func(ctx context.Context, c *gin.Context, flow string) error
 }
 
 func NewHandler(ai Assistant, assistantID string) *Handler {
@@ -82,7 +83,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 }
 
 // SetQuotaValidator allows main to inject quota validator (quiz generation counts)
-func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) { h.quotaValidator = fn }
+func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) {
+	h.quotaValidator = fn
+}
 
 func (h *Handler) generate(c *gin.Context) {
 	// Quota: quiz generation consumes questionnaires bucket
@@ -90,9 +93,13 @@ func (h *Handler) generate(c *gin.Context) {
 		if err := h.quotaValidator(c.Request.Context(), c, "quiz_generate"); err != nil {
 			field, _ := c.Get("quota_error_field")
 			reason, _ := c.Get("quota_error_reason")
-			resp := gin.H{"error":"quiz quota exceeded"}
-			if f, ok := field.(string); ok && f != "" { resp["field"] = f }
-			if r, ok := reason.(string); ok && r != "" { resp["reason"] = r }
+			resp := gin.H{"error": "quiz quota exceeded"}
+			if f, ok := field.(string); ok && f != "" {
+				resp["field"] = f
+			}
+			if r, ok := reason.(string); ok && r != "" {
+				resp["reason"] = r
+			}
 			c.JSON(http.StatusForbidden, resp)
 			return
 		}
@@ -217,6 +224,8 @@ func (h *Handler) generate(c *gin.Context) {
 	}
 	// Normalize questions; if empty, synthesize safe defaults
 	normalized := normalizeQuestions(rawQuestions, req.NumQuestions)
+	// Randomize order of questions and options to avoid positional bias
+	normalized = randomizeQuestions(normalized)
 	log.Printf("[testsapi.generate] normalized questions count=%d (requested=%d)", len(normalized), req.NumQuestions)
 	// Build response data compatible with Flutter mapper
 	data := map[string]any{
@@ -548,6 +557,70 @@ func max(a, b int) int {
 	return b
 }
 
+// --- Randomization helpers --- //
+
+// randomizeQuestions shuffles the order of questions and for single_choice questions
+// it shuffles the options while keeping the stored answer consistent.
+// For true_false, we keep canonical order most of the time but occasionally flip to reduce bias.
+func randomizeQuestions(qs []map[string]any) []map[string]any {
+	if len(qs) == 0 {
+		return qs
+	}
+	// Seed RNG; time-based seed is fine per-request
+	randpkg.Seed(time.Now().UnixNano())
+	// Shuffle questions (do NOT change IDs; assistant remembers original IDs for evaluation)
+	randpkg.Shuffle(len(qs), func(i, j int) { qs[i], qs[j] = qs[j], qs[i] })
+	// Shuffle options per question when applicable
+	for _, q := range qs {
+		t := toStr(q["type"])
+		switch t {
+		case "single_choice":
+			opts := toStringSlice(q["options"])
+			if len(opts) >= 2 {
+				ans := toStr(q["answer"])
+				// build indices, shuffle, then rebuild opts
+				idx := make([]int, len(opts))
+				for i := range idx {
+					idx[i] = i
+				}
+				randpkg.Shuffle(len(idx), func(i, j int) { idx[i], idx[j] = idx[j], idx[i] })
+				newOpts := make([]string, len(opts))
+				for pos, oldIdx := range idx {
+					newOpts[pos] = opts[oldIdx]
+				}
+				q["options"] = newOpts
+				// ensure answer is still one of options; if not, set to closest match by case-insensitive compare
+				if ans == "" || !containsIgnoreCase(newOpts, ans) {
+					// try find case-insensitive match from old options
+					for _, o := range newOpts {
+						if strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(ans)) {
+							ans = o
+							break
+						}
+					}
+					if ans == "" || !containsIgnoreCase(newOpts, ans) {
+						ans = newOpts[0]
+					}
+				}
+				q["answer"] = ans
+			}
+		case "true_false":
+			// 25% chance to flip order to avoid always-true-first bias
+			if randpkg.Intn(4) == 0 {
+				q["options"] = []string{"false", "true"}
+			} else {
+				q["options"] = []string{"true", "false"}
+			}
+			ans := strings.ToLower(strings.TrimSpace(toStr(q["answer"])))
+			if ans != "true" && ans != "false" {
+				ans = "true"
+			}
+			q["answer"] = ans
+		}
+	}
+	return qs
+}
+
 // --- Repair helpers --- //
 
 // repairGenerateJSON asks the assistant in the same thread to rewrite its last message
@@ -612,14 +685,20 @@ func (h *Handler) repairEvaluationJSON(ctx context.Context, threadID, lastConten
 // Adds field 'summary': { total:int, correct:int, incorrect:int, correct_percentage:float, missed_ids:[], correct_answers_map:{question_id:answer} }
 // correct_answers_map derived from evaluation where is_correct==1 if answer present in input items; limited to 50 entries.
 func augmentEvaluationSummary(parsed map[string]any, reqItems []evalQuestion) map[string]any {
-	if parsed == nil { return parsed }
+	if parsed == nil {
+		return parsed
+	}
 	// Extract evaluation array
 	evalAny, ok := parsed["evaluation"]
 	var evalArr []map[string]any
 	if ok {
 		switch v := evalAny.(type) {
 		case []any:
-			for _, e := range v { if m, ok := e.(map[string]any); ok { evalArr = append(evalArr, m) } }
+			for _, e := range v {
+				if m, ok := e.(map[string]any); ok {
+					evalArr = append(evalArr, m)
+				}
+			}
 		case []map[string]any:
 			evalArr = v
 		}
@@ -629,24 +708,43 @@ func augmentEvaluationSummary(parsed map[string]any, reqItems []evalQuestion) ma
 	missedIDs := []int{}
 	// map questionID -> answer from original request for correct ones
 	answerLookup := map[int]string{}
-	for _, it := range reqItems { answerLookup[it.QuestionID] = it.Answer }
+	for _, it := range reqItems {
+		answerLookup[it.QuestionID] = it.Answer
+	}
 	correctMap := map[string]string{}
 	for _, e := range evalArr {
 		qid := -1
-		if idf, ok := e["question_id"].(float64); ok { qid = int(idf) } else if idi, ok := e["question_id"].(int); ok { qid = idi }
+		if idf, ok := e["question_id"].(float64); ok {
+			qid = int(idf)
+		} else if idi, ok := e["question_id"].(int); ok {
+			qid = idi
+		}
 		isC := 0
-		if icf, ok := e["is_correct"].(float64); ok { isC = int(icf) } else if ici, ok := e["is_correct"].(int); ok { isC = ici }
-		if isC == 1 { correct++ ; if ans, ok2 := answerLookup[qid]; ok2 && len(correctMap) < 50 { correctMap[strconv.Itoa(qid)] = ans } } else if qid >= 0 { missedIDs = append(missedIDs, qid) }
+		if icf, ok := e["is_correct"].(float64); ok {
+			isC = int(icf)
+		} else if ici, ok := e["is_correct"].(int); ok {
+			isC = ici
+		}
+		if isC == 1 {
+			correct++
+			if ans, ok2 := answerLookup[qid]; ok2 && len(correctMap) < 50 {
+				correctMap[strconv.Itoa(qid)] = ans
+			}
+		} else if qid >= 0 {
+			missedIDs = append(missedIDs, qid)
+		}
 	}
 	incorrect := total - correct
 	pct := 0.0
-	if total > 0 { pct = (float64(correct) / float64(total)) * 100.0 }
+	if total > 0 {
+		pct = (float64(correct) / float64(total)) * 100.0
+	}
 	parsed["summary"] = map[string]any{
-		"total": total,
-		"correct": correct,
-		"incorrect": incorrect,
-		"correct_percentage": fmtFloat(pct),
-		"missed_ids": missedIDs,
+		"total":               total,
+		"correct":             correct,
+		"incorrect":           incorrect,
+		"correct_percentage":  fmtFloat(pct),
+		"missed_ids":          missedIDs,
 		"correct_answers_map": correctMap,
 	}
 	return parsed

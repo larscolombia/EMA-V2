@@ -29,18 +29,18 @@ type Client struct {
 	key         string
 	httpClient  *http.Client
 	// session vector stores: thread_id -> vector_store_id
-	vsMu        sync.RWMutex
-	vectorStore map[string]string
+	vsMu         sync.RWMutex
+	vectorStore  map[string]string
 	vsLastAccess map[string]time.Time // thread_id -> last access
-	fileMu      sync.RWMutex
-	fileCache   map[string]string // key: threadID+"|"+sha256 -> fileID
+	fileMu       sync.RWMutex
+	fileCache    map[string]string // key: threadID+"|"+sha256 -> fileID
 	// session usage tracking (in-memory)
 	sessMu    sync.RWMutex
 	sessBytes map[string]int64
 	sessFiles map[string]int
 	// last uploaded file per thread to bias instructions
-	lastMu   sync.RWMutex
-	lastFile map[string]LastFileInfo
+	lastMu      sync.RWMutex
+	lastFile    map[string]LastFileInfo
 	lastCleanup time.Time
 	vsTTL       time.Duration
 	// Ensure *Client implements the chat.AIClient interface (compile-time check) via a blank identifier assignment.
@@ -80,7 +80,9 @@ func NewClient() *Client {
 	fcMap, _ := loadFileCache()
 	var ttl time.Duration
 	if v := strings.TrimSpace(os.Getenv("VS_TTL_MINUTES")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 { ttl = time.Duration(n) * time.Minute }
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ttl = time.Duration(n) * time.Minute
+		}
 	}
 	return &Client{
 		api:          api,
@@ -182,13 +184,13 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 				break
 			}
 			if len(resp.Choices) == 0 {
-			log.Printf("[openai][stream.warn] empty choices in delta")
+				log.Printf("[openai][stream.warn] empty choices in delta")
 				continue
 			}
 			token := resp.Choices[0].Delta.Content
 			if token != "" {
 				anyToken = true
-			log.Printf("[openai][stream.token] %s", token)
+				log.Printf("[openai][stream.token] %s", token)
 				ch <- token
 			}
 		}
@@ -474,7 +476,9 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	if id, ok := c.fileCache[key]; ok {
 		c.fileMu.RUnlock()
 		fmt.Printf("DEBUG: Using cached file ID: %s\n", id)
-		c.lastMu.Lock(); c.lastFile[threadID] = LastFileInfo{ID: id, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}; c.lastMu.Unlock()
+		c.lastMu.Lock()
+		c.lastFile[threadID] = LastFileInfo{ID: id, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}
+		c.lastMu.Unlock()
 		return id, nil
 	}
 	c.fileMu.RUnlock()
@@ -643,8 +647,18 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	start := time.Now()
 	// create run
 	payload := map[string]any{"assistant_id": c.AssistantID}
-	if strings.TrimSpace(instructions) != "" {
-		payload["instructions"] = instructions
+	// Endurecer instrucciones cuando hay vector store (archivos adjuntos) para exigir verificación y bibliografía
+	hardened := strings.TrimSpace(instructions)
+	if strings.TrimSpace(vectorStoreID) != "" {
+		extra := "\n\nREGLAS DE RIGOR (obligatorias cuando existan archivos adjuntos):\n- Usa EXCLUSIVAMENTE la información recuperada de los archivos del hilo.\n- Si la pregunta no puede responderse con el contenido disponible, responde exactamente: 'No encontré información en el archivo adjunto.'\n- Incluye fragmentos textuales breves cuando cites.\n- Al final agrega: 'Verificación: Alineado con el documento: Sí/No' y una sección 'Bibliografía' listando el/los archivo(s) y, si es posible, páginas o fragmentos.\n- No inventes fuentes ni datos."
+		if hardened == "" {
+			hardened = extra
+		} else {
+			hardened = hardened + extra
+		}
+	}
+	if hardened != "" {
+		payload["instructions"] = hardened
 	}
 	// Always include file_search tool + vector store (even if empty) for consistent retrieval context
 	tools := []map[string]any{{"type": "file_search"}}
@@ -690,7 +704,9 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 						Role    string `json:"role"`
 						Content []struct {
 							Type string `json:"type"`
-							Text struct { Value string `json:"value"` } `json:"text"`
+							Text struct {
+								Value string `json:"value"`
+							} `json:"text"`
 						} `json:"content"`
 					} `json:"data"`
 				}
@@ -699,7 +715,11 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 				for _, m := range ml.Data {
 					if m.Role == "assistant" {
 						var buf bytes.Buffer
-						for _, cpart := range m.Content { if cpart.Type == "text" { buf.WriteString(cpart.Text.Value) } }
+						for _, cpart := range m.Content {
+							if cpart.Type == "text" {
+								buf.WriteString(cpart.Text.Value)
+							}
+						}
 						text := buf.String()
 						if strings.TrimSpace(text) != "" {
 							return text + "\n\n[Nota: respuesta parcial generada antes de completar el proceso para evitar timeout]", nil
@@ -782,14 +802,18 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	// Debug meta para detectar hilos mezclados: log con hash corto del prompt
 	hashPrompt := ""
 	if len(prompt) > 0 {
-		if len(prompt) > 64 { hashPrompt = fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))[:12] } else { hashPrompt = fmt.Sprintf("len%d", len(prompt)) }
+		if len(prompt) > 64 {
+			hashPrompt = fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))[:12]
+		} else {
+			hashPrompt = fmt.Sprintf("len%d", len(prompt))
+		}
 	}
 	log.Printf("[assist][StreamAssistantMessage][start] thread=%s vs=%s prompt_hash=%s", threadID, vsID, hashPrompt)
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
 		// Ajuste: permitir saludos/conversación natural sin forzar mensaje de 'No encontré...' si el usuario solo saluda.
-		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s) sin pedir que reformule. Para preguntas que requieren datos concretos del/los documento(s) debes usar EXCLUSIVAMENTE la información recuperada de los documentos de este hilo. Si después de revisar no hay evidencia suficiente para responder esa pregunta específica, responde exactamente: 'No encontré información en el archivo adjunto.' Siempre que cites información encontrada incluye fragmentos textuales concisos. No inventes contenido que no esté en los documentos."
+		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s) sin pedir que reformule. Para preguntas que requieren datos concretos del/los documento(s) debes usar EXCLUSIVAMENTE la información recuperada de los documentos de este hilo. Si después de revisar no hay evidencia suficiente para responder esa pregunta específica, responde exactamente: 'No encontré información en el archivo adjunto.' Siempre que cites información encontrada incluye fragmentos textuales concisos. No inventes contenido que no esté en los documentos. Al final agrega: 'Verificación: Alineado con el documento: Sí/No' y 'Bibliografía' con el/los archivo(s) y, si es posible, páginas o fragmentos."
 		// Bias to the most recently uploaded file if any
 		c.lastMu.RLock()
 		if lf, ok := c.lastFile[threadID]; ok && strings.TrimSpace(lf.Name) != "" {
@@ -800,7 +824,11 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
 			outHash := ""
-			if len(text) > 120 { outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12] } else { outHash = fmt.Sprintf("len%d", len(text)) }
+			if len(text) > 120 {
+				outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12]
+			} else {
+				outHash = fmt.Sprintf("len%d", len(text))
+			}
 			log.Printf("[assist][StreamAssistantMessage][done] thread=%s prompt_hash=%s out_hash=%s chars=%d", threadID, hashPrompt, outHash, len(text))
 			// En modo test, guardar respuesta completa en archivo temporal
 			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
@@ -849,7 +877,7 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		defer close(out)
 		// Constrain the run to only use the vector store
 		// Ajuste: permitir saludos y conversación general; solo emitir 'No encontré...' cuando la pregunta exige datos del documento y realmente no existen.
-		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s). Para preguntas que requieren datos concretos del/los documento(s) usa solo la información recuperada. Si tras revisar no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos textuales relevantes siempre que haya evidencia y no inventes datos." 
+		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s). Para preguntas que requieren datos concretos del/los documento(s) usa solo la información recuperada. Si tras revisar no hay evidencia suficiente responde exactamente: 'No encontré información en el archivo adjunto.' Cita fragmentos textuales relevantes siempre que haya evidencia y no inventes datos. Al final agrega: 'Verificación: Alineado con el documento: Sí/No' y 'Bibliografía' con el/los archivo(s) y, si es posible, páginas o fragmentos."
 		// Bias to this uploaded file
 		if base := filepath.Base(filePath); base != "" {
 			strict = strict + " Responde sobre el archivo recientemente subido '" + base + "' sin pedir confirmación, salvo que el usuario indique otro documento."
@@ -857,7 +885,11 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		text, err := c.runAndWait(ctx, threadID, strict, vsID)
 		if err == nil && text != "" {
 			outHash := ""
-			if len(text) > 120 { outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12] } else { outHash = fmt.Sprintf("len%d", len(text)) }
+			if len(text) > 120 {
+				outHash = fmt.Sprintf("%x", sha256.Sum256([]byte(text)))[:12]
+			} else {
+				outHash = fmt.Sprintf("len%d", len(text))
+			}
 			log.Printf("[assist][StreamAssistantMessageWithFile][done] thread=%s file=%s out_hash=%s chars=%d", threadID, filepath.Base(filePath), outHash, len(text))
 			// En modo test, guardar respuesta completa en archivo temporal
 			if os.Getenv("TEST_CAPTURE_FULL") == "1" {
@@ -1048,54 +1080,103 @@ func (c *Client) DeleteThreadArtifactsAny(ctx any, threadID string) error {
 
 // ForceNewVectorStore drops current vector store (best-effort) and creates a new empty one.
 func (c *Client) ForceNewVectorStore(ctx context.Context, threadID string) (string, error) {
-	if threadID == "" { return "", errors.New("threadID vacío") }
+	if threadID == "" {
+		return "", errors.New("threadID vacío")
+	}
 	c.vsMu.Lock()
 	old := c.vectorStore[threadID]
 	delete(c.vectorStore, threadID)
 	delete(c.vsLastAccess, threadID)
 	c.vsMu.Unlock()
-	if old != "" { _ = c.deleteVectorStore(ctx, old) }
+	if old != "" {
+		_ = c.deleteVectorStore(ctx, old)
+	}
 	return c.ensureVectorStore(ctx, threadID)
 }
 
 // ListVectorStoreFiles lists file ids currently attached to the vector store for a thread.
 func (c *Client) ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error) {
-	if threadID == "" { return nil, errors.New("threadID vacío") }
+	if threadID == "" {
+		return nil, errors.New("threadID vacío")
+	}
 	vsID := c.GetVectorStoreID(threadID)
-	if vsID == "" { return []string{}, nil }
+	if vsID == "" {
+		return []string{}, nil
+	}
 	resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vsID+"/files?limit=100", nil)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 { b,_:=io.ReadAll(resp.Body); return nil, fmt.Errorf("list files failed: %s", string(b)) }
-	var data struct { Data []struct { ID string `json:"id"` } `json:"data"` }
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil { return nil, err }
-	ids := make([]string,0,len(data.Data))
-	for _, d := range data.Data { if d.ID != "" { ids = append(ids, d.ID) } }
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list files failed: %s", string(b))
+	}
+	var data struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(data.Data))
+	for _, d := range data.Data {
+		if d.ID != "" {
+			ids = append(ids, d.ID)
+		}
+	}
 	return ids, nil
 }
 
 // GetVectorStoreID returns existing vector store id without creating a new one.
-func (c *Client) GetVectorStoreID(threadID string) string { c.vsMu.RLock(); defer c.vsMu.RUnlock(); return c.vectorStore[threadID] }
+func (c *Client) GetVectorStoreID(threadID string) string {
+	c.vsMu.RLock()
+	defer c.vsMu.RUnlock()
+	return c.vectorStore[threadID]
+}
 
 // touchVectorStore updates last access for TTL logic.
-func (c *Client) touchVectorStore(threadID string) { if threadID==""||c.vsTTL==0 { return }; c.vsMu.Lock(); c.vsLastAccess[threadID]=time.Now(); c.vsMu.Unlock() }
+func (c *Client) touchVectorStore(threadID string) {
+	if threadID == "" || c.vsTTL == 0 {
+		return
+	}
+	c.vsMu.Lock()
+	c.vsLastAccess[threadID] = time.Now()
+	c.vsMu.Unlock()
+}
 
 // maybeCleanupVectorStores removes expired vector stores based on TTL.
 func (c *Client) maybeCleanupVectorStores() {
-	if c.vsTTL == 0 { return }
-	if time.Since(c.lastCleanup) < 5*time.Minute { return }
+	if c.vsTTL == 0 {
+		return
+	}
+	if time.Since(c.lastCleanup) < 5*time.Minute {
+		return
+	}
 	c.vsMu.Lock()
 	now := time.Now()
-	expired := make([]string,0)
+	expired := make([]string, 0)
 	for t, id := range c.vectorStore {
 		last := c.vsLastAccess[t]
-		if last.IsZero() { c.vsLastAccess[t] = now; continue }
-		if now.Sub(last) > c.vsTTL { expired = append(expired, t); _ = c.deleteVectorStore(context.Background(), id) }
+		if last.IsZero() {
+			c.vsLastAccess[t] = now
+			continue
+		}
+		if now.Sub(last) > c.vsTTL {
+			expired = append(expired, t)
+			_ = c.deleteVectorStore(context.Background(), id)
+		}
 	}
 	if len(expired) > 0 {
-		for _, t := range expired { delete(c.vectorStore, t); delete(c.vsLastAccess, t) }
-		snap := make(map[string]string,len(c.vectorStore))
-		for k,v := range c.vectorStore { snap[k]=v }
+		for _, t := range expired {
+			delete(c.vectorStore, t)
+			delete(c.vsLastAccess, t)
+		}
+		snap := make(map[string]string, len(c.vectorStore))
+		for k, v := range c.vectorStore {
+			snap[k] = v
+		}
 		go saveVectorStoreFile(snap)
 	}
 	c.lastCleanup = now
@@ -1127,20 +1208,20 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 	if c.key == "" || c.AssistantID == "" {
 		return nil, errors.New("assistants not configured")
 	}
-	
+
 	// Crear un thread temporal para la búsqueda
 	threadID, err := c.CreateThread(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary thread: %v", err)
 	}
-	
+
 	// Obtener información de los archivos en el vector store para generar metadatos
 	files, err := c.listVectorStoreFilesWithNames(ctx, vectorStoreID)
 	if err != nil {
 		log.Printf("[vector][search][warning] could not get file metadata: %v", err)
 		files = []string{"Documento médico"} // Fallback genérico
 	}
-	
+
 	// Construir prompt enriquecido que incluye solicitud de metadatos
 	searchPrompt := fmt.Sprintf(`Busca información relevante sobre: "%s"
 
@@ -1153,37 +1234,37 @@ IMPORTANTE:
 
 Documentos disponibles en este vector store: %s
 `, query, strings.Join(files, ", "))
-	
+
 	// Usamos el assistant con instrucciones específicas para búsqueda
 	text, err := c.runAndWaitWithVectorStore(ctx, threadID, searchPrompt, vectorStoreID)
 	if err != nil {
 		return nil, fmt.Errorf("vector store search failed: %v", err)
 	}
-	
+
 	// Limpiar el thread temporal
 	_ = c.DeleteThreadArtifacts(ctx, threadID)
-	
+
 	result := &VectorSearchResult{
 		VectorID:  vectorStoreID,
 		HasResult: false,
 	}
-	
+
 	if strings.Contains(strings.ToUpper(text), "NO_FOUND") {
 		result.Content = ""
 		result.Source = ""
 		return result, nil
 	}
-	
+
 	// Extraer fuente del contenido si está presente
 	source := "Base de conocimiento médico"
 	if len(files) > 0 {
 		source = files[0] // Usar el primer archivo como fuente principal
 	}
-	
+
 	result.Content = text
 	result.Source = source
 	result.HasResult = true
-	
+
 	return result, nil
 }
 
@@ -1194,23 +1275,23 @@ func (c *Client) listVectorStoreFilesWithNames(ctx context.Context, vectorStoreI
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("list files failed: %s", string(b))
 	}
-	
+
 	var data struct {
 		Data []struct {
 			ID     string `json:"id"`
 			Object string `json:"object"`
 		} `json:"data"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, err
 	}
-	
+
 	names := make([]string, 0)
 	for _, file := range data.Data {
 		// Obtener detalles del archivo para el nombre
@@ -1218,11 +1299,11 @@ func (c *Client) listVectorStoreFilesWithNames(ctx context.Context, vectorStoreI
 			names = append(names, fileName)
 		}
 	}
-	
+
 	if len(names) == 0 {
 		names = []string{"Documento médico"}
 	}
-	
+
 	return names, nil
 }
 
@@ -1233,19 +1314,19 @@ func (c *Client) getFileName(ctx context.Context, fileID string) (string, error)
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("get file failed")
 	}
-	
+
 	var file struct {
 		Filename string `json:"filename"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
 		return "", err
 	}
-	
+
 	return file.Filename, nil
 }
 
@@ -1254,13 +1335,13 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 	if c.key == "" || c.AssistantID == "" {
 		return "", errors.New("assistants not configured")
 	}
-	
+
 	// Crear un thread temporal para la búsqueda en PubMed
 	threadID, err := c.CreateThread(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary thread: %v", err)
 	}
-	
+
 	pubmedPrompt := fmt.Sprintf(`Busca información médica sobre: "%s" en PubMed (https://pubmed.ncbi.nlm.nih.gov/)
 
 IMPORTANTE:
@@ -1271,19 +1352,19 @@ IMPORTANTE:
 - Incluye citas bibliográficas específicas
 - Mantén rigor científico
 `, query)
-	
+
 	text, err := c.runAndWait(ctx, threadID, pubmedPrompt, "")
 	if err != nil {
 		return "", fmt.Errorf("pubmed search failed: %v", err)
 	}
-	
+
 	// Limpiar el thread temporal
 	_ = c.DeleteThreadArtifacts(ctx, threadID)
-	
+
 	if strings.Contains(strings.ToUpper(text), "NO_PUBMED_FOUND") {
 		return "", nil // No se encontró información en PubMed
 	}
-	
+
 	return text, nil
 }
 
@@ -1292,11 +1373,11 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 	if c.key == "" || c.AssistantID == "" {
 		return nil, errors.New("assistants not configured")
 	}
-	
+
 	if err := c.addMessage(ctx, threadID, prompt); err != nil {
 		return nil, err
 	}
-	
+
 	log.Printf("[assist][StreamWithSpecificVector][start] thread=%s vs=%s", threadID, vectorStoreID)
 	out := make(chan string, 1)
 	go func() {
@@ -1322,6 +1403,8 @@ func (c *Client) runAndWaitWithVectorStore(ctx context.Context, threadID, instru
 // sanitizeBody trims whitespace and limits size for log output
 func sanitizeBody(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 400 { return s[:400] + "..." }
+	if len(s) > 400 {
+		return s[:400] + "..."
+	}
 	return s
 }

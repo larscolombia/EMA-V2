@@ -7,7 +7,6 @@ import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'package:get/get.dart';
 
-
 class ApiQuizzData implements IQuizRemoteData {
   final Dio _dio = Get.find<ApiService>().dio;
 
@@ -30,17 +29,29 @@ class ApiQuizzData implements IQuizRemoteData {
         final score = data['correct_answers'] ?? 0;
 
         final feedback = data['fit_global'] ?? '';
-        
-        return quiz.copyWith(score: score, feedback: feedback, questions: questions);
+
+        return quiz.copyWith(
+          score: score,
+          // Mantener el feedback global tal cual (sin secciones duplicadas). Los resultados por pregunta
+          // se renderizan con estilo en la vista.
+          feedback: feedback,
+          questions: questions,
+        );
       }
 
       throw Exception('Error ${response.statusCode} al evaluar quiz.');
-      
     } catch (e) {
-      Logger.error(e.toString(), className: 'ApiQuizzData', methodName: 'evaluateQuiz', meta: 'quizId: ${quiz.uid}');
+      Logger.error(
+        e.toString(),
+        className: 'ApiQuizzData',
+        methodName: 'evaluateQuiz',
+        meta: 'quizId: ${quiz.uid}',
+      );
       throw Exception('Error: ${e.toString()}');
     }
   }
+
+  // Nota: El resumen por pregunta se presenta en la vista con estilos de la app.
 
   @override
   Future<QuizGenerateData> generateQuizData(QuizModel quiz) async {
@@ -56,7 +67,11 @@ class ApiQuizzData implements IQuizRemoteData {
       print('DEBUG: Response status: ${response.statusCode}');
       print('DEBUG: Response data: ${response.data}');
 
-      final generateQuiz = QuizGenerateData.fromApi(response.data, quiz.uid, quiz.userId);
+      final generateQuiz = QuizGenerateData.fromApi(
+        response.data,
+        quiz.uid,
+        quiz.userId,
+      );
 
       return generateQuiz;
     } catch (e) {
@@ -69,7 +84,6 @@ class ApiQuizzData implements IQuizRemoteData {
   @override
   Future<List<QuestionResponseModel>> getQuestions(QuizModel quiz) async {
     try {
-
       dynamic response;
       List<QuestionResponseModel> questions = [];
 
@@ -88,39 +102,49 @@ class ApiQuizzData implements IQuizRemoteData {
       throw Exception('Error al obtener respuestas');
     }
   }
-  
+
   @override
   Future<QuizModel> getQuizById(String quizId) async {
     try {
-
       dynamic response;
 
-      response = await _dio.get('/user/{{user_id}}/test/$quizId/details'); 
+      response = await _dio.get('/user/{{user_id}}/test/$quizId/details');
 
       if (response.statusCode == 200) {
         final resBody = await response.stream.bytesToString();
 
         final data = jsonDecode(resBody);
 
-        final quiz = QuizModel.fromApi(data); // Adaptar el endpoint al método fromApi
+        final quiz = QuizModel.fromApi(
+          data,
+        ); // Adaptar el endpoint al método fromApi
 
         return quiz;
       }
 
-      throw Exception('Error ${response.statusCode} al obtener el cuestarionario.');
+      throw Exception(
+        'Error ${response.statusCode} al obtener el cuestarionario.',
+      );
     } catch (e) {
       throw Exception('Error al obtener respuestas');
     }
   }
 
-  List<QuestionResponseModel> _updateQuestions(List<QuestionResponseModel> oldQuestions, List<Map<String, dynamic>> evaluations) {
-    final updatedQuestions = oldQuestions.map((question) {
-      final evaluation = evaluations.firstWhere((e) => e['question_id'] == question.remoteId);
-      final isCorrect = evaluation['is_correct'] as int == 1;
-      final fit = evaluation['fit'] != null ? evaluation['fit'] as String : '';
+  List<QuestionResponseModel> _updateQuestions(
+    List<QuestionResponseModel> oldQuestions,
+    List<Map<String, dynamic>> evaluations,
+  ) {
+    final updatedQuestions =
+        oldQuestions.map((question) {
+          final evaluation = evaluations.firstWhere(
+            (e) => e['question_id'] == question.remoteId,
+          );
+          final isCorrect = evaluation['is_correct'] as int == 1;
+          final fit =
+              evaluation['fit'] != null ? evaluation['fit'] as String : '';
 
-      return question.copyWith(isCorrect: isCorrect, fit: fit);
-    }).toList();
+          return question.copyWith(isCorrect: isCorrect, fit: fit);
+        }).toList();
 
     return updatedQuestions;
   }
@@ -132,7 +156,9 @@ class ApiQuizzData implements IQuizRemoteData {
         if (item is Map<String, dynamic>) {
           return item;
         } else {
-          throw FormatException('Invalid data format: expected Map<String, dynamic>');
+          throw FormatException(
+            'Invalid data format: expected Map<String, dynamic>',
+          );
         }
       }).toList();
     } else {
