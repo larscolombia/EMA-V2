@@ -222,7 +222,7 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
               Text(caseModel.anamnesis, style: Theme.of(context).textTheme.bodySmall, maxLines: 3, overflow: TextOverflow.ellipsis),
               const Divider(height: 32),
               if (caseModel.type == ClinicalCaseType.interactive) _interactiveResultsStats(),
-              GptMarkdown(evalMsg.text),
+              _EvaluationMarkdown(text: evalMsg.text),
               const SizedBox(height: 32),
               AnimatedCrossFade(
                 firstChild: const SizedBox.shrink(),
@@ -313,6 +313,63 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
             );
           }),
         ],
+      ),
+    );
+  }
+}
+
+/// Renderiza markdown de la evaluación final con estilos consistentes y
+/// limpieza de posibles restos del prompt original (en caso de que el modelo
+/// lo haya devuelto parcialmente).
+class _EvaluationMarkdown extends StatelessWidget {
+  final String text;
+  const _EvaluationMarkdown({required this.text});
+
+  String _clean(String raw) {
+    var t = raw.trim();
+    // Si por error vino incluido el prompt ("Genera una EVALUACIÓN FINAL DETALLADA"), lo removemos
+    final promptHead = 'genera una evaluación final detallada';
+    final lower = t.toLowerCase();
+    final idx = lower.indexOf(promptHead);
+    if (idx == 0) {
+      // Cortar hasta después de la última línea "Intervenciones del usuario" si existe
+      final marker = 'intervenciones del usuario para evaluar:';
+      final mIdx = lower.indexOf(marker);
+      if (mIdx > 0) {
+        // saltar esa línea
+        final cutIdx = lower.indexOf('\n', mIdx + marker.length);
+        if (cutIdx > 0 && cutIdx < t.length) {
+          t = t.substring(cutIdx + 1).trimLeft();
+        }
+      }
+    }
+    return t;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cleaned = _clean(text);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border.all(color: theme.colorScheme.primary.withOpacity(0.25)),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: SelectableText(
+        cleaned,
+        style: theme.textTheme.bodyMedium,
+        textAlign: TextAlign.left,
       ),
     );
   }

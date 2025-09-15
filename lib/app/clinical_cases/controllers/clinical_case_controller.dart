@@ -1,5 +1,6 @@
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/clinical_case_generate_data.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/life_stage.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/sex_and_status.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/services/clinical_cases_services.dart';
@@ -688,9 +689,13 @@ class ClinicalCaseController extends GetxController
   }
 
   Future<void> showInteractiveSummaryIfAvailable() async {
+    // Función placeholder - implementar lógica específica si es necesaria
+    print('showInteractiveSummaryIfAvailable called');
     if (hasHiddenInteractiveSummary) {
-      takeInteractiveSummary();
-      interactiveEvaluationGenerated.value = true;
+      final summary = takeInteractiveSummary();
+      if (summary != null) {
+        interactiveEvaluationGenerated.value = true;
+      }
     }
   }
 }

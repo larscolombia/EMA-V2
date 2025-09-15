@@ -68,12 +68,11 @@ class _ChatMessageAiState extends State<ChatMessageAi>
             margin: const EdgeInsets.only(
               top: 8,
               bottom: 8,
-              right: 24,
-              left: 12,
+              right: 8, // Reducido el margen derecho
+              left: 8,  // Reducido el margen izquierdo
             ),
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.75,
-            ),
+            // Usar todo el ancho disponible sin restricciones
+            width: double.infinity,
             decoration: BoxDecoration(
               color: const Color.fromRGBO(58, 12, 140, 0.9),
               borderRadius: BorderRadius.circular(12),

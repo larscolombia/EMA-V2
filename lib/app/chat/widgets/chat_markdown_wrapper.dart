@@ -59,61 +59,17 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    final content = GptMarkdown(
-      _processedText,
-      textAlign: TextAlign.justify,
-      textScaler: const TextScaler.linear(1),
-      style: widget.style,
-      linkBuilder: (context, label, path, style) {
-        return Text(
-          label.toString(),
-          style: style.copyWith(
-            color: Colors.lightBlue,
-            decoration: TextDecoration.underline,
-          ),
-        );
-      },
-    );
+    Widget md = GptMarkdown(_processedText);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Para tablas o bloques muy anchos permitimos scroll horizontal
-        if (_processedText.contains('| ---') || _processedText.contains('```'))
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 0),
-              child: content,
-            ),
-          )
-        else
-          content,
-
-        if (_isLongContent)
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () {
-                setState(() {
-                  _isExpanded = !_isExpanded;
-                });
-              },
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                minimumSize: const Size(40, 20),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                _isExpanded ? 'Ver menos' : 'Ver más',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.7),
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
+    if (_processedText.contains('| ---') || _processedText.contains('```')) {
+      md = SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 0),
+          child: md,
+        ),
+      );
+    }
+    return SelectionArea(child: md);
   }
 }
