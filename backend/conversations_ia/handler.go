@@ -139,7 +139,7 @@ Sin embargo, se encontró la siguiente información en PubMed:
 
 %s
 
-IMPORTANTE: 
+IMPORTANTE:
 - Esta información proviene de PubMed, no de la base de conocimiento interna
 - Incluye las referencias PMID cuando estén disponibles
 - Indica claramente: "Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)"
@@ -147,55 +147,27 @@ IMPORTANTE:
 - Esta es información complementaria de fuentes externas
 `, prompt, pubmedResult)
 
-        stream, err := h.AI.StreamAssistantMessage(ctx, threadID, pubmedPrompt)
-        return stream, "pubmed", err
-    }
-    
-    // Si no encontramos en ninguna fuente, usar el Assistant para dar una respuesta natural
-    log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
-    
-    noInfoPrompt := fmt.Sprintf(`No se encontró información relevante sobre "%s" en ninguna de las fuentes configuradas:
-		ch := make(chan string, 1)
-		go func() {
-			defer close(ch)
-			ch <- pubmedPrompt
-		}()
-		return ch, "pubmed", nil
+		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, pubmedPrompt)
+		return stream, "pubmed", err
 	}
 
-	// Si no encontramos en ninguna fuente, responder claramente
+	// Si no encontramos en ninguna fuente, responder claramente con una guía general
 	log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
-
 	noInfoPrompt := fmt.Sprintf(`No se encontró información relevante sobre "%s" en ninguna de las fuentes configuradas:
 
 1. ❌ Base de conocimiento médico interno (vector %s): Sin resultados
 2. ❌ PubMed (https://pubmed.ncbi.nlm.nih.gov/): Sin resultados
 
-Por favor, proporciona una respuesta útil sobre este tema basándose en conocimiento médico general y recomienda:
+Proporciona una respuesta útil basada en conocimiento médico general e incluye recomendaciones:
 - Reformular la pregunta con términos más específicos
 - Verificar la ortografía de términos médicos
-- Considerar consultar fuentes médicas adicionales o un profesional de la salud
+- Consultar fuentes médicas adicionales o un profesional de la salud
 - Usar sinónimos o términos alternativos para el concepto buscado
 
 Pregunta original: %s`, prompt, targetVectorID, prompt)
 
-    stream, err := h.AI.StreamAssistantMessage(ctx, threadID, noInfoPrompt)
-    return stream, "general", err
-Recomendaciones:
-- Reformula tu pregunta con términos más específicos
-- Verifica la ortografía de términos médicos
-- Considera consultar fuentes médicas adicionales o un profesional de la salud
-- Usa sinónimos o términos alternativos para el concepto que buscas
-
-Estado: Búsqueda sin resultados en fuentes verificadas`, prompt, targetVectorID)
-
-	ch := make(chan string, 1)
-	go func() {
-		defer close(ch)
-		ch <- noInfoPrompt
-	}()
-
-	return ch, "none", nil
+	stream, err := h.AI.StreamAssistantMessage(ctx, threadID, noInfoPrompt)
+	return stream, "general", err
 }
 
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
@@ -385,7 +357,7 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 	log.Printf("[conv][Message][multipart][file] thread=%s name=%s size=%d ext=%s", threadID, upFile.Filename, upFile.Size, ext)
 	// Audio -> transcripción
 	if isAudioExt(ext) {
-		if text, err := h.AI.TranscribeFile(c, tmp); err == nil && strings.TrimSpace(text) != "" {
+		if text, err := h.AI.TranscribeFile(c.Request.Context(), tmp); err == nil && strings.TrimSpace(text) != "" {
 			if strings.TrimSpace(prompt) != "" {
 				prompt += "\n\n[Transcripción]:\n" + text
 			} else {

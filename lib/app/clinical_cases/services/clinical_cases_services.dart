@@ -357,9 +357,8 @@ IMPORTANTE:
     final evaluationPrompt = ChatMessageModel.user(
       chatId: clinicalCase.uid,
       // Prefijo especial para poder filtrar fácilmente en UI sin cambiar schema
-      text: '[[HIDDEN_EVAL_PROMPT]] Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
       text:
-          'Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
+          '[[HIDDEN_EVAL_PROMPT]] Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
           'Usa SOLO las intervenciones listadas (no inventes nuevas). Devuelve en Markdown con EXACTAS estas secciones y encabezados:'
           '\n# Resumen Clínico (2-4 frases concisas)'
           '\n## Desempeño global (2-3 frases evaluando razonamiento clínico, estructura y priorización)'
