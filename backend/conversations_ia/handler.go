@@ -71,6 +71,15 @@ type Handler struct {
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
 	const targetVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
 
+	// Smalltalk/Saludo: responder cordialmente sin consultar fuentes
+	if isSmallTalk(prompt) {
+		reply := smallTalkReply(prompt)
+		ch := make(chan string, 1)
+		ch <- reply
+		close(ch)
+		return ch, "smalltalk", nil
+	}
+
 	// Primero intentar búsqueda en el vector store específico con metadatos
 	log.Printf("[conv][SmartMessage][start] thread=%s target_vector=%s", threadID, targetVectorID)
 
@@ -133,47 +142,89 @@ INSTRUCCIONES IMPORTANTES:
 	if err == nil && strings.TrimSpace(pubmedResult) != "" {
 		log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
 
-		pubmedPrompt := fmt.Sprintf(`La información solicitada sobre "%s" no se encontró en la base de conocimiento interno.
+		// Mensaje directo para el usuario, evitando exponer instrucciones internas
+		pubmedText := fmt.Sprintf(`Se encontró información relevante en PubMed sobre "%s".
 
-Sin embargo, se encontró la siguiente información en PubMed:
-
+Resumen de evidencia:
 %s
 
-IMPORTANTE:
-- Esta información proviene de PubMed, no de la base de conocimiento interna
-- Incluye las referencias PMID cuando estén disponibles
-- Indica claramente: "Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)"
-- Mantén el rigor científico y cita estudios específicos cuando sea posible
-- Esta es información complementaria de fuentes externas
-`, prompt, pubmedResult)
+Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)`, prompt, pubmedResult)
 
-		// Para mayor control en tests y mensajes, emitimos el prompt directamente como stream estático
 		ch := make(chan string, 1)
-		ch <- pubmedPrompt
+		ch <- pubmedText
 		close(ch)
 		return ch, "pubmed", nil
 	}
 
 	// Si no encontramos en ninguna fuente, responder claramente con una guía general
 	log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
-	noInfoPrompt := fmt.Sprintf(`No se encontró información relevante sobre "%s" en ninguna de las fuentes configuradas:
+	userFacing := fmt.Sprintf(`No se encontró información relevante sobre "%s" en las fuentes configuradas.
 
-1. ❌ Base de conocimiento médico interno (vector %s): Sin resultados
-2. ❌ PubMed (https://pubmed.ncbi.nlm.nih.gov/): Sin resultados
+Fuentes consultadas:
+- Base de conocimiento interno (vector %s): sin resultados
+- PubMed (https://pubmed.ncbi.nlm.nih.gov/): sin resultados
 
-Proporciona una respuesta útil basada en conocimiento médico general e incluye recomendaciones:
-- Reformular la pregunta con términos más específicos
-- Verificar la ortografía de términos médicos
-- Consultar fuentes médicas adicionales o un profesional de la salud
-- Usar sinónimos o términos alternativos para el concepto buscado
+Sugerencias para continuar:
+- Reformula la pregunta con términos más específicos.
+- Verifica la ortografía de términos médicos.
+- Consulta fuentes médicas adicionales o un profesional de la salud.
+- Usa sinónimos o términos alternativos para el concepto buscado.
 
 Pregunta original: %s`, prompt, targetVectorID, prompt)
 
-	// Emitir texto estático y marcar source como 'none' (alineado con tests)
+	// Emitir texto estático y marcar source como 'none'
 	ch := make(chan string, 1)
-	ch <- noInfoPrompt
+	ch <- userFacing
 	close(ch)
 	return ch, "none", nil
+}
+
+// isSmallTalk detecta saludos breves y cortesía sin contenido médico
+func isSmallTalk(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return false
+	}
+	// límites: hasta 8 palabras y contiene saludos comunes, sin términos clínicos obvios
+	if len(strings.Fields(t)) > 8 {
+		return false
+	}
+	greetings := []string{"hola", "buenos dias", "buenos días", "buenas tardes", "buenas noches", "que tal", "qué tal", "como estas", "cómo estás", "hey", "saludos", "gracias", "adios", "adiós"}
+	medicalHints := []string{"sintoma", "síntoma", "diagnost", "tratam", "fiebre", "gripe", "asma", "hipert", "diabet", "virus", "bacteria"}
+	hasGreet := false
+	for _, g := range greetings {
+		if strings.Contains(t, g) {
+			hasGreet = true
+			break
+		}
+	}
+	if !hasGreet {
+		return false
+	}
+	for _, m := range medicalHints {
+		if strings.Contains(t, m) {
+			return false
+		}
+	}
+	return true
+}
+
+// smallTalkReply construye una respuesta breve y amable
+func smallTalkReply(s string) string {
+	t := strings.ToLower(s)
+	if strings.Contains(t, "gracias") {
+		return "¡Con gusto! ¿En qué puedo ayudarte hoy?"
+	}
+	if strings.Contains(t, "buenos dias") || strings.Contains(t, "buenos días") {
+		return "¡Buenos días! ¿En qué puedo ayudarte?"
+	}
+	if strings.Contains(t, "buenas tardes") {
+		return "¡Buenas tardes! ¿En qué puedo ayudarte?"
+	}
+	if strings.Contains(t, "buenas noches") {
+		return "¡Buenas noches! ¿En qué puedo ayudarte?"
+	}
+	return "¡Hola! Estoy bien, gracias. ¿En qué puedo ayudarte?"
 }
 
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
@@ -299,6 +350,10 @@ func (h *Handler) Message(c *gin.Context) {
 	// Emitir señales de etapa antes del contenido
 	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 	switch source {
+	case "smalltalk":
+		stages = []string{"__STAGE__:start", "__STAGE__:smalltalk", "__STAGE__:streaming_answer"}
+		sseMaybeCapture(c, wrapWithStages(stages, stream), req.ThreadID)
+		return
 	case "rag":
 		stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
 	case "pubmed":
@@ -360,6 +415,10 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		log.Printf("[conv][Message][multipart][smart.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 		switch source {
+		case "smalltalk":
+			stages = []string{"__STAGE__:start", "__STAGE__:smalltalk", "__STAGE__:streaming_answer"}
+			sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
+			return
 		case "rag":
 			stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
 		case "pubmed":
@@ -371,15 +430,27 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(upFile.Filename))
-	tmpDir := "./tmp"
-	_ = os.MkdirAll(tmpDir, 0o755)
-	tmp := filepath.Join(tmpDir, upFile.Filename)
-	if err := c.SaveUploadedFile(upFile, tmp); err != nil {
-		log.Printf("[conv][Message][multipart][error] save_upload err=%v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+	// Usar directorio temporal del sistema para mayor compatibilidad (Windows/Linux) y crear subcarpeta
+	tmpDir := filepath.Join(os.TempDir(), "ema_uploads")
+	if mkErr := os.MkdirAll(tmpDir, 0o755); mkErr != nil {
+		log.Printf("[conv][Message][multipart][error] mkdir_tmp err=%v", mkErr)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed", "code": "tmp_dir_unavailable"})
 		return
 	}
-	log.Printf("[conv][Message][multipart][file] thread=%s name=%s size=%d ext=%s", threadID, upFile.Filename, upFile.Size, ext)
+	// Sanitizar nombre de archivo para evitar caracteres no válidos en Windows y colisiones
+	safeBase := sanitizeFilename(upFile.Filename)
+	base := strings.TrimSuffix(safeBase, ext)
+	if base == "" {
+		base = "upload"
+	}
+	safeName := fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
+	tmp := filepath.Join(tmpDir, safeName)
+	if err := c.SaveUploadedFile(upFile, tmp); err != nil {
+		log.Printf("[conv][Message][multipart][error] save_upload name=%s safe=%s tmp=%s err=%v", upFile.Filename, safeName, tmp, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed", "code": "upload_save_failed"})
+		return
+	}
+	log.Printf("[conv][Message][multipart][file] thread=%s name=%s -> safe=%s size=%d ext=%s", threadID, upFile.Filename, filepath.Base(tmp), upFile.Size, ext)
 	// Audio -> transcripción
 	if isAudioExt(ext) {
 		if text, err := h.AI.TranscribeFile(c.Request.Context(), tmp); err == nil && strings.TrimSpace(text) != "" {
@@ -600,6 +671,38 @@ func isAudioExt(ext string) bool {
 	}
 	return false
 }
+
+// sanitizeFilename reemplaza caracteres inválidos para Windows y normaliza espacios.
+// Mantiene solo letras/números/espacios/._- y elimina el resto.
+func sanitizeFilename(name string) string {
+	// Tomar solo el base name por seguridad
+	name = filepath.Base(name)
+	// Eliminar caracteres de control y reservados de Windows: <>:"/\|?*
+	b := make([]rune, 0, len(name))
+	for _, r := range name {
+		if r < 0x20 { // control chars
+			continue
+		}
+		switch r {
+		case '<', '>', ':', '"', '/', '\\', '|', '?', '*':
+			b = append(b, '_')
+		default:
+			// Permitir runas comunes; opcionalmente restringir más
+			b = append(b, r)
+		}
+	}
+	cleaned := strings.TrimSpace(string(b))
+	if cleaned == "" {
+		return "upload"
+	}
+	// Compactar espacios consecutivos
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	// Limitar longitud razonable
+	if len(cleaned) > 120 {
+		cleaned = cleaned[:120]
+	}
+	return cleaned
+}
 func errMsg(err error) string {
 	if err == nil {
 		return ""
@@ -629,7 +732,12 @@ func sseStream(c *gin.Context, ch <-chan string) {
 		if tok == "" {
 			continue
 		}
-		_, _ = c.Writer.Write([]byte("data: " + sanitize(tok) + "\n\n"))
+		// Preservar saltos de línea según protocolo SSE: cada línea con prefijo 'data: '
+		lines := strings.Split(tok, "\n")
+		for _, ln := range lines {
+			_, _ = c.Writer.Write([]byte("data: " + ln + "\n"))
+		}
+		_, _ = c.Writer.Write([]byte("\n"))
 		c.Writer.Flush()
 	}
 }

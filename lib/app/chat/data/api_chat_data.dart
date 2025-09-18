@@ -194,15 +194,37 @@ class ApiChatData implements IApiChatData {
       // Manejo de estados no 200 (p. ej., 202 processing, 4xx/5xx errores)
       if (response.statusCode != 200) {
         final text = await _readResponseBody(body);
+        // Intentar parsear JSON para mensajes amigables
+        Map<String, dynamic>? jsonMap;
+        try {
+          jsonMap = json.decode(text) as Map<String, dynamic>;
+        } catch (_) {
+          jsonMap = null;
+        }
         if (response.statusCode == 202) {
-          final preview =
-              text.isNotEmpty
-                  ? text
-                  : 'Estamos procesando tu documento. Vuelve a intentarlo en unos segundos.';
-          return ChatMessageModel.ai(chatId: threadId, text: preview);
+          final msg =
+              jsonMap != null && (jsonMap['status'] == 'processing')
+                  ? 'Estamos procesando tu documento. Vuelve a intentarlo en unos segundos.'
+                  : (text.isNotEmpty
+                      ? text
+                      : 'Estamos procesando tu documento. Vuelve a intentarlo en unos segundos.');
+          return ChatMessageModel.ai(chatId: threadId, text: msg);
+        }
+        if (response.statusCode == 413 ||
+            (jsonMap?['code'] == 'file_too_large' ||
+                jsonMap?['code'] == 'file_too_large_nginx')) {
+          throw Exception(
+            'El archivo es demasiado grande. Límite: ${(jsonMap?['max_size_mb'] ?? 100)} MB',
+          );
+        }
+        if (response.statusCode == 403 &&
+            (jsonMap?['error']?.toString().contains('quota') ?? false)) {
+          throw Exception(
+            'QUOTA_EXCEEDED: Límite alcanzado para subir archivos en tu plan actual',
+          );
         }
         throw Exception(
-          'Error del servidor (${response.statusCode}): ${text.isNotEmpty ? text : 'sin detalle'}',
+          'Error del servidor (${response.statusCode}): ${jsonMap?['error'] ?? (text.isNotEmpty ? text : 'sin detalle')}',
         );
       }
       final stream = utf8.decoder.bind(body.stream);

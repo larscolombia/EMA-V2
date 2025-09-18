@@ -589,17 +589,23 @@ func randomizeQuestions(qs []map[string]any) []map[string]any {
 					newOpts[pos] = opts[oldIdx]
 				}
 				q["options"] = newOpts
-				// ensure answer is still one of options; if not, set to closest match by case-insensitive compare
-				if ans == "" || !containsIgnoreCase(newOpts, ans) {
-					// try find case-insensitive match from old options
-					for _, o := range newOpts {
-						if strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(ans)) {
-							ans = o
-							break
+				// Map answer to shuffled options without bias
+				if ans == "" {
+					ans = newOpts[randpkg.Intn(len(newOpts))]
+				} else if !containsIgnoreCase(newOpts, ans) {
+					best := bestSimilarityOption(ans, newOpts)
+					if best != "" {
+						ans = best
+					} else {
+						for _, o := range newOpts {
+							if strings.EqualFold(strings.TrimSpace(o), strings.TrimSpace(ans)) {
+								ans = o
+								break
+							}
 						}
-					}
-					if ans == "" || !containsIgnoreCase(newOpts, ans) {
-						ans = newOpts[0]
+						if !containsIgnoreCase(newOpts, ans) {
+							ans = newOpts[randpkg.Intn(len(newOpts))]
+						}
 					}
 				}
 				q["answer"] = ans
@@ -619,9 +625,68 @@ func randomizeQuestions(qs []map[string]any) []map[string]any {
 		}
 	}
 	return qs
+
 }
 
-// --- Repair helpers --- //
+// bestSimilarityOption picks the option with highest Jaccard similarity on token sets.
+// Returns empty string if no option shares tokens with the answer.
+func bestSimilarityOption(answer string, options []string) string {
+	ansTok := tokenizeSimple(answer)
+	best := ""
+	bestScore := -1.0
+	for _, o := range options {
+		score := jaccardSimple(ansTok, tokenizeSimple(o))
+		if score > bestScore {
+			bestScore = score
+			best = o
+		}
+	}
+	if bestScore <= 0 {
+		return ""
+	}
+	return best
+}
+
+// tokenizeSimple lowercases and extracts alphanumeric tokens as a set.
+func tokenizeSimple(s string) map[string]struct{} {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return map[string]struct{}{}
+	}
+	// Replace non-alphanumeric with spaces
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == 'á' || r == 'é' || r == 'í' || r == 'ó' || r == 'ú' || r == 'ñ' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune(' ')
+		}
+	}
+	parts := strings.Fields(b.String())
+	out := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		out[p] = struct{}{}
+	}
+	return out
+}
+
+// jaccardSimple computes Jaccard similarity between two token sets.
+func jaccardSimple(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for k := range a {
+		if _, ok := b[k]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
 
 // repairGenerateJSON asks the assistant in the same thread to rewrite its last message
 // as strict JSON with exactly n questions. Returns the repaired JSON string and whether it succeeded.

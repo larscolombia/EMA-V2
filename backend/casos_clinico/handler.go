@@ -244,20 +244,27 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		}
 	}
 	// Anexar referencias (RAG + PubMed) de forma no disruptiva: al final de management
-	func() {
-		// proteger contra pánicos por tipos inesperados
-		defer func() { _ = recover() }()
-		if caseMap, ok := parsed["case"].(map[string]any); ok {
-			q := buildCaseQuery(caseMap)
-			if strings.TrimSpace(q) != "" {
-				refs := collectEvidence(ctx, h.aiAnalytical, q)
-				if strings.TrimSpace(refs) != "" {
-					mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
-					caseMap["management"] = appendRefs(mg, refs)
+	// Solo si está habilitado por variable de entorno para evitar timeouts
+	if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+		func() {
+			// proteger contra pánicos por tipos inesperados
+			defer func() { _ = recover() }()
+			// Timeout más agresivo para búsquedas de evidencia (10s máximo)
+			refCtx, refCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer refCancel()
+
+			if caseMap, ok := parsed["case"].(map[string]any); ok {
+				q := buildCaseQuery(caseMap)
+				if strings.TrimSpace(q) != "" {
+					refs := collectEvidence(refCtx, h.aiAnalytical, q)
+					if strings.TrimSpace(refs) != "" {
+						mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
+						caseMap["management"] = appendRefs(mg, refs)
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -342,10 +349,16 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		// Intentar inferir si hay evidencia RAG/PubMed para emitir etapas más precisas.
 		refs := ""
 		// collectEvidence hace búsquedas en vector store y PubMed y devuelve bloque de referencias
-		func() {
-			defer func() { _ = recover() }()
-			refs = collectEvidence(ctx, h.aiAnalytical, userPrompt)
-		}()
+		// Solo buscar evidencia si está habilitado para evitar timeouts
+		if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+			func() {
+				defer func() { _ = recover() }()
+				// Timeout más agresivo para búsquedas de evidencia en chat (5s máximo)
+				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+				defer refCancel()
+				refs = collectEvidence(refCtx, h.aiAnalytical, userPrompt)
+			}()
+		}
 
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 		if strings.TrimSpace(refs) == "" {
@@ -925,6 +938,10 @@ func safeAppendRefsToRespuesta(ctx context.Context, ai Assistant, parsed *map[st
 	if parsed == nil {
 		return
 	}
+	// Solo buscar referencias si está habilitado para evitar timeouts
+	if os.Getenv("CLINICAL_APPEND_REFS") != "true" {
+		return
+	}
 	p := *parsed
 	r, ok := p["respuesta"].(map[string]any)
 	if !ok {
@@ -939,7 +956,10 @@ func safeAppendRefsToRespuesta(ctx context.Context, ai Assistant, parsed *map[st
 	if query == "" {
 		return
 	}
-	refs := collectEvidence(ctx, ai, query)
+	// Timeout agresivo para evitar bloqueos
+	refCtx, refCancel := context.WithTimeout(ctx, 8*time.Second)
+	defer refCancel()
+	refs := collectEvidence(refCtx, ai, query)
 	if strings.TrimSpace(refs) == "" {
 		return
 	}
