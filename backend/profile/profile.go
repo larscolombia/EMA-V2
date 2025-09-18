@@ -36,11 +36,20 @@ func getProfile(c *gin.Context) {
 	log.Printf("[PROFILE][GET] incoming request: path=%s headers=%v", c.Request.URL.Path, c.Request.Header)
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token requerido"}); return }
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token requerido"})
+		return
+	}
 	email, ok := login.GetEmailFromToken(token)
-	if !ok { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token inválido o expirado"}); return }
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
+		return
+	}
 	user := migrations.GetUserByEmail(email)
-	if user == nil { c.JSON(http.StatusUnauthorized, gin.H{"error":"Usuario no encontrado"}); return }
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
 
 	// Ensure user has at least a Free subscription so app quotas work
 	if err := migrations.EnsureFreeSubscriptionForUser(user.ID); err != nil {
@@ -75,18 +84,29 @@ func getOverview(c *gin.Context) {
 	log.Printf("[OVERVIEW][GET] incoming request: path=%s", c.Request.URL.Path)
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token requerido"}); return }
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token requerido"})
+		return
+	}
 	email, ok := login.GetEmailFromToken(token)
-	if !ok { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token inválido o expirado"}); return }
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
+		return
+	}
 	user := migrations.GetUserByEmail(email)
-	if user == nil { c.JSON(http.StatusUnauthorized, gin.H{"error":"Usuario no encontrado"}); return }
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
 
 	// Ensure at least a free subscription
 	if err := migrations.EnsureFreeSubscriptionForUser(user.ID); err != nil {
 		log.Printf("[OVERVIEW][GET] ensure free subscription failed for userID=%d: %v", user.ID, err)
 	}
 	activeSub, err := migrations.GetActiveSubscriptionForUser(user.ID)
-	if err != nil { log.Printf("[OVERVIEW][GET] fetch active subscription failed userID=%d: %v", user.ID, err) }
+	if err != nil {
+		log.Printf("[OVERVIEW][GET] fetch active subscription failed userID=%d: %v", user.ID, err)
+	}
 	prof := userToMap(user)
 	if activeSub != nil {
 		// Detect anomaly: remaining zero but plan limits > 0
@@ -101,13 +121,17 @@ func getOverview(c *gin.Context) {
 				log.Printf("[OVERVIEW][AUTO-RESET][DETECT] user_id=%d consultations=0 clinical_cases=0 plan_consultations=%v plan_clinical_cases=%v", user.ID, planCons, planClin)
 				if err := migrations.ResetActiveSubscriptionQuotas(user.ID); err != nil {
 					log.Printf("[OVERVIEW][AUTO-RESET][ERROR] user_id=%d err=%v", user.ID, err)
-				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil { activeSub = refreshed }
+				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil {
+					activeSub = refreshed
+				}
 			} else if clinZero && planClin > 0 { // Caso 2: solo clinical_cases en cero pero plan lo ofrece
 				log.Printf("[OVERVIEW][AUTO-REPAIR][CLINICAL_CASES_ONLY] user_id=%d plan_clinical_cases=%d", user.ID, planClin)
 				// Reparar solo clinical_cases usando actualización directa
 				if err := migrations.ResetActiveSubscriptionQuotas(user.ID); err != nil {
 					log.Printf("[OVERVIEW][AUTO-REPAIR][ERROR] user_id=%d err=%v", user.ID, err)
-				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil { activeSub = refreshed }
+				} else if refreshed, err2 := migrations.GetActiveSubscriptionForUser(user.ID); err2 == nil && refreshed != nil {
+					activeSub = refreshed
+				}
 			}
 		}
 		prof["active_subscription"] = activeSub
@@ -120,11 +144,11 @@ func getOverview(c *gin.Context) {
 
 	// Stats actualmente devueltos como parte del overview para evitar múltiples llamadas.
 	stats := gin.H{
-		"clinical_cases_count": 0,
-		"total_tests":          0,
-		"test_progress":        []any{},
+		"clinical_cases_count":  0,
+		"total_tests":           0,
+		"test_progress":         []any{},
 		"most_studied_category": nil,
-		"chats":                []any{},
+		"chats":                 []any{},
 	}
 
 	duration := time.Since(start)
@@ -165,10 +189,25 @@ func updateProfile(c *gin.Context) {
 		file, err := c.FormFile("profile_image")
 		if err != nil {
 			log.Printf("[PROFILE][POST] multipart without 'profile_image' field: %v", err)
-			c.JSON(http.StatusBadRequest, gin.H{"message": "Imagen no proporcionada"})
+			c.JSON(http.StatusBadRequest, gin.H{"message": "Imagen no proporcionada", "code": "image_missing"})
 			return
 		}
 		log.Printf("[PROFILE][POST] uploading image: filename=%s size=%d userID=%d", file.Filename, file.Size, user.ID)
+		// Validaciones básicas de tamaño (10 MB por defecto)
+		maxMB := 10
+		if envMax := os.Getenv("PROFILE_IMAGE_MAX_MB"); envMax != "" {
+			if n, err := strconv.Atoi(envMax); err == nil && n > 0 {
+				maxMB = n
+			}
+		}
+		if file.Size <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "Archivo vacío", "code": "image_empty"})
+			return
+		}
+		if file.Size > int64(maxMB*1024*1024) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "Imagen demasiado grande", "code": "image_too_large", "max_size_mb": maxMB})
+			return
+		}
 		// Create media folder per user
 		base := filepath.Join("media", fmt.Sprintf("user_%d", user.ID))
 		if err := os.MkdirAll(base, 0755); err != nil {
@@ -177,15 +216,12 @@ func updateProfile(c *gin.Context) {
 			return
 		}
 		// Save file
-		ext := filepath.Ext(file.Filename)
-		if ext == "" {
-			ext = ".jpg"
-		}
+		ext := normalizeImageExt(file.Filename, file.Header.Get("Content-Type"))
 		fileName := fmt.Sprintf("profile%s", ext)
 		dst := filepath.Join(base, fileName)
 		if err := c.SaveUploadedFile(file, dst); err != nil {
 			log.Printf("[PROFILE][POST] failed to save image to '%s': %v", dst, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo guardar la imagen"})
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo guardar la imagen", "code": "image_save_failed"})
 			return
 		}
 		// Store relative path in DB
@@ -256,5 +292,27 @@ func userToMap(u *migrations.User) map[string]interface{} {
 		"profile_image": u.ProfileImage,
 		"city":          u.City,
 		"profession":    u.Profession,
+	}
+}
+
+// normalizeImageExt returns a safe image extension based on filename and content-type.
+// Allowed: .jpg, .jpeg, .png, .webp. Default: .jpg.
+func normalizeImageExt(filename, contentType string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp":
+		return ext
+	}
+	// Infer from content type if possible
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	switch ct {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".jpg"
 	}
 }

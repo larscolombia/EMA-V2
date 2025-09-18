@@ -71,6 +71,26 @@ type Handler struct {
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
 	const targetVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
 
+	// Si el hilo tiene documentos adjuntos, forzar modo "doc-only":
+	// usar EXCLUSIVAMENTE el vector store del hilo y prohibir fuentes externas.
+	if hasDocs := h.threadHasDocuments(ctx, threadID); hasDocs {
+		vsID := h.AI.GetVectorStoreID(threadID)
+		// Prompt restrictivo: solo con documentos del hilo
+		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos adjuntos de este hilo.
+
+Pregunta del usuario: %s
+
+Instrucciones:
+- No utilices conocimiento externo ni otras fuentes.
+- Si los documentos no contienen información suficiente para responder, di claramente: "No hay suficiente información en los documentos adjuntos para responder".
+- Cita al final: "Fuente: documentos adjuntos del hilo".`, prompt)
+		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
+		if err != nil {
+			return nil, "doc_only", err
+		}
+		return stream, "doc_only", nil
+	}
+
 	// Smalltalk/Saludo: responder cordialmente sin consultar fuentes
 	if isSmallTalk(prompt) {
 		reply := smallTalkReply(prompt)
@@ -327,8 +347,28 @@ func (h *Handler) Message(c *gin.Context) {
 	start := time.Now()
 	log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d prompt_preview=\"%s\"", req.ThreadID, len(req.Prompt), sanitizePreview(req.Prompt))
 
-	// Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
-	stream, source, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt)
+	// Si el hilo tiene documentos, forzar respuesta solo con esos documentos; de lo contrario flujo inteligente
+	var (
+		stream <-chan string
+		source string
+		err    error
+	)
+	if h.threadHasDocuments(c.Request.Context(), req.ThreadID) {
+		vsID := h.AI.GetVectorStoreID(req.ThreadID)
+		prompt := fmt.Sprintf(`Responde usando EXCLUSIVAMENTE los documentos adjuntos de este hilo.
+
+Pregunta: %s
+
+Reglas:
+- No agregues conocimiento externo.
+- Si falta información, indícalo explícitamente.
+- Añade al final: "Fuente: documentos adjuntos del hilo".`, req.Prompt)
+		stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), req.ThreadID, prompt, vsID)
+		source = "doc_only"
+	} else {
+		// Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
+		stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt)
+	}
 	if err != nil {
 		code := classifyErr(err)
 		log.Printf("[conv][Message][json][smart.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
@@ -350,6 +390,10 @@ func (h *Handler) Message(c *gin.Context) {
 	// Emitir señales de etapa antes del contenido
 	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 	switch source {
+	case "doc_only":
+		stages = []string{"__STAGE__:start", "__STAGE__:doc_only", "__STAGE__:streaming_answer"}
+		sseMaybeCapture(c, wrapWithStages(stages, stream), req.ThreadID)
+		return
 	case "smalltalk":
 		stages = []string{"__STAGE__:start", "__STAGE__:smalltalk", "__STAGE__:streaming_answer"}
 		sseMaybeCapture(c, wrapWithStages(stages, stream), req.ThreadID)
@@ -393,8 +437,28 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 	}
 	start := time.Now()
 	log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile != nil, len(prompt))
-	if upFile == nil { // solo texto - usar flujo inteligente
-		stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
+	if upFile == nil { // solo texto
+		// Si el hilo ya tiene documentos, usar doc-only; si no, flujo inteligente
+		var (
+			stream <-chan string
+			source string
+			err    error
+		)
+		if h.threadHasDocuments(c.Request.Context(), threadID) {
+			vsID := h.AI.GetVectorStoreID(threadID)
+			p := fmt.Sprintf(`Responde usando EXCLUSIVAMENTE los documentos adjuntos de este hilo.
+
+Pregunta: %s
+
+Reglas:
+- No agregues conocimiento externo.
+- Si falta información, indícalo explícitamente.
+- Añade al final: "Fuente: documentos adjuntos del hilo".`, prompt)
+			stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
+			source = "doc_only"
+		} else {
+			stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt)
+		}
 		if err != nil {
 			code := classifyErr(err)
 			log.Printf("[conv][Message][multipart][smart.error] thread=%s code=%s err=%v", threadID, code, err)
@@ -414,6 +478,11 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 		log.Printf("[conv][Message][multipart][smart.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+		if source == "doc_only" {
+			stages = []string{"__STAGE__:start", "__STAGE__:doc_only", "__STAGE__:streaming_answer"}
+			sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
+			return
+		}
 		switch source {
 		case "smalltalk":
 			stages = []string{"__STAGE__:start", "__STAGE__:smalltalk", "__STAGE__:streaming_answer"}
@@ -643,7 +712,10 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 			base = pre + "\n\n" + base
 		}
 	}
-	stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), threadID, base)
+	// Al generar el resumen inicial, forzar que la respuesta se base EXCLUSIVAMENTE en el documento subido
+	// Reusar el vector store ya asegurado para este hilo
+	docSummaryPrompt := base + "\n\nReglas estrictas: Usa ÚNICAMENTE el contenido del documento adjunto. Si algún apartado no está presente en el documento, indícalo como 'No especificado'. No uses conocimiento externo. Al final añade: 'Fuente: " + filepath.Base(upFile.Filename) + "'."
+	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, docSummaryPrompt, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
@@ -659,8 +731,11 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	c.Header("X-Assistant-Start-Ms", time.Since(start).String())
 	c.Header("X-Thread-ID", threadID)
 	c.Header("X-Strict-Threads", "1")
-	log.Printf("[conv][PDF][stream] thread=%s file=%s rag_prompt=%s elapsed_ms=%d", threadID, upFile.Filename, ragPromptTag, time.Since(start).Milliseconds())
-	sseMaybeCapture(c, stream, threadID)
+	c.Header("X-Source-Used", "doc_only")
+	log.Printf("[conv][PDF][stream] thread=%s file=%s doc_only=1 rag_prompt=%s elapsed_ms=%d", threadID, upFile.Filename, ragPromptTag, time.Since(start).Milliseconds())
+	// Señales de etapa específicas para doc_only
+	stages := []string{"__STAGE__:start", "__STAGE__:doc_only", "__STAGE__:streaming_answer"}
+	sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 }
 
 // Utilidades
@@ -702,6 +777,18 @@ func sanitizeFilename(name string) string {
 		cleaned = cleaned[:120]
 	}
 	return cleaned
+}
+
+// threadHasDocuments determina si el hilo tiene archivos en su vector store (para activar modo doc-only)
+func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool {
+	if strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	files, err := h.AI.ListVectorStoreFiles(ctx, threadID)
+	if err != nil {
+		return false
+	}
+	return len(files) > 0
 }
 func errMsg(err error) string {
 	if err == nil {

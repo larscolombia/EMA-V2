@@ -124,7 +124,7 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
 
 	threadID, err := h.aiAnalytical.CreateThread(ctx)
@@ -184,7 +184,25 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 	select {
 	case content = <-ch:
 	case <-ctx.Done():
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "assistant timeout"})
+		// Fallback: entregar caso mínimo para evitar 504 en el cliente/proxy
+		c.JSON(http.StatusOK, map[string]any{
+			"case": map[string]any{
+				"id":                   0,
+				"title":                "Caso clínico analítico",
+				"type":                 "static",
+				"age":                  strings.TrimSpace(req.Age),
+				"sex":                  strings.TrimSpace(req.Sex),
+				"gestante":             boolToInt(req.Pregnant),
+				"is_real":              1,
+				"anamnesis":            "Paciente con motivo de consulta no especificado.",
+				"physical_examination": "Examen físico sin datos relevantes.",
+				"diagnostic_tests":     "Sin pruebas diagnósticas realizadas.",
+				"final_diagnosis":      "Diagnóstico reservado.",
+				"management":           "Manejo expectante.",
+			},
+			"thread_id": threadID,
+			"note":      "timeout",
+		})
 		return
 	}
 	jsonStr := extractJSON(content)
@@ -287,7 +305,7 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
@@ -339,8 +357,24 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	// Si el cliente solicita streaming SSE, emitimos eventos con marcadores de etapa
 	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
 	if strings.Contains(accept, "text/event-stream") {
-		// Obtener stream del assistant
-		ch, err := h.aiAnalytical.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
+		// Para SSE, pedimos TEXTO PLANO (no JSON) para que el frontend no reciba envoltorios.
+		// Instrucciones textuales equivalentes a la versión JSON:
+		textInstr := strings.Join([]string{
+			"Responde en TEXTO PLANO en español, sin markdown ni JSON.",
+			"Estructura: 2–3 párrafos (150–220 palabras en total) de razonamiento clínico progresivo,",
+			phaseInstr,
+			closingInstr,
+			"Separa párrafos con UNA línea en blanco. No uses viñetas ni tablas.",
+			"La ÚLTIMA línea (si NO cierras) debe ser SOLO una pregunta, sin prefijos ni texto adicional.",
+			"No inventes datos; apóyate en lo ya discutido. No incluyas 'Referencias' salvo que se indique cerrar.",
+		}, " ")
+
+		// Obtener stream de texto plano del assistant
+		prompt := strings.Join([]string{
+			"Mensaje del usuario:", userPrompt,
+			"\n\nInstrucciones:", textInstr,
+		}, " ")
+		ch, err := h.aiAnalytical.StreamAssistantMessage(ctx, threadID, prompt)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
 			return
@@ -391,7 +425,8 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	select {
 	case content = <-ch:
 	case <-ctx.Done():
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "assistant timeout"})
+		// Fallback: devolver texto plano en JSON simple para no romper UI
+		c.JSON(http.StatusOK, gin.H{"text": "No pude responder a tiempo. Intenta nuevamente.", "thread_id": threadID, "note": "timeout"})
 		return
 	}
 	jsonStr := extractJSON(content)
@@ -408,7 +443,13 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			if turn >= 10 {
 				safeAppendRefsToRespuesta(ctx, h.aiAnalytical, &parsed, req.Mensaje)
 			}
-			c.JSON(http.StatusOK, parsed)
+			// Responder solo texto para UI: {text, thread_id}
+			if respMap, ok := parsed["respuesta"].(map[string]any); ok {
+				txt := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+				c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
+			} else {
+				c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+			}
 			return
 		}
 	} else {
@@ -420,13 +461,17 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		if turn >= 10 {
 			safeAppendRefsToRespuesta(ctx, h.aiAnalytical, &parsed, req.Mensaje)
 		}
-		c.JSON(http.StatusOK, parsed)
+		// Responder solo texto para UI
+		if respMap, ok := parsed["respuesta"].(map[string]any); ok {
+			txt := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+			c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+		}
 		return
 	}
 	// Fallback text
-	fb := map[string]any{"respuesta": map[string]any{"text": strings.TrimSpace(content)}}
-	// Anexar referencias solo si estimamos cierre (no conocemos turno aquí); mantener simple: no anexar en fallback
-	c.JSON(http.StatusOK, fb)
+	c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
 }
 
 // GenerateInteractive creates the case and an initial question: returns { case: {...}, data: { questions: { texto,tipo,opciones } }, thread_id }
@@ -448,7 +493,7 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
 
 	threadID, err := h.aiInteractive.CreateThread(ctx)
@@ -501,7 +546,32 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	select {
 	case content = <-ch:
 	case <-ctx.Done():
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "assistant timeout"})
+		// Fallback: caso y pregunta mínimos para evitar 504
+		c.JSON(http.StatusOK, map[string]any{
+			"case": map[string]any{
+				"id":                   0,
+				"title":                "Caso clínico interactivo",
+				"type":                 "interactive",
+				"age":                  strings.TrimSpace(req.Age),
+				"sex":                  strings.TrimSpace(req.Sex),
+				"gestante":             boolToInt(req.Pregnant),
+				"is_real":              1,
+				"anamnesis":            "Paciente con motivo de consulta no especificado.",
+				"physical_examination": "Examen físico sin datos relevantes.",
+				"diagnostic_tests":     "Sin pruebas diagnósticas realizadas.",
+				"final_diagnosis":      "Diagnóstico reservado.",
+				"management":           "Manejo expectante.",
+			},
+			"data": map[string]any{
+				"questions": map[string]any{
+					"texto":    "¿Qué síntoma clave ampliarías primero?",
+					"tipo":     "open_ended",
+					"opciones": []string{},
+				},
+			},
+			"thread_id": threadID,
+			"note":      "timeout",
+		})
 		return
 	}
 	jsonStr := extractJSON(content)
@@ -518,19 +588,25 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	// Ensure minimal question present
 	ensureInteractiveDefaults(parsed, req)
 	// Anexar referencias al management del caso (no altera preguntas)
-	func() {
-		defer func() { _ = recover() }()
-		if caseMap, ok := parsed["case"].(map[string]any); ok {
-			q := buildCaseQuery(caseMap)
-			if strings.TrimSpace(q) != "" {
-				refs := collectEvidence(ctx, h.aiInteractive, q)
-				if strings.TrimSpace(refs) != "" {
-					mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
-					caseMap["management"] = appendRefs(mg, refs)
+	// Solo si está habilitado por env para evitar timeouts prolongados
+	if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+		func() {
+			defer func() { _ = recover() }()
+			if caseMap, ok := parsed["case"].(map[string]any); ok {
+				q := buildCaseQuery(caseMap)
+				if strings.TrimSpace(q) != "" {
+					// Timeout agresivo para evidencia en generación interactiva
+					refCtx, refCancel := context.WithTimeout(ctx, 8*time.Second)
+					defer refCancel()
+					refs := collectEvidence(refCtx, h.aiInteractive, q)
+					if strings.TrimSpace(refs) != "" {
+						mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
+						caseMap["management"] = appendRefs(mg, refs)
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -553,7 +629,7 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
@@ -579,7 +655,19 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	select {
 	case content = <-ch:
 	case <-ctx.Done():
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "assistant timeout"})
+		// Fallback: devolver estructura mínima para mantener el flujo
+		c.JSON(http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"feedback": "No pude responder a tiempo. Intenta nuevamente.",
+				"question": map[string]any{
+					"texto":    "Propón tu diagnóstico diferencial principal.",
+					"tipo":     "open_ended",
+					"opciones": []string{},
+				},
+				"thread_id": threadID,
+			},
+			"note": "timeout",
+		})
 		return
 	}
 	jsonStr := extractJSON(content)
@@ -983,4 +1071,17 @@ func wrapWithStages(stages []string, ch <-chan string) <-chan string {
 		close(out)
 	}()
 	return out
+}
+
+// getHTTPTimeoutSec lee el timeout HTTP en segundos para las rutas de casos clínicos
+// desde CLINICAL_HTTP_TIMEOUT_SEC. Por defecto 45 segundos.
+func getHTTPTimeoutSec() int {
+	v := strings.TrimSpace(os.Getenv("CLINICAL_HTTP_TIMEOUT_SEC"))
+	if v == "" {
+		return 45
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return 45
 }
