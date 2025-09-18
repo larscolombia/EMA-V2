@@ -6,16 +6,18 @@ import 'package:ema_educacion_medica_avanzada/common/widgets/show_error_widget.d
 import 'package:ema_educacion_medica_avanzada/config/routes/app_pages.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:ema_educacion_medica_avanzada/app/quizzes/widgets/full_feedback_animated.dart';
 
 class ClinicalCaseEvaluationView extends StatefulWidget {
   const ClinicalCaseEvaluationView({super.key});
 
   @override
-  State<ClinicalCaseEvaluationView> createState() => _ClinicalCaseEvaluationViewState();
+  State<ClinicalCaseEvaluationView> createState() =>
+      _ClinicalCaseEvaluationViewState();
 }
 
-class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView> {
+class _ClinicalCaseEvaluationViewState
+    extends State<ClinicalCaseEvaluationView> {
   final controller = Get.find<ClinicalCaseController>();
   bool showUserTurns = false;
 
@@ -52,133 +54,13 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
   @override
   void initState() {
     super.initState();
-    if (!controller.evaluationGenerated.value && controller.currentCase.value?.type == ClinicalCaseType.analytical) {
+    if (!controller.evaluationGenerated.value &&
+        controller.currentCase.value?.type == ClinicalCaseType.analytical) {
       controller.generateFinalEvaluation();
     }
   }
 
-  Widget _interactiveResultsStats() {
-    // Construir métricas desde las preguntas respondidas
-    final caseType = controller.currentCase.value?.type;
-    if (caseType != ClinicalCaseType.interactive) return const SizedBox.shrink();
-    final answered = controller.questions.where((q) => q.userAnswer != null && q.userAnswer!.isNotEmpty).toList();
-    int correct = 0;
-    for (final q in answered) {
-      final ans = q.answer ?? '';
-      final user = q.userAnswer ?? '';
-      if (ans.isNotEmpty && _answerIsCorrect(user, ans)) correct++;
-    }
-    final total = answered.length;
-    final pct = total == 0 ? 0 : (correct * 100 / total).round();
-    if (total == 0) return const SizedBox.shrink();
-    Color badgeColor;
-    if (pct >= 80) {
-      badgeColor = Colors.green; 
-    } else if (pct >= 50) {
-      badgeColor = Colors.orange; 
-    } else { 
-      badgeColor = Colors.red; 
-    }
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(top: 16, bottom: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: badgeColor.withOpacity(0.08),
-        border: Border.all(color: badgeColor.withOpacity(0.4)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.assessment_outlined, color: badgeColor),
-              const SizedBox(width: 8),
-              Text('Resultado de la evaluación', style: TextStyle(fontWeight: FontWeight.bold, color: badgeColor)),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text('Correctas: $correct / $total  ·  $pct%', style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      ),
-    );
-  }
-
-  // Heurísticas de normalización y similitud (paridad con backend)
-  String _stripLeadingLetterPrefix(String s) {
-    final trim = s.trim();
-    if (trim.length >= 3) {
-      final c = trim.codeUnitAt(0);
-      if ((c >= 'A'.codeUnitAt(0) && c <= 'D'.codeUnitAt(0)) || (c >= 'a'.codeUnitAt(0) && c <= 'd'.codeUnitAt(0))) {
-        final rest = trim.substring(1).trimLeft();
-        if (rest.startsWith('-') || rest.startsWith(')')) {
-          return rest.substring(1).trim();
-        }
-      }
-    }
-    return trim;
-  }
-
-  String _normalizeAnswer(String s) {
-    if (s.isEmpty) return '';
-    var out = s.trim().toLowerCase();
-    // Replace common accents -> simple map
-    const accents = {
-      'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u', 'ü': 'u', 'ñ': 'n'
-    };
-    accents.forEach((k, v) {
-      out = out.replaceAll(k, v);
-    });
-    // remove punctuation, keep letters/numbers and spaces
-    out = out.replaceAll(RegExp(r"[^\p{L}\p{N}\s]", unicode: true), ' ');
-    // collapse spaces
-    out = out.replaceAll(RegExp(r"\s+"), ' ').trim();
-    return out;
-  }
-
-  List<String> _tokenize(String s) {
-    if (s.isEmpty) return [];
-    return s.split(RegExp(r"\s+")).where((e) => e.isNotEmpty).toList();
-  }
-
-  double _jaccard(List<String> a, List<String> b) {
-    if (a.isEmpty || b.isEmpty) return 0.0;
-    final setA = <String>{};
-    final setB = <String>{};
-    for (final w in a) setA.add(w);
-    for (final w in b) setB.add(w);
-    var inter = 0;
-    for (final w in setA) if (setB.contains(w)) inter++;
-    final un = setA.length + setB.length - inter;
-    if (un == 0) return 0.0;
-    return inter / un;
-  }
-
-  bool _answerIsCorrect(String userRaw, String correctRaw) {
-    final userTrim = userRaw.trim();
-    // If either empty -> false
-    if (userTrim.isEmpty || correctRaw.trim().isEmpty) return false;
-    // strip leading letter prefixes like 'A - '
-    final userClean = _normalizeAnswer(_stripLeadingLetterPrefix(userRaw));
-    final correctClean = _normalizeAnswer(_stripLeadingLetterPrefix(correctRaw));
-    if (userClean.isEmpty || correctClean.isEmpty) return false;
-    if (userClean == correctClean) return true;
-    final ut = _tokenize(userClean);
-    final ct = _tokenize(correctClean);
-    if (ut.length >= 2) {
-      final jac = _jaccard(ut, ct);
-      if (jac >= 0.8) return true;
-      // subset allowance
-      var subset = true;
-      for (final w in ut) {
-        if (!ct.contains(w)) { subset = false; break; }
-      }
-      if (subset && (ut.length / (ct.isEmpty ? 1 : ct.length)) >= 0.5) return true;
-    }
-    if (userClean.length >= 15 && correctClean.contains(userClean)) return true;
-    return false;
-  }
+  // (Se removieron heurísticas de métricas de resultados; el diseño ahora depende del feedback generado)
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +77,9 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
         final isInteractive = caseModel.type == ClinicalCaseType.interactive;
         final hasHidden = controller.hasHiddenInteractiveSummary;
         // Evaluación mostrada solo si ya se reveló (interactiveEvaluationGenerated) o es analítico
-        final canShowEval = caseModel.type == ClinicalCaseType.analytical || controller.interactiveEvaluationGenerated.value;
+        final canShowEval =
+            caseModel.type == ClinicalCaseType.analytical ||
+            controller.interactiveEvaluationGenerated.value;
         if (!canShowEval && isInteractive && controller.isComplete.value) {
           // Mostrar pantalla con botón para revelar
           return _buildRevealButton(context, hasHidden);
@@ -210,33 +94,40 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                controller.currentCase.value?.type == ClinicalCaseType.interactive
+                caseModel.type == ClinicalCaseType.interactive
                     ? 'Evaluación final interactiva'
                     : 'Evaluación final analítica',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).primaryColor,
+                ),
               ),
               const SizedBox(height: 12),
-              Text(caseModel.anamnesis, style: Theme.of(context).textTheme.bodySmall, maxLines: 3, overflow: TextOverflow.ellipsis),
-              const Divider(height: 32),
-              if (caseModel.type == ClinicalCaseType.interactive) _interactiveResultsStats(),
-              _EvaluationMarkdown(text: evalMsg.text),
-              const SizedBox(height: 32),
-              AnimatedCrossFade(
-                firstChild: const SizedBox.shrink(),
-                secondChild: _buildUserTurns(context),
-                crossFadeState: showUserTurns ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-                duration: const Duration(milliseconds: 250),
+              Text(
+                caseModel.anamnesis,
+                style: Theme.of(context).textTheme.bodySmall,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
               ),
+              const Divider(height: 32),
+              // Feedback con mismo formato y orden que cuestionarios
+              FullFeedbackAnimated(
+                fitGlobal: evalMsg.text,
+                questions: controller.questions.toList(),
+                animate: false,
+                renderMarkdown: true,
+              ),
+              const SizedBox(height: 24),
               const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
                     child: OutlineAiButton(
-                      text: showUserTurns ? 'Ocultar intervenciones' : 'Ver intervenciones',
-                      onPressed: () => setState(() => showUserTurns = !showUserTurns),
+                      text: 'Ver intervenciones',
+                      onPressed: () => _showUserTurnsBottomSheet(context),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -264,16 +155,27 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
           children: [
             const Icon(Icons.lock_outline, size: 52),
             const SizedBox(height: 24),
-            Text('Evaluación final disponible', style: Theme.of(context).textTheme.titleLarge, textAlign: TextAlign.center),
+            Text(
+              'Evaluación final disponible',
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 12),
-            Text('Pulsa el botón para ver tu evaluación final del caso interactivo.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+            Text(
+              'Pulsa el botón para ver tu evaluación final del caso interactivo.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
             const SizedBox(height: 32),
             OutlineAiButton(
               text: 'Ver evaluación final',
-              onPressed: hasHidden ? () async {
-                await controller.showInteractiveSummaryIfAvailable();
-                setState(() {});
-              } : null,
+              onPressed:
+                  hasHidden
+                      ? () async {
+                        await controller.showInteractiveSummaryIfAvailable();
+                        setState(() {});
+                      }
+                      : null,
               isLoading: false,
             ),
             const SizedBox(height: 16),
@@ -287,90 +189,68 @@ class _ClinicalCaseEvaluationViewState extends State<ClinicalCaseEvaluationView>
     );
   }
 
-  Widget _buildUserTurns(BuildContext context) {
+  void _showUserTurnsBottomSheet(BuildContext context) {
     final caseId = controller.currentCase.value?.uid;
-    final turns = controller.messages.where((m) => !m.aiMessage && m.chatId == caseId).toList();
-    if (turns.isEmpty) {
-      return Text('Sin intervenciones de usuario registradas', style: Theme.of(context).textTheme.bodySmall);
-    }
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3),
-        borderRadius: BorderRadius.circular(12),
+    final turns =
+        controller.messages
+            .where((m) => !m.aiMessage && m.chatId == caseId)
+            .toList();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Intervenciones del usuario', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          ...List.generate(turns.length, (i) {
-            final t = turns[i];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text('${i + 1}. ${t.text}', style: Theme.of(context).textTheme.bodySmall),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-}
-
-/// Renderiza markdown de la evaluación final con estilos consistentes y
-/// limpieza de posibles restos del prompt original (en caso de que el modelo
-/// lo haya devuelto parcialmente).
-class _EvaluationMarkdown extends StatelessWidget {
-  final String text;
-  const _EvaluationMarkdown({required this.text});
-
-  String _clean(String raw) {
-    var t = raw.trim();
-    // Si por error vino incluido el prompt ("Genera una EVALUACIÓN FINAL DETALLADA"), lo removemos
-    final promptHead = 'genera una evaluación final detallada';
-    final lower = t.toLowerCase();
-    final idx = lower.indexOf(promptHead);
-    if (idx == 0) {
-      // Cortar hasta después de la última línea "Intervenciones del usuario" si existe
-      final marker = 'intervenciones del usuario para evaluar:';
-      final mIdx = lower.indexOf(marker);
-      if (mIdx > 0) {
-        // saltar esa línea
-        final cutIdx = lower.indexOf('\n', mIdx + marker.length);
-        if (cutIdx > 0 && cutIdx < t.length) {
-          t = t.substring(cutIdx + 1).trimLeft();
-        }
-      }
-    }
-    return t;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cleaned = _clean(text);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border.all(color: theme.colorScheme.primary.withOpacity(0.25)),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          )
-        ],
-      ),
-      child: SelectableText(
-        cleaned,
-        style: theme.textTheme.bodyMedium,
-        textAlign: TextAlign.left,
-      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Intervenciones del usuario',
+                        style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(ctx).primaryColor,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (turns.isEmpty)
+                  Text(
+                    'Sin intervenciones registradas',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: turns.length,
+                      separatorBuilder: (_, __) => const Divider(height: 16),
+                      itemBuilder:
+                          (_, i) => Text(
+                            '${i + 1}. ${turns[i].text}',
+                            textAlign: TextAlign.justify,
+                            style: Theme.of(ctx).textTheme.bodyMedium,
+                          ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

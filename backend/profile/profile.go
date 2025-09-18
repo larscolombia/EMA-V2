@@ -208,8 +208,12 @@ func updateProfile(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "Imagen demasiado grande", "code": "image_too_large", "max_size_mb": maxMB})
 			return
 		}
-		// Create media folder per user
-		base := filepath.Join("media", fmt.Sprintf("user_%d", user.ID))
+		// Create media folder per user (respect MEDIA_ROOT)
+		mediaRoot := strings.TrimSpace(os.Getenv("MEDIA_ROOT"))
+		if mediaRoot == "" {
+			mediaRoot = "./media"
+		}
+		base := filepath.Join(mediaRoot, fmt.Sprintf("user_%d", user.ID))
 		if err := os.MkdirAll(base, 0755); err != nil {
 			log.Printf("[PROFILE][POST] failed to create media dir '%s': %v", base, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo crear carpeta de medios"})
@@ -224,8 +228,13 @@ func updateProfile(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo guardar la imagen", "code": "image_save_failed"})
 			return
 		}
-		// Store relative path in DB
-		rel := filepath.ToSlash(dst)
+		// Store relative path in DB as a URL path under /media
+		// Compute path relative to mediaRoot
+		relPath, err := filepath.Rel(mediaRoot, dst)
+		if err != nil {
+			relPath = filepath.Base(dst)
+		}
+		rel := "/media/" + filepath.ToSlash(relPath)
 		if err := migrations.UpdateUserProfileImage(user.ID, rel); err != nil {
 			log.Printf("[PROFILE][POST] failed updating DB with image path '%s' for userID=%d: %v", rel, user.ID, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo actualizar el usuario"})

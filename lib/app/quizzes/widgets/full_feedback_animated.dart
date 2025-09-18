@@ -1,16 +1,21 @@
 import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/config/styles/app_styles.dart';
 import 'package:flutter/material.dart';
+// gpt_markdown is used via ChatMarkdownWrapper
+import 'package:ema_educacion_medica_avanzada/app/chat/widgets/chat_markdown_wrapper.dart';
 
 class FullFeedbackAnimated extends StatefulWidget {
   final String fitGlobal;
   final List<QuestionResponseModel> questions;
   final bool animate;
+  // When true, render feedback and references using Markdown widgets (no typing animation).
+  final bool renderMarkdown;
   const FullFeedbackAnimated({
     super.key,
     required this.fitGlobal,
     required this.questions,
     this.animate = true,
+    this.renderMarkdown = false,
   });
 
   @override
@@ -30,6 +35,10 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.renderMarkdown) {
+      // Prefer precise markdown rendering for headings/lists; disable typing animation.
+      return _buildWidgetMode(context);
+    }
     final segments = _buildSegments(context);
     final totalChars = segments.fold<int>(0, (sum, s) => sum + s.text.length);
     Widget content;
@@ -52,6 +61,216 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
         }
       },
       child: content,
+    );
+  }
+
+  // Widget-based rendering with Markdown support (no animation)
+  Widget _buildWidgetMode(BuildContext context) {
+    final base = Theme.of(context).textTheme.bodyMedium;
+    final labelStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      fontWeight: FontWeight.w700,
+      color: AppStyles.primary900,
+    );
+    final questionStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      color: Colors.black,
+      fontWeight: FontWeight.w600,
+    );
+    final bodyStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      color: Colors.black,
+    );
+    final mdBaseStyle = TextStyle(
+      height: 1.35,
+      color: (bodyStyle?.color ?? Colors.black),
+    ); // no fontSize to keep heading hierarchy
+
+    final children = <Widget>[];
+    void addSpacing([double h = 16]) => children.add(SizedBox(height: h));
+
+    // Score block (plain text)
+    if (parsed.scoreBlock.isNotEmpty) {
+      children.add(
+        Text(
+          'Puntaje y Calificación:',
+          style: labelStyle,
+          textAlign: TextAlign.justify,
+        ),
+      );
+      children.add(const SizedBox(height: 8));
+      children.add(
+        SelectableText(
+          parsed.scoreBlock.trim(),
+          style: bodyStyle,
+          textAlign: TextAlign.justify,
+        ),
+      );
+      addSpacing();
+    }
+
+    // Feedback (markdown)
+    if (parsed.feedbackBlock.isNotEmpty) {
+      final md = _normalizeMarkdown(parsed.feedbackBlock.trim());
+      final startsWithHeading = RegExp(r'^\s{0,3}#{1,6}\s').hasMatch(md);
+      if (!startsWithHeading) {
+        children.add(
+          Text(
+            'Retroalimentación:',
+            style: labelStyle,
+            textAlign: TextAlign.justify,
+          ),
+        );
+        children.add(const SizedBox(height: 8));
+      }
+      children.add(
+        Theme(
+          data: _markdownTheme(context, mdBaseStyle.color),
+          child: ChatMarkdownWrapper(text: md, style: mdBaseStyle),
+        ),
+      );
+      addSpacing();
+    }
+
+    // Questions
+    for (var i = 0; i < widget.questions.length; i++) {
+      final q = widget.questions[i];
+      final status = (q.isCorrect == true) ? 'Correcta' : 'Incorrecta';
+      children.add(
+        Text(
+          'Pregunta ${i + 1}: $status',
+          style: labelStyle,
+          textAlign: TextAlign.justify,
+        ),
+      );
+      children.add(const SizedBox(height: 6));
+      children.add(
+        SelectableText(
+          q.question.trim(),
+          style: questionStyle,
+          textAlign: TextAlign.justify,
+        ),
+      );
+      children.add(const SizedBox(height: 8));
+      final userAns = (q.answerdString).trim();
+      children.add(
+        SelectableText(
+          'Respuesta: ${userAns.isEmpty ? '—' : userAns}.',
+          style: bodyStyle,
+          textAlign: TextAlign.justify,
+        ),
+      );
+      final fit = (q.fit ?? '').trim();
+      if (fit.isNotEmpty) {
+        children.add(const SizedBox(height: 8));
+        final mdQ = _normalizeMarkdown(fit);
+        final startsWithHeadingQ = RegExp(r'^\s{0,3}#{1,6}\s').hasMatch(mdQ);
+        if (!startsWithHeadingQ) {
+          children.add(
+            Text(
+              'Retroalimentación:',
+              style: labelStyle,
+              textAlign: TextAlign.justify,
+            ),
+          );
+          children.add(const SizedBox(height: 6));
+        }
+        children.add(
+          Theme(
+            data: _markdownTheme(context, mdBaseStyle.color),
+            child: ChatMarkdownWrapper(text: mdQ, style: mdBaseStyle),
+          ),
+        );
+      }
+      addSpacing();
+    }
+
+    // References (markdown)
+    if (parsed.references.isNotEmpty) {
+      final mdRef = _normalizeMarkdown(parsed.references.trim());
+      final startsWithHeading = RegExp(r'^\s{0,3}#{1,6}\s').hasMatch(mdRef);
+      if (!startsWithHeading) {
+        children.add(
+          Text('Referencias:', style: labelStyle, textAlign: TextAlign.justify),
+        );
+        children.add(const SizedBox(height: 8));
+      }
+      children.add(
+        Theme(
+          data: _markdownTheme(context, mdBaseStyle.color),
+          child: ChatMarkdownWrapper(text: mdRef, style: mdBaseStyle),
+        ),
+      );
+      addSpacing(8);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+
+  String _normalizeMarkdown(String s) {
+    // Normalize common patterns like "1) Item" -> "1. Item" for ordered lists
+    var text = s.replaceAll('\r\n', '\n');
+    // Ensure a space after heading marks (e.g., ##Title -> ## Title)
+    text = text.replaceAllMapped(
+      RegExp(r'^(\s*#{1,6})([^#\s])', multiLine: true),
+      (m) {
+        return '${m.group(1)} ${m.group(2)}';
+      },
+    );
+    final lines = text.split('\n');
+    final out = <String>[];
+    final reNumParen = RegExp(r'^\s*(\d+)\)\s+');
+    for (final line in lines) {
+      final m = reNumParen.firstMatch(line);
+      if (m != null) {
+        final num = m.group(1);
+        out.add(line.replaceFirst(reNumParen, '$num. '));
+      } else {
+        out.add(line);
+      }
+    }
+    return out.join('\n');
+  }
+
+  ThemeData _markdownTheme(BuildContext context, Color? baseColor) {
+    final theme = Theme.of(context);
+    // Reduce default heading sizes and keep contrast; body text stays around 16 via DefaultTextStyle
+    final tt = theme.textTheme;
+    return theme.copyWith(
+      textTheme: tt.copyWith(
+        headlineSmall: tt.headlineSmall?.copyWith(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          color: baseColor,
+        ), // h2/h3 range
+        titleLarge: tt.titleLarge?.copyWith(
+          fontSize: 17,
+          fontWeight: FontWeight.w700,
+          color: baseColor,
+        ),
+        titleMedium: tt.titleMedium?.copyWith(
+          fontSize: 16.5,
+          fontWeight: FontWeight.w700,
+          color: baseColor,
+        ),
+        titleSmall: tt.titleSmall?.copyWith(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: baseColor,
+        ),
+        bodyLarge: tt.bodyLarge?.copyWith(fontSize: 16, color: baseColor),
+        bodyMedium: tt.bodyMedium?.copyWith(fontSize: 16, color: baseColor),
+        bodySmall: tt.bodySmall?.copyWith(
+          fontSize: 15,
+          color: baseColor?.withOpacity(0.9),
+        ),
+      ),
     );
   }
 
@@ -147,12 +366,16 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       if (t.isEmpty) continue;
       final lt = t.toLowerCase();
       if (lt.startsWith('puntaje y calificación') ||
-          lt.startsWith('puntaje y calificacion')) {
+          lt.startsWith('puntaje y calificacion') ||
+          lt.startsWith('puntuación') ||
+          lt.startsWith('puntuacion') ||
+          lt.startsWith('calificación') ||
+          lt.startsWith('calificacion')) {
         score =
             t
                 .replaceFirst(
                   RegExp(
-                    r'^puntaje y calificaci[oó]n:\s*',
+                    r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
                     caseSensitive: false,
                   ),
                   '',

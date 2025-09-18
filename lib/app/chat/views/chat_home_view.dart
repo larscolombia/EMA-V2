@@ -129,6 +129,8 @@ class _ChatHomeViewState extends State<ChatHomeView>
                             'Procesando…',
                             if (stage == 'rag_search' || stage.isEmpty)
                               'Analizando vector…',
+                            if (stage == 'doc_only')
+                              'Usando documentos adjuntos…',
                             if (stage == 'pubmed_search') 'Buscando en PubMed…',
                             if (stage == 'rag_found')
                               'Fuente interna encontrada…',

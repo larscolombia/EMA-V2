@@ -162,16 +162,11 @@ INSTRUCCIONES IMPORTANTES:
 	if err == nil && strings.TrimSpace(pubmedResult) != "" {
 		log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
 
-		// Mensaje directo para el usuario, evitando exponer instrucciones internas
-		pubmedText := fmt.Sprintf(`Se encontró información relevante en PubMed sobre "%s".
-
-Resumen de evidencia:
-%s
-
-Fuente: PubMed (https://pubmed.ncbi.nlm.nih.gov/)`, prompt, pubmedResult)
-
+		// Formatear una respuesta concisa SIN mencionar el proceso de búsqueda
+		// y con una sección de Referencias al final (Markdown limpio)
+		formatted := formatPubMedAnswer(prompt, pubmedResult)
 		ch := make(chan string, 1)
-		ch <- pubmedText
+		ch <- formatted
 		close(ch)
 		return ch, "pubmed", nil
 	}
@@ -959,4 +954,96 @@ func (h *Handler) VectorFiles(c *gin.Context) {
 	vsID := h.AI.GetVectorStoreID(threadID)
 	log.Printf("[conv][VectorFiles][ok] thread=%s vs=%s files=%d", threadID, vsID, len(files))
 	c.JSON(http.StatusOK, gin.H{"thread_id": threadID, "vector_store_id": vsID, "files": files})
+}
+
+// --- Helpers de formato PubMed ---
+// formatPubMedAnswer crea una salida amigable, directa y con referencias (sin mencionar el proceso de búsqueda).
+func formatPubMedAnswer(query, raw string) string {
+	clean := stripModelPreambles(raw)
+	refs := extractReferenceLines(clean)
+	// Si el contenido tiene secciones, conservarlas; sino, presentarlo como resumen
+	body := strings.TrimSpace(clean)
+	if body == "" {
+		body = "No se encontró un resumen claro en la evidencia consultada."
+	}
+	b := &strings.Builder{}
+	// Título conciso (no obligatorio, pero ayuda visualmente)
+	// Evitamos palabras como "Según", "Se encontró" o "Búsqueda".
+	fmt.Fprintf(b, "%s\n\n", body)
+	// Agregar referencias si las hay
+	if len(refs) > 0 {
+		b.WriteString("Referencias:\n")
+		for _, r := range refs {
+			// Asegurar viñetas limpias
+			b.WriteString("- ")
+			b.WriteString(strings.TrimSpace(r))
+			if !strings.Contains(strings.ToLower(r), "pubmed") {
+				b.WriteString(" (PubMed)")
+			}
+			b.WriteString("\n")
+		}
+	} else {
+		// Fallback a referencia general de PubMed
+		b.WriteString("Referencias:\n- PubMed: https://pubmed.ncbi.nlm.nih.gov/\n")
+	}
+	return b.String()
+}
+
+// stripModelPreambles elimina frases de sistema/comando comunes tipo "Claro", "A continuación", "Realizo una búsqueda...".
+func stripModelPreambles(s string) string {
+	t := strings.TrimSpace(s)
+	lowers := []string{
+		"claro,", "claro.", "claro:", "a continuación", "realizo una búsqueda", "procedo a buscar", "investigaré en pubmed", "haré una búsqueda",
+		"según la búsqueda", "de acuerdo con la búsqueda", "priorizando estudios", "a continuación presento", "voy a",
+	}
+	lt := strings.ToLower(t)
+	// Si detectamos estas frases al inicio, recortamos la primera línea o el preámbulo.
+	for _, p := range lowers {
+		if strings.HasPrefix(lt, p) {
+			// Quitar primera línea o primera oración
+			if idx := strings.Index(t, "\n"); idx >= 0 {
+				t = strings.TrimSpace(t[idx+1:])
+			} else if idx := strings.IndexAny(t, ".!?"); idx >= 0 && idx+1 < len(t) {
+				t = strings.TrimSpace(t[idx+1:])
+			}
+			break
+		}
+	}
+	return t
+}
+
+// extractReferenceLines intenta extraer líneas que parecen citas/DOI/PMID o URLs.
+func extractReferenceLines(s string) []string {
+	out := []string{}
+	for _, ln := range strings.Split(s, "\n") {
+		l := strings.TrimSpace(ln)
+		if l == "" {
+			continue
+		}
+		ll := strings.ToLower(l)
+		// Heurísticas simples para identificar referencias
+		if strings.Contains(ll, "pmid") || strings.Contains(ll, "doi:") || strings.Contains(ll, "pubmed") || strings.Contains(ll, "http") {
+			out = append(out, l)
+		}
+		// También títulos tipo Autor (Año). Título. Revista.
+		if strings.Contains(l, ")") && strings.Contains(l, ".") && (strings.Contains(l, ";") || strings.Contains(l, ":")) {
+			// Muy heurístico, pero útil como fallback
+			out = append(out, l)
+		}
+	}
+	// Deduplicar manteniendo orden
+	seen := map[string]bool{}
+	uniq := make([]string, 0, len(out))
+	for _, r := range out {
+		k := strings.ToLower(strings.TrimSpace(r))
+		if !seen[k] {
+			seen[k] = true
+			uniq = append(uniq, r)
+		}
+	}
+	// Limitar a 5 para no saturar
+	if len(uniq) > 5 {
+		return uniq[:5]
+	}
+	return uniq
 }
