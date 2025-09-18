@@ -7,12 +7,13 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
-	"time"
-	"sync"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"ema-backend/openai"
+	"ema-backend/sse"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,15 +23,19 @@ type Assistant interface {
 	CreateThread(ctx context.Context) (string, error)
 	StreamAssistantMessage(ctx context.Context, threadID, prompt string) (<-chan string, error)
 	StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error)
+	// Métodos adicionales para búsqueda de evidencia (RAG + PubMed)
+	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
+	SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
+	SearchPubMed(ctx context.Context, query string) (string, error)
 }
 
 type Handler struct {
-	aiAnalytical   Assistant
-	aiInteractive  Assistant
-	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
-	mu             sync.Mutex
-	analyticalTurns map[string]int // thread_id -> number of chat turns served
-	lastAnalyticalDiag []string
+	aiAnalytical             Assistant
+	aiInteractive            Assistant
+	quotaValidator           func(ctx context.Context, c *gin.Context, flow string) error
+	mu                       sync.Mutex
+	analyticalTurns          map[string]int // thread_id -> number of chat turns served
+	lastAnalyticalDiag       []string
 	maxAnalyticalDiagHistory int
 }
 
@@ -221,7 +226,10 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 				// Evitar duplicados exactos
 				already := false
 				for _, d := range h.lastAnalyticalDiag {
-					if strings.EqualFold(d, diag) { already = true; break }
+					if strings.EqualFold(d, diag) {
+						already = true
+						break
+					}
 				}
 				if !already {
 					h.lastAnalyticalDiag = append(h.lastAnalyticalDiag, diag)
@@ -235,6 +243,21 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 			}
 		}
 	}
+	// Anexar referencias (RAG + PubMed) de forma no disruptiva: al final de management
+	func() {
+		// proteger contra pánicos por tipos inesperados
+		defer func() { _ = recover() }()
+		if caseMap, ok := parsed["case"].(map[string]any); ok {
+			q := buildCaseQuery(caseMap)
+			if strings.TrimSpace(q) != "" {
+				refs := collectEvidence(ctx, h.aiAnalytical, q)
+				if strings.TrimSpace(refs) != "" {
+					mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
+					caseMap["management"] = appendRefs(mg, refs)
+				}
+			}
+		}
+	}()
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -306,6 +329,46 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		"No inventes datos que no se hayan introducido implícita o explícitamente en el hilo.",
 		"Idioma: español.",
 	}, " ")
+	// Si el cliente solicita streaming SSE, emitimos eventos con marcadores de etapa
+	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
+	if strings.Contains(accept, "text/event-stream") {
+		// Obtener stream del assistant
+		ch, err := h.aiAnalytical.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
+			return
+		}
+
+		// Intentar inferir si hay evidencia RAG/PubMed para emitir etapas más precisas.
+		refs := ""
+		// collectEvidence hace búsquedas en vector store y PubMed y devuelve bloque de referencias
+		func() {
+			defer func() { _ = recover() }()
+			refs = collectEvidence(ctx, h.aiAnalytical, userPrompt)
+		}()
+
+		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+		if strings.TrimSpace(refs) == "" {
+			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
+		} else {
+			hasPub := strings.Contains(refs, "PubMed:")
+			hasRag := strings.Contains(refs, "Base de conocimiento médico") || strings.Contains(refs, "Referencias:")
+			if hasRag {
+				stages = append(stages, "__STAGE__:rag_found")
+			} else {
+				stages = append(stages, "__STAGE__:rag_empty")
+			}
+			if hasPub {
+				stages = append(stages, "__STAGE__:pubmed_search", "__STAGE__:pubmed_found")
+			}
+			stages = append(stages, "__STAGE__:streaming_answer")
+		}
+
+		sse.Stream(c, wrapWithStages(stages, ch))
+		return
+	}
+
+	// Fallback: comportamiento legacy (no streaming) — consumir primer chunk y responder JSON
 	ch, err := h.aiAnalytical.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
@@ -328,6 +391,10 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			h.mu.Lock()
 			h.analyticalTurns[threadID] = turn
 			h.mu.Unlock()
+			// Anexar referencias solo en cierre (>= turno 10) para respetar estilo existente
+			if turn >= 10 {
+				safeAppendRefsToRespuesta(ctx, h.aiAnalytical, &parsed, req.Mensaje)
+			}
 			c.JSON(http.StatusOK, parsed)
 			return
 		}
@@ -336,11 +403,17 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		h.mu.Lock()
 		h.analyticalTurns[threadID] = turn
 		h.mu.Unlock()
+		// Anexar referencias solo en cierre (>= turno 10)
+		if turn >= 10 {
+			safeAppendRefsToRespuesta(ctx, h.aiAnalytical, &parsed, req.Mensaje)
+		}
 		c.JSON(http.StatusOK, parsed)
 		return
 	}
 	// Fallback text
-	c.JSON(http.StatusOK, map[string]any{"respuesta": map[string]any{"text": strings.TrimSpace(content)}})
+	fb := map[string]any{"respuesta": map[string]any{"text": strings.TrimSpace(content)}}
+	// Anexar referencias solo si estimamos cierre (no conocemos turno aquí); mantener simple: no anexar en fallback
+	c.JSON(http.StatusOK, fb)
 }
 
 // GenerateInteractive creates the case and an initial question: returns { case: {...}, data: { questions: { texto,tipo,opciones } }, thread_id }
@@ -431,6 +504,20 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	parsed["thread_id"] = threadID
 	// Ensure minimal question present
 	ensureInteractiveDefaults(parsed, req)
+	// Anexar referencias al management del caso (no altera preguntas)
+	func() {
+		defer func() { _ = recover() }()
+		if caseMap, ok := parsed["case"].(map[string]any); ok {
+			q := buildCaseQuery(caseMap)
+			if strings.TrimSpace(q) != "" {
+				refs := collectEvidence(ctx, h.aiInteractive, q)
+				if strings.TrimSpace(refs) != "" {
+					mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
+					caseMap["management"] = appendRefs(mg, refs)
+				}
+			}
+		}
+	}()
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -507,6 +594,7 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	if _, ok := parsed["data"].(map[string]any)["feedback"]; !ok {
 		parsed["data"].(map[string]any)["feedback"] = "Respuesta registrada."
 	}
+	// No anexamos referencias en feedback para mantener brevedad (<40 palabras). Las referencias se agregan en GenerateInteractive (management).
 	c.JSON(http.StatusOK, parsed)
 }
 
@@ -577,8 +665,12 @@ func boolToInt(b bool) int {
 // Valor por defecto: 8. Si es 0 o negativo, se desactiva la función.
 func resolveDiagHistoryEnv() int {
 	v := strings.TrimSpace(os.Getenv("CLINICAL_ANALYTICAL_DIAG_HISTORY"))
-	if v == "" { return 8 }
-	if n, err := strconv.Atoi(v); err == nil { return n }
+	if v == "" {
+		return 8
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
 	return 8
 }
 
@@ -696,9 +788,179 @@ func (h *Handler) repairInteractiveChatJSON(ctx context.Context, threadID, lastC
 // helper for quota header string conversion
 func toString(v interface{}) string {
 	switch t := v.(type) {
-	case string: return t
-	case int: return strconv.Itoa(t)
-	case int64: return strconv.FormatInt(t,10)
-	default: return ""
+	case string:
+		return t
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return ""
 	}
+}
+
+// --- Evidence helpers (RAG + PubMed) --- //
+
+// getFixedBooksVectorID retorna el vector store fijo usado para libros del asistente (si está configurado);
+// si no, usa el ID observado en conversations_ia (mantener sincronizado si cambia).
+func getFixedBooksVectorID() string {
+	if v := strings.TrimSpace(os.Getenv("INTERACTIVE_VECTOR_ID")); v != "" { // permitir override por env
+		return v
+	}
+	// Valor por defecto usado en conversations_ia.SmartMessage
+	return "vs_680fc484cef081918b2b9588b701e2f4"
+}
+
+// collectEvidence busca primero en vector de libros y luego en PubMed; devuelve bloque de referencias o cadena vacía.
+func collectEvidence(ctx context.Context, ai Assistant, query string) string {
+	// 1) Libros (vector fijo) con metadatos si están disponibles
+	refs := make([]string, 0, 3)
+	vectorID := getFixedBooksVectorID()
+	if strings.HasPrefix(vectorID, "vs_") {
+		if res, err := ai.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult {
+			// Formato: Libro — Sección: "fragmento"
+			src := strings.TrimSpace(res.Source)
+			sec := strings.TrimSpace(res.Section)
+			snip := strings.TrimSpace(res.Content)
+			if src == "" {
+				src = "Fuente de conocimiento médico"
+			}
+			if len(snip) > 420 {
+				snip = snip[:420] + "…"
+			}
+			line := src
+			if sec != "" {
+				line = line + " — " + sec
+			}
+			if snip != "" {
+				line = line + ": \"" + snip + "\""
+			}
+			refs = append(refs, line)
+		} else if txt, err2 := ai.SearchInVectorStore(ctx, vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
+			t := strings.TrimSpace(txt)
+			if len(t) > 420 {
+				t = t[:420] + "…"
+			}
+			refs = append(refs, "Base de conocimiento médico: \""+t+"\"")
+		}
+	}
+	// 2) PubMed
+	if pm, err := ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
+		p := strings.TrimSpace(pm)
+		// intentar recortar a un extracto útil
+		if len(p) > 600 {
+			p = p[:600] + "…"
+		}
+		refs = append(refs, "PubMed: "+p)
+	}
+	if len(refs) == 0 {
+		return ""
+	}
+	// Construir bloque "Referencias:" para anexar al texto libre existente
+	b := &strings.Builder{}
+	b.WriteString("\n\nReferencias:\n")
+	for i, r := range refs {
+		if i >= 3 {
+			break
+		} // limitar a 3 para brevedad
+		b.WriteString("- ")
+		b.WriteString(r)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// appendRefs añade el bloque de referencias al campo de texto si no está vacío.
+func appendRefs(s, refs string) string {
+	if strings.TrimSpace(refs) == "" {
+		return s
+	}
+	if strings.TrimSpace(s) == "" {
+		return strings.TrimSpace(refs)
+	}
+	return strings.TrimRight(s, "\n ") + refs
+}
+
+// buildCaseQuery arma una consulta breve a partir del caso para buscar evidencia
+func buildCaseQuery(caseMap map[string]any) string {
+	title := strings.TrimSpace(fmt.Sprint(caseMap["title"]))
+	diag := strings.TrimSpace(fmt.Sprint(caseMap["final_diagnosis"]))
+	if title != "" && diag != "" {
+		q := title + " — " + diag
+		if len(q) > 220 {
+			q = q[:220]
+		}
+		return q
+	}
+	// Fallback: usar fragmentos clave del caso
+	ana := strings.TrimSpace(fmt.Sprint(caseMap["anamnesis"]))
+	exa := strings.TrimSpace(fmt.Sprint(caseMap["physical_examination"]))
+	dtx := strings.TrimSpace(fmt.Sprint(caseMap["diagnostic_tests"]))
+	parts := make([]string, 0, 4)
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if diag != "" {
+		parts = append(parts, diag)
+	}
+	if ana != "" {
+		parts = append(parts, ana)
+	}
+	if exa != "" {
+		parts = append(parts, exa)
+	}
+	if dtx != "" {
+		parts = append(parts, dtx)
+	}
+	q := strings.Join(parts, ". ")
+	if len(q) > 240 {
+		q = q[:240]
+	}
+	return q
+}
+
+// safeAppendRefsToRespuesta agrega referencias al campo respuesta.text en JSON {respuesta:{text}}
+func safeAppendRefsToRespuesta(ctx context.Context, ai Assistant, parsed *map[string]any, userMsg string) {
+	defer func() { _ = recover() }()
+	if parsed == nil {
+		return
+	}
+	p := *parsed
+	r, ok := p["respuesta"].(map[string]any)
+	if !ok {
+		return
+	}
+	txt := strings.TrimSpace(fmt.Sprint(r["text"]))
+	// Usar el mensaje del usuario como query principal; fallback al propio texto
+	query := strings.TrimSpace(userMsg)
+	if query == "" {
+		query = txt
+	}
+	if query == "" {
+		return
+	}
+	refs := collectEvidence(ctx, ai, query)
+	if strings.TrimSpace(refs) == "" {
+		return
+	}
+	r["text"] = appendRefs(txt, refs)
+}
+
+// wrapWithStages emite marcadores de etapa antes de reenviar el stream principal.
+// Cada entrada de `stages` se enviará como un token individual en el canal de salida.
+func wrapWithStages(stages []string, ch <-chan string) <-chan string {
+	out := make(chan string)
+	go func() {
+		for _, s := range stages {
+			if strings.TrimSpace(s) == "" {
+				continue
+			}
+			out <- s
+		}
+		for tok := range ch {
+			out <- tok
+		}
+		close(out)
+	}()
+	return out
 }

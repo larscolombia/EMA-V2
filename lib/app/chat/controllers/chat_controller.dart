@@ -32,6 +32,9 @@ class ChatController extends GetxService {
   final error = ''.obs;
   final isTyping = false.obs;
   final isSending = false.obs;
+  // Current backend processing stage (driven by SSE markers)
+  final currentStage =
+      ''.obs; // values like: start, rag_search, rag_found, rag_empty, pubmed_search, pubmed_found, streaming_answer
 
   // Evita llamadas duplicadas a /conversations/start durante la creación del primer mensaje (migrado desde /asistente/start)
   bool _startingNewChat = false;
@@ -62,13 +65,13 @@ class ChatController extends GetxService {
     super.onInit();
     threadPref.getValue().then((value) {
       threadId = value;
-  // debug: persisted thread id recovered
-  Logger.debug('threadId recovered prefs="$threadId"');
+      // debug: persisted thread id recovered
+      Logger.debug('threadId recovered prefs="$threadId"');
       // Ya no forzamos reset inmediato: permitimos reanudar conversación existente.
       // Si más adelante se detecta inconsistencia (por ejemplo, backend responde 404),
       // se limpiará explícitamente en el flujo de error de startChat o sendMessage.
       if (threadId.isNotEmpty) {
-  Logger.debug('resume threadId=$threadId');
+        Logger.debug('resume threadId=$threadId');
       }
     });
     keyboardService.isKeyboardVisible.listen((visible) {
@@ -93,7 +96,7 @@ class ChatController extends GetxService {
     if (isSending.value || isTyping.value) {
       final timeSinceLastSend = DateTime.now().difference(lastSendTime.value);
       if (timeSinceLastSend.inSeconds > 60) {
-  Logger.warn('stuck state (>60s) resetting');
+        Logger.warn('stuck state (>60s) resetting');
         _resetSendingState();
 
         // Show retry option to user
@@ -113,7 +116,7 @@ class ChatController extends GetxService {
 
   /// Force stop current operation and reset state
   void forceStopAndReset() {
-  Logger.warn('forceStopAndReset invoked');
+    Logger.warn('forceStopAndReset invoked');
     _resetSendingState();
 
     // Remove any loading/typing indicators from messages
@@ -179,11 +182,14 @@ class ChatController extends GetxService {
     try {
       cleanChat();
       isTyping.value = true;
-  _startingNewChat = true;
-  Logger.debug('startNewChat -> startChat("")');
-  final start = await chatsService.startChat('');
-  // En modo test forzamos un threadId estable para validar persistencia
-  threadId = Get.testMode ? (start.threadId.isNotEmpty ? start.threadId : 'test-thread') : start.threadId;
+      _startingNewChat = true;
+      Logger.debug('startNewChat -> startChat("")');
+      final start = await chatsService.startChat('');
+      // En modo test forzamos un threadId estable para validar persistencia
+      threadId =
+          Get.testMode
+              ? (start.threadId.isNotEmpty ? start.threadId : 'test-thread')
+              : start.threadId;
       threadPref.setValue(threadId);
       messages.add(
         ChatMessageModel.ai(chatId: currentChat.value.uid, text: start.text),
@@ -192,7 +198,7 @@ class ChatController extends GetxService {
     } catch (e) {
       error.value = 'Error al iniciar conversación';
     } finally {
-  _startingNewChat = false;
+      _startingNewChat = false;
       isTyping.value = false;
     }
   }
@@ -226,6 +232,11 @@ class ChatController extends GetxService {
         userMessage: failedMsg,
         file: failedPdf,
         onStream: (token) {
+          if (token.startsWith('__STAGE__:')) {
+            final stage = token.split(':').last.trim();
+            currentStage.value = stage;
+            return; // do not append to message text
+          }
           if (!hasFirstToken) {
             hasFirstToken = true;
             aiMessage.text = token;
@@ -247,7 +258,7 @@ class ChatController extends GetxService {
       // Success: clear snapshot
       _lastFailedUserMessage = null;
       _lastFailedPdf = null;
-  // File quota now consumed server-side (file_upload flow); no client decrement.
+      // File quota now consumed server-side (file_upload flow); no client decrement.
     } catch (e) {
       messages.add(
         ChatMessageModel.temporal(
@@ -275,11 +286,11 @@ class ChatController extends GetxService {
     }
 
     // Separar texto para UI vs backend desde el inicio
-    // Si el usuario envía solo el PDF sin texto, el backend se encargará 
+    // Si el usuario envía solo el PDF sin texto, el backend se encargará
     // de generar automáticamente el prompt estructurado con STRUCTURED_PDF_SUMMARY=1
     var effectiveText = cleanUserText;
     var displayText = cleanUserText; // Texto que se muestra en la UI
-    
+
     if (effectiveText.isEmpty && currentPdf != null) {
       // Para PDFs sin texto, enviar prompt vacío al backend
       // El backend generará automáticamente el prompt estructurado
@@ -322,21 +333,22 @@ class ChatController extends GetxService {
         print(
           '🚧 [ChatController] Sin cuota para crear nuevo chat; mostrando aviso pero continuando',
         );
-  if(!Get.testMode) Get.snackbar(
-          'Límite alcanzado',
-          'Has alcanzado el límite de chats en tu plan actual. Actualiza tu plan para crear más chats.',
-          snackPosition: SnackPosition.TOP,
-          backgroundColor: Colors.orange,
-          colorText: Colors.white,
-          duration: const Duration(seconds: 5),
-          mainButton: TextButton(
-            onPressed: () => Get.toNamed(Routes.subscriptions.name),
-            child: const Text(
-              'Actualizar Plan',
-              style: TextStyle(color: Colors.white),
+        if (!Get.testMode)
+          Get.snackbar(
+            'Límite alcanzado',
+            'Has alcanzado el límite de chats en tu plan actual. Actualiza tu plan para crear más chats.',
+            snackPosition: SnackPosition.TOP,
+            backgroundColor: Colors.orange,
+            colorText: Colors.white,
+            duration: const Duration(seconds: 5),
+            mainButton: TextButton(
+              onPressed: () => Get.toNamed(Routes.subscriptions.name),
+              child: const Text(
+                'Actualizar Plan',
+                style: TextStyle(color: Colors.white),
+              ),
             ),
-          ),
-        );
+          );
       }
       // Continuamos; el backend hará cumplir los límites si aplica
     }
@@ -356,21 +368,22 @@ class ChatController extends GetxService {
       }
       // Si sigue sin cuota, bloquear solo si no es un hilo nuevo; si es nuevo, permitir para evitar falsos negativos
       if (!profileController.canUploadMoreFiles() && !isNewThread) {
-  if(!Get.testMode) Get.snackbar(
-          'Límite alcanzado',
-          'Has alcanzado el límite de archivos PDF en tu plan actual. Actualiza tu plan para subir más archivos.',
-          snackPosition: SnackPosition.TOP,
-          backgroundColor: Colors.orange,
-          colorText: Colors.white,
-          duration: const Duration(seconds: 5),
-          mainButton: TextButton(
-            onPressed: () => Get.toNamed(Routes.subscriptions.name),
-            child: const Text(
-              'Actualizar Plan',
-              style: TextStyle(color: Colors.white),
+        if (!Get.testMode)
+          Get.snackbar(
+            'Límite alcanzado',
+            'Has alcanzado el límite de archivos PDF en tu plan actual. Actualiza tu plan para subir más archivos.',
+            snackPosition: SnackPosition.TOP,
+            backgroundColor: Colors.orange,
+            colorText: Colors.white,
+            duration: const Duration(seconds: 5),
+            mainButton: TextButton(
+              onPressed: () => Get.toNamed(Routes.subscriptions.name),
+              child: const Text(
+                'Actualizar Plan',
+                style: TextStyle(color: Colors.white),
+              ),
             ),
-          ),
-        );
+          );
         return;
       }
     }
@@ -386,7 +399,7 @@ class ChatController extends GetxService {
       // Si falla (p.ej., 500), reintentar con prompt vacío para obtener threadId
       // Nuevo chat únicamente cuando no hay threadId vigente.
       if (threadId.isEmpty) {
-    Logger.debug('new chat start');
+        Logger.debug('new chat start');
         try {
           _startingNewChat = true;
           Logger.debug('startChat(effectiveText)');
@@ -418,50 +431,61 @@ class ChatController extends GetxService {
           messages.add(userMessage);
 
           // Si hay PDF o el backend no envía texto inicial, procedemos a enviar mensaje (streaming) inmediatamente.
-            final aiMessage = ChatMessageModel.ai(
-              chatId: currentChat.value.uid,
-              text: '',
-            );
-            var hasFirstToken = false;
+          final aiMessage = ChatMessageModel.ai(
+            chatId: currentChat.value.uid,
+            text: '',
+          );
+          var hasFirstToken = false;
 
-            final response = await chatsService.sendMessage(
-              threadId: threadId,
-              userMessage: ChatMessageModel.user(
-                chatId: userMessage.chatId,
-                text: effectiveText, // Enviar texto efectivo al backend
-                attach: userMessage.attach,
-              ),
-              file: currentPdf,
-              onStream: (token) {
-                if (!hasFirstToken) {
-                  hasFirstToken = true;
-                  aiMessage.text = token;
-                  messages.add(aiMessage);
-                  print('🎯 [Controller] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)');
-                } else {
-                  aiMessage.text += token;
-                  print('🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}');
-                }
-                messages.refresh();
-                scrollToBottom();
-              },
+          final response = await chatsService.sendMessage(
+            threadId: threadId,
+            userMessage: ChatMessageModel.user(
+              chatId: userMessage.chatId,
+              text: effectiveText, // Enviar texto efectivo al backend
+              attach: userMessage.attach,
+            ),
+            file: currentPdf,
+            onStream: (token) {
+              if (token.startsWith('__STAGE__:')) {
+                final stage = token.split(':').last.trim();
+                currentStage.value = stage;
+                return;
+              }
+              if (!hasFirstToken) {
+                hasFirstToken = true;
+                aiMessage.text = token;
+                messages.add(aiMessage);
+                print(
+                  '🎯 [Controller] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)',
+                );
+              } else {
+                aiMessage.text += token;
+                print(
+                  '🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}',
+                );
+              }
+              messages.refresh();
+              scrollToBottom();
+            },
+          );
+          Logger.debug('stream complete len=${response.text.length}');
+
+          if (!hasFirstToken) {
+            aiMessage.text = response.text;
+            messages.add(aiMessage);
+            Logger.debug('no tokens streamed; set full text');
+          } else {
+            // Don't overwrite the streamed content with response.text!
+            // aiMessage.text = response.text;
+            print(
+              '🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}',
             );
-            Logger.debug('stream complete len=${response.text.length}');
-            
-            if (!hasFirstToken) {
-              aiMessage.text = response.text;
-              messages.add(aiMessage);
-              Logger.debug('no tokens streamed; set full text');
-            } else {
-              // Don't overwrite the streamed content with response.text!
-              // aiMessage.text = response.text;
-              print('🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}');
-            }
-            chatsService.chatMessagesLocalData.insertOne(aiMessage);
-            pendingPdf.value = null;
-            // Descontar cuota de archivo si se usó
-            // File quota consumed on backend
-            return;
+          }
+          chatsService.chatMessagesLocalData.insertOne(aiMessage);
+          pendingPdf.value = null;
+          // Descontar cuota de archivo si se usó
+          // File quota consumed on backend
+          return;
         } catch (e) {
           // Fallback: crear thread con prompt vacío y luego enviar el mensaje del usuario vía streaming
           Logger.warn('fallback empty start after error: $e');
@@ -556,12 +580,12 @@ class ChatController extends GetxService {
           return;
         }
       }
-  // Resetea flag de inicio si se completó este bloque
-  _startingNewChat = false;
+      // Resetea flag de inicio si se completó este bloque
+      _startingNewChat = false;
 
       // Solo generar registro de chat si aún no existe uno persistido (currentChat.shortTitle vacío indica nuevo)
       if (currentChat.value.shortTitle.isEmpty) {
-  Logger.debug('generate new chat with doc');
+        Logger.debug('generate new chat with doc');
         currentChat.value = await chatsService.generateNewChat(
           currentChat.value,
           cleanUserText,
@@ -569,15 +593,15 @@ class ChatController extends GetxService {
           threadId,
         );
 
-  // Chat quota consumed server-side
+        // Chat quota consumed server-side
       }
 
       if (currentPdf != null) {
-  Logger.debug('validating PDF');
+        Logger.debug('validating PDF');
         isUploadingPdf.value = true;
         await attachmentService.validateFile(currentPdf);
         isUploadingPdf.value = false;
-  Logger.debug('PDF validated');
+        Logger.debug('PDF validated');
       }
 
       final userMessage = ChatMessageModel.user(
@@ -592,42 +616,51 @@ class ChatController extends GetxService {
       messages.add(userMessage);
       pendingPdf.value = null;
       scrollToBottom();
-  Logger.debug('user message added');
+      Logger.debug('user message added');
 
       // Mantener isTyping.value = true durante el envío del documento
       // para que se muestre el indicador de escritura
       if (currentPdf != null) {
         // Asegurar que el indicador de escritura se mantenga visible
         isTyping.value = true;
-  Logger.debug('keep typing indicator (PDF)');
+        Logger.debug('keep typing indicator (PDF)');
       }
 
       try {
-  Logger.debug('sending message (with retries)');
-        final aiMessage = ChatMessageModel.ai(chatId: currentChat.value.uid, text: '');
+        Logger.debug('sending message (with retries)');
+        final aiMessage = ChatMessageModel.ai(
+          chatId: currentChat.value.uid,
+          text: '',
+        );
         var hasFirstToken = false;
 
         Future<ChatMessageModel> attemptSend() => chatsService.sendMessage(
-              threadId: threadId,
-              userMessage: ChatMessageModel.user(
-                chatId: userMessage.chatId,
-                text: effectiveText, // Enviar prompt vacío para PDFs, el backend lo manejará
-                attach: userMessage.attach,
-              ),
-              file: currentPdf,
-              onStream: (token) {
-                lastSendTime.value = DateTime.now();
-                if (!hasFirstToken) {
-                  hasFirstToken = true;
-                  aiMessage.text = token;
-                  messages.add(aiMessage);
-                } else {
-                  aiMessage.text += token;
-                }
-                messages.refresh();
-                scrollToBottom();
-              },
-            );
+          threadId: threadId,
+          userMessage: ChatMessageModel.user(
+            chatId: userMessage.chatId,
+            text:
+                effectiveText, // Enviar prompt vacío para PDFs, el backend lo manejará
+            attach: userMessage.attach,
+          ),
+          file: currentPdf,
+          onStream: (token) {
+            if (token.startsWith('__STAGE__:')) {
+              final stage = token.split(':').last.trim();
+              currentStage.value = stage;
+              return;
+            }
+            lastSendTime.value = DateTime.now();
+            if (!hasFirstToken) {
+              hasFirstToken = true;
+              aiMessage.text = token;
+              messages.add(aiMessage);
+            } else {
+              aiMessage.text += token;
+            }
+            messages.refresh();
+            scrollToBottom();
+          },
+        );
         ChatMessageModel response;
         const maxPdfPollRetries = 4;
         int tries = 0;
@@ -636,19 +669,31 @@ class ChatController extends GetxService {
           try {
             response = await Future.any([
               attemptSend(),
-              Future.delayed(const Duration(minutes: 3)).then((_) => throw Exception('Request timeout after 3 minutes')),
+              Future.delayed(
+                const Duration(minutes: 3),
+              ).then((_) => throw Exception('Request timeout after 3 minutes')),
             ]);
             break; // éxito
           } catch (err) {
             final msg = err.toString();
             if (msg.contains('PDF_PROCESSING') && tries <= maxPdfPollRetries) {
-              messages.add(ChatMessageModel.temporal('Procesando el PDF... reintentando (#$tries)', true));
+              messages.add(
+                ChatMessageModel.temporal(
+                  'Procesando el PDF... reintentando (#$tries)',
+                  true,
+                ),
+              );
               scrollToBottom();
               await Future.delayed(Duration(seconds: 3 * tries));
               continue;
             }
             if (msg.contains('QUOTA_EXCEEDED')) {
-              messages.add(ChatMessageModel.temporal('Límite alcanzado para este tipo de mensaje. Actualiza tu plan.', true));
+              messages.add(
+                ChatMessageModel.temporal(
+                  'Límite alcanzado para este tipo de mensaje. Actualiza tu plan.',
+                  true,
+                ),
+              );
               scrollToBottom();
               return;
             }
@@ -662,29 +707,36 @@ class ChatController extends GetxService {
           // Don't overwrite the streamed content with response.text!
           // aiMessage.text = response.text;
         }
-  Logger.debug('server response ok');
-        
+        Logger.debug('server response ok');
+
         // Ensure proper scrolling for structured content with multiple delayed attempts
         scrollToBottom();
         // Schedule additional scrolls for complex markdown content
         Future.delayed(const Duration(milliseconds: 800), scrollToBottom);
         Future.delayed(const Duration(seconds: 1), scrollToBottom);
-        
-    // File quota consumed server-side
+
+        // File quota consumed server-side
       } catch (error) {
-  Logger.error('sendMessage error: $error');
+        Logger.error('sendMessage error: $error');
         _lastFailedUserMessage = userMessage;
         _lastFailedPdf = currentPdf;
-        messages.add(ChatMessageModel.temporal('¡Ups! Parece que hubo un problema al procesar tu mensaje. Por favor, intenta nuevamente en unos momentos.', true));
+        messages.add(
+          ChatMessageModel.temporal(
+            '¡Ups! Parece que hubo un problema al procesar tu mensaje. Por favor, intenta nuevamente en unos momentos.',
+            true,
+          ),
+        );
         scrollToBottom();
       }
     } catch (e) {
-  Logger.error('general error: $e threadId=$threadId');
+      Logger.error('general error: $e threadId=$threadId');
       debugPrint('Error sending message: $e');
     } finally {
       isSending.value = false;
       isTyping.value = false;
-  Logger.debug('final states isSending=${isSending.value} isTyping=${isTyping.value}');
+      Logger.debug(
+        'final states isSending=${isSending.value} isTyping=${isTyping.value}',
+      );
     }
   }
 
@@ -712,17 +764,19 @@ class ChatController extends GetxService {
           duration: duration,
           curve: Curves.easeOutCubic,
         );
-        
+
         // Add a second delayed scroll to handle dynamically rendered content
         Future.delayed(const Duration(milliseconds: 500), () {
-          if (_chatScrollController == null || !_chatScrollController!.hasClients) return;
-          
+          if (_chatScrollController == null ||
+              !_chatScrollController!.hasClients)
+            return;
+
           try {
             // Recheck maxScrollExtent after layout is complete
             final updatedPosition = _chatScrollController!.position;
-            
+
             // Only scroll if we're not already at the bottom and auto-scroll is enabled
-            if (updatedPosition.pixels < updatedPosition.maxScrollExtent && 
+            if (updatedPosition.pixels < updatedPosition.maxScrollExtent &&
                 (autoScrollEnabled.value || !userManuallyScrolled.value)) {
               _chatScrollController?.animateTo(
                 updatedPosition.maxScrollExtent,

@@ -1186,9 +1186,10 @@ func (c *Client) maybeCleanupVectorStores() {
 // VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
 type VectorSearchResult struct {
 	Content   string `json:"content"`
-	Source    string `json:"source"`     // Título del documento o nombre del archivo
-	VectorID  string `json:"vector_id"`  // ID del vector store
-	HasResult bool   `json:"has_result"` // Indica si se encontró información relevante
+	Source    string `json:"source"`            // Título del documento o nombre del archivo
+	VectorID  string `json:"vector_id"`         // ID del vector store
+	HasResult bool   `json:"has_result"`        // Indica si se encontró información relevante
+	Section   string `json:"section,omitempty"` // Sección/capítulo si es posible
 }
 
 // SearchInVectorStore busca información específica en un vector store dado y devuelve metadatos
@@ -1222,20 +1223,21 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 		files = []string{"Documento médico"} // Fallback genérico
 	}
 
-	// Construir prompt enriquecido que incluye solicitud de metadatos
-	searchPrompt := fmt.Sprintf(`Busca información relevante sobre: "%s"
+	// Construir prompt para salida estructurada (JSON) con metadatos
+	searchPrompt := fmt.Sprintf(`Eres un asistente de recuperación de información clínica.
+TAREA: Busca en el vector store información relevante sobre: "%s".
 
-IMPORTANTE: 
-- Devuelve SOLO la información encontrada en los documentos del vector store
-- No elabores ni agregues información externa
-- Si no encuentras información relevante, responde únicamente: "NO_FOUND"
-- Incluye fragmentos textuales específicos cuando sea posible
-- Al inicio de tu respuesta, indica de qué documento(s) proviene la información
+REGLAS:
+- Usa EXCLUSIVAMENTE el contenido disponible en el vector store.
+- Si no hay información, responde exactamente: NO_FOUND
+- Si hay información, responde ESTRICTAMENTE en JSON válido con esta forma:
+  {"source_book":"<título o nombre del archivo>","section":"<capítulo o sección si se detecta, o vacío>","snippet":"<fragmento breve y literal>"}
+- No añadas texto fuera del JSON.
 
-Documentos disponibles en este vector store: %s
+Documentos disponibles: %s
 `, query, strings.Join(files, ", "))
 
-	// Usamos el assistant con instrucciones específicas para búsqueda
+	// Ejecutar búsqueda anclada al vector store
 	text, err := c.runAndWaitWithVectorStore(ctx, threadID, searchPrompt, vectorStoreID)
 	if err != nil {
 		return nil, fmt.Errorf("vector store search failed: %v", err)
@@ -1244,27 +1246,41 @@ Documentos disponibles en este vector store: %s
 	// Limpiar el thread temporal
 	_ = c.DeleteThreadArtifacts(ctx, threadID)
 
-	result := &VectorSearchResult{
-		VectorID:  vectorStoreID,
-		HasResult: false,
-	}
+	result := &VectorSearchResult{VectorID: vectorStoreID, HasResult: false}
 
-	if strings.Contains(strings.ToUpper(text), "NO_FOUND") {
-		result.Content = ""
-		result.Source = ""
+	up := strings.ToUpper(strings.TrimSpace(text))
+	if up == "" || strings.Contains(up, "NO_FOUND") {
 		return result, nil
 	}
 
-	// Extraer fuente del contenido si está presente
-	source := "Base de conocimiento médico"
-	if len(files) > 0 {
-		source = files[0] // Usar el primer archivo como fuente principal
+	// Intentar parsear JSON estructurado
+	var tmp struct {
+		SourceBook string `json:"source_book"`
+		Section    string `json:"section"`
+		Snippet    string `json:"snippet"`
+	}
+	js := strings.TrimSpace(text)
+	if strings.HasPrefix(js, "{") && strings.HasSuffix(js, "}") && json.Unmarshal([]byte(js), &tmp) == nil {
+		// Rellenar con lo recibido
+		result.Source = strings.TrimSpace(tmp.SourceBook)
+		result.Section = strings.TrimSpace(tmp.Section)
+		result.Content = strings.TrimSpace(tmp.Snippet)
+		result.HasResult = result.Source != "" || result.Content != ""
+		// Fallback de título si viene vacío: usar primer filename
+		if result.Source == "" && len(files) > 0 {
+			result.Source = files[0]
+		}
+		return result, nil
 	}
 
-	result.Content = text
-	result.Source = source
-	result.HasResult = true
-
+	// Fallback: usar texto libre como snippet y primer filename como fuente
+	fallbackSource := "Base de conocimiento médico"
+	if len(files) > 0 {
+		fallbackSource = files[0]
+	}
+	result.Source = fallbackSource
+	result.Content = strings.TrimSpace(text)
+	result.HasResult = result.Content != ""
 	return result, nil
 }
 

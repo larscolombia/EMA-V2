@@ -1,6 +1,5 @@
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
-import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/clinical_case_generate_data.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/life_stage.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/model/sex_and_status.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/services/clinical_cases_services.dart';
@@ -20,10 +19,22 @@ import '../../profiles/profiles.dart';
 class ClinicalCaseController extends GetxController
     with StateMixin<ClinicalCaseModel> {
   ScrollController? scrollController;
-  final clinicalCaseServive = Get.find<ClinicalCasesServices>();
-  final uiObserverService = Get.find<UiObserverService>();
-  final userService = Get.find<UserService>();
-  final profileController = Get.find<ProfileController>();
+  // Dependencies (allow injection for tests). Use dynamic to accept lightweight fakes in tests.
+  final dynamic clinicalCaseServive;
+  final dynamic uiObserverService;
+  final dynamic userService;
+  final dynamic profileController;
+
+  ClinicalCaseController({
+    dynamic clinicalCaseServive,
+    dynamic uiObserverService,
+    dynamic userService,
+    dynamic profileController,
+  }) : clinicalCaseServive =
+           clinicalCaseServive ?? Get.find<ClinicalCasesServices>(),
+       uiObserverService = uiObserverService ?? Get.find<UiObserverService>(),
+       userService = userService ?? Get.find<UserService>(),
+       profileController = profileController ?? Get.find<ProfileController>();
 
   final Rx<ClinicalCaseModel?> currentCase = Rx(null);
   final messages = <ChatMessageModel>[].obs;
@@ -33,6 +44,8 @@ class ClinicalCaseController extends GetxController
 
   final isComplete = false.obs;
   final isTyping = false.obs; // New observable
+  // Backend processing stage (for unified UI cues)
+  final currentStage = ''.obs;
   final isFinalizingCase = false.obs; // Loading específico para finalización
   final analyticalAiTurns = 0.obs; // Cuenta respuestas IA en modo analítico
   static const int maxAnalyticalAiTurns = 15;
@@ -441,10 +454,21 @@ class ClinicalCaseController extends GetxController
 
       isTyping.value = true; // Show typing indicator
 
+      // Pasar callback onStream para recibir marcadores de etapa SSE
       final aiMessage = await clinicalCaseServive.sendMessage(
         userMessage,
+        onStream: (token) {
+          try {
+            if (token.startsWith('__STAGE__:')) {
+              final stage = token.split(':')[1];
+              currentStage.value = stage;
+            }
+          } catch (_) {}
+        },
       ); // Await AI response
       messages.add(aiMessage);
+      // Limpiar estado de etapa al terminar
+      currentStage.value = '';
       if (clinicalCase.type == ClinicalCaseType.analytical) {
         analyticalAiTurns.value += 1;
         // Si alcanzó el máximo, generar cierre automático

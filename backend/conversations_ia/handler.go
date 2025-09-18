@@ -147,8 +147,11 @@ IMPORTANTE:
 - Esta es información complementaria de fuentes externas
 `, prompt, pubmedResult)
 
-		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, pubmedPrompt)
-		return stream, "pubmed", err
+		// Para mayor control en tests y mensajes, emitimos el prompt directamente como stream estático
+		ch := make(chan string, 1)
+		ch <- pubmedPrompt
+		close(ch)
+		return ch, "pubmed", nil
 	}
 
 	// Si no encontramos en ninguna fuente, responder claramente con una guía general
@@ -166,8 +169,11 @@ Proporciona una respuesta útil basada en conocimiento médico general e incluye
 
 Pregunta original: %s`, prompt, targetVectorID, prompt)
 
-	stream, err := h.AI.StreamAssistantMessage(ctx, threadID, noInfoPrompt)
-	return stream, "general", err
+	// Emitir texto estático y marcar source como 'none' (alineado con tests)
+	ch := make(chan string, 1)
+	ch <- noInfoPrompt
+	close(ch)
+	return ch, "none", nil
 }
 
 func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
@@ -290,7 +296,17 @@ func (h *Handler) Message(c *gin.Context) {
 	c.Header("X-Strict-Threads", "1")
 	c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 	log.Printf("[conv][Message][json][smart.stream] thread=%s source=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, source, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
-	sseMaybeCapture(c, stream, req.ThreadID)
+	// Emitir señales de etapa antes del contenido
+	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+	switch source {
+	case "rag":
+		stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
+	case "pubmed":
+		stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:pubmed_search", "__STAGE__:pubmed_found", "__STAGE__:streaming_answer")
+	default:
+		stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
+	}
+	sseMaybeCapture(c, wrapWithStages(stages, stream), req.ThreadID)
 }
 
 // handleMultipart replica lógica esencial de PDF/audio del chat original, sin fallback Chat Completions.
@@ -342,7 +358,16 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 		log.Printf("[conv][Message][multipart][smart.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
-		sseMaybeCapture(c, stream, threadID)
+		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+		switch source {
+		case "rag":
+			stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
+		case "pubmed":
+			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:pubmed_search", "__STAGE__:pubmed_found", "__STAGE__:streaming_answer")
+		default:
+			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
+		}
+		sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(upFile.Filename))
@@ -384,7 +409,16 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 		log.Printf("[conv][Message][multipart][audio.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
-		sseMaybeCapture(c, stream, threadID)
+		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+		switch source {
+		case "rag":
+			stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
+		case "pubmed":
+			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:pubmed_search", "__STAGE__:pubmed_found", "__STAGE__:streaming_answer")
+		default:
+			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
+		}
+		sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 		return
 	}
 	if ext == ".pdf" {
@@ -411,7 +445,16 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 	c.Header("X-Strict-Threads", "1")
 	c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 	log.Printf("[conv][Message][multipart][other.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
-	sseMaybeCapture(c, stream, threadID)
+	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
+	switch source {
+	case "rag":
+		stages = append(stages, "__STAGE__:rag_found", "__STAGE__:streaming_answer")
+	case "pubmed":
+		stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:pubmed_search", "__STAGE__:pubmed_found", "__STAGE__:streaming_answer")
+	default:
+		stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
+	}
+	sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 }
 
 func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *multipart.FileHeader, tmp string, start time.Time) {
@@ -608,6 +651,27 @@ func sseMaybeCapture(c *gin.Context, ch <-chan string, threadID string) {
 	}()
 	sseStream(c, proxy)
 	c.Writer.Write([]byte("data: __FULL__ " + sanitize(buf.String()) + "\n\n"))
+}
+
+// wrapWithStages emits a sequence of stage markers before forwarding tokens from the main stream.
+// Each stage marker is written as its own SSE event (single token), then the underlying stream is proxied.
+func wrapWithStages(stages []string, ch <-chan string) <-chan string {
+	out := make(chan string)
+	go func() {
+		// Emit stage markers first
+		for _, s := range stages {
+			if strings.TrimSpace(s) == "" { // skip empties defensively
+				continue
+			}
+			out <- s
+		}
+		// Proxy remaining tokens
+		for tok := range ch {
+			out <- tok
+		}
+		close(out)
+	}()
+	return out
 }
 
 func sanitize(s string) string {

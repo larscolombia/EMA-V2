@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:async';
+
+import 'package:dio/dio.dart' as dio;
 import 'package:dio/dio.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
@@ -11,6 +15,7 @@ import 'package:get/get.dart';
 
 class ApiClinicalCaseData {
   final Dio _dio = Get.find<ApiService>().dio;
+  final Map<String, CancelToken> _cancelTokens = {};
 
   Future<ClinicalCaseGenerateData> generateCase(
     ClinicalCaseModel clinicalCase,
@@ -81,10 +86,15 @@ class ApiClinicalCaseData {
       final msg = e.toString();
       Logger.error(msg);
       // Detección básica de cuota agotada (mensaje backend 403)
-      if (msg.contains('clinical cases quota exceeded') || msg.contains('quota') || msg.contains('403')) {
+      if (msg.contains('clinical cases quota exceeded') ||
+          msg.contains('quota') ||
+          msg.contains('403')) {
         // Intentar notificar y redirigir a planes
         try {
-          final subController = Get.isRegistered<SubscriptionController>() ? Get.find<SubscriptionController>() : null;
+          final subController =
+              Get.isRegistered<SubscriptionController>()
+                  ? Get.find<SubscriptionController>()
+                  : null;
           subController?.handleQuotaExceeded();
         } catch (_) {}
       }
@@ -99,14 +109,19 @@ class ApiClinicalCaseData {
     final storage = const FlutterSecureStorage();
     final threadId = await storage.read(key: 'interactive_strict_thread_id');
 
-    final Map<String, dynamic> body = {'thread_id': threadId, 'mensaje': questionWithAnswer.message};
+    final Map<String, dynamic> body = {
+      'thread_id': threadId,
+      'mensaje': questionWithAnswer.message,
+    };
 
     // Añadir answer_index si es single choice y la opción existe
     try {
       if (questionWithAnswer.type.name == 'single_choice' &&
           questionWithAnswer.userAnswer != null &&
           questionWithAnswer.userAnswer!.isNotEmpty) {
-        final idx = questionWithAnswer.options.indexOf(questionWithAnswer.userAnswer!);
+        final idx = questionWithAnswer.options.indexOf(
+          questionWithAnswer.userAnswer!,
+        );
         if (idx >= 0) {
           body['answer_index'] = idx; // índice 0-based int
         }
@@ -159,20 +174,65 @@ class ApiClinicalCaseData {
     }
   }
 
-  Future<ChatMessageModel> sendMessage(ChatMessageModel userMessage) async {
+  Future<ChatMessageModel> sendMessage(
+    ChatMessageModel userMessage, {
+    CancelToken? cancelToken,
+    void Function(String token)? onStream,
+  }) async {
     final storage = const FlutterSecureStorage();
     final threadId = await storage.read(key: 'interactive_case_thread_id');
 
     final body = {'thread_id': threadId, 'mensaje': userMessage.text};
 
-    final response = await _dio.post('/casos-clinicos/conversar', data: body);
+    try {
+      _cancelTokens[threadId ?? ''] ??= CancelToken();
+      final token = cancelToken ?? _cancelTokens[threadId ?? '']!;
 
-    if (response.statusCode == 200) {
-      final chatId = userMessage.chatId;
-      final text = response.data['respuesta']["text"] as String;
-      return ChatMessageModel.ai(chatId: chatId, text: text);
-    } else {
-      throw Exception('Error al enviar mensaje');
+      final response = await _dio.post<dio.ResponseBody>(
+        '/casos-clinicos/conversar',
+        data: body,
+        cancelToken: token,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {'Accept': 'text/event-stream'},
+        ),
+      );
+
+      _cancelTokens.remove(threadId);
+
+      final bodyStream = response.data;
+      if (bodyStream == null) {
+        throw Exception('Respuesta de streaming vacía');
+      }
+
+      final stream = utf8.decoder.bind(bodyStream.stream);
+      final buffer = StringBuffer();
+
+      await for (final chunk in stream) {
+        for (final line in const LineSplitter().convert(chunk)) {
+          if (line.startsWith('data:')) {
+            var content = line.substring(5);
+            if (content.startsWith(' ')) content = content.substring(1);
+            if (content.startsWith('__STAGE__:')) {
+              onStream?.call(content);
+              continue;
+            }
+            if (content == '[DONE]') {
+              break;
+            }
+            buffer.write(content);
+            onStream?.call(content);
+          }
+        }
+      }
+
+      final finalText = buffer.toString();
+      return ChatMessageModel.ai(chatId: userMessage.chatId, text: finalText);
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) rethrow;
+      throw Exception('Error en la comunicación: ${e.message}');
+    } catch (e) {
+      throw Exception('Error inesperado: $e');
     }
   }
 

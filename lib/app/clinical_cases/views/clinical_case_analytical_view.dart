@@ -50,7 +50,7 @@ class _ClinicalCaseAnalyticalViewState
 
   Widget _getFullCaseWidget(ClinicalCaseModel clinicalCase) {
     List<Widget> sections = [];
-    
+
     // Anamnesis
     if (clinicalCase.anamnesis.isNotEmpty) {
       sections.addAll([
@@ -69,7 +69,7 @@ class _ClinicalCaseAnalyticalViewState
         const SizedBox(height: 16),
       ]);
     }
-    
+
     // Examen físico
     if (clinicalCase.physicalExamination.isNotEmpty) {
       sections.addAll([
@@ -88,7 +88,7 @@ class _ClinicalCaseAnalyticalViewState
         const SizedBox(height: 16),
       ]);
     }
-    
+
     // Pruebas diagnósticas
     if (clinicalCase.diagnosticTests.isNotEmpty) {
       sections.addAll([
@@ -107,7 +107,7 @@ class _ClinicalCaseAnalyticalViewState
         const SizedBox(height: 16),
       ]);
     }
-    
+
     // Diagnóstico final
     if (clinicalCase.finalDiagnosis.isNotEmpty) {
       sections.addAll([
@@ -126,7 +126,7 @@ class _ClinicalCaseAnalyticalViewState
         const SizedBox(height: 16),
       ]);
     }
-    
+
     // Manejo
     if (clinicalCase.management.isNotEmpty) {
       sections.addAll([
@@ -144,7 +144,7 @@ class _ClinicalCaseAnalyticalViewState
         ),
       ]);
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: sections,
@@ -218,14 +218,14 @@ class _ClinicalCaseAnalyticalViewState
                                     isHeaderExpanded
                                         ? _getFullCaseWidget(clinicalCase)
                                         : Text(
-                                            _getTruncatedText(
-                                              clinicalCase.anamnesis,
-                                            ),
-                                            style:
-                                                Theme.of(
-                                                  context,
-                                                ).textTheme.bodyMedium,
+                                          _getTruncatedText(
+                                            clinicalCase.anamnesis,
                                           ),
+                                          style:
+                                              Theme.of(
+                                                context,
+                                              ).textTheme.bodyMedium,
+                                        ),
                                   ],
                                 ),
                               ),
@@ -239,12 +239,15 @@ class _ClinicalCaseAnalyticalViewState
                         () => Column(
                           children: [
                             // Trigger para navegación a evaluación cuando el caso se marca completo
-                            if (controller.isComplete.value && !controller.evaluationGenerated.value && !controller.evaluationInProgress.value)
+                            if (controller.isComplete.value &&
+                                !controller.evaluationGenerated.value &&
+                                !controller.evaluationInProgress.value)
                               FutureBuilder(
-                                future: (() async {
-                                  controller.generateFinalEvaluation();
-                                  return true;
-                                })(),
+                                future:
+                                    (() async {
+                                      controller.generateFinalEvaluation();
+                                      return true;
+                                    })(),
                                 builder: (_, __) => const SizedBox.shrink(),
                               ),
                             ...controller.messages.map((message) {
@@ -254,9 +257,29 @@ class _ClinicalCaseAnalyticalViewState
                             }),
 
                             if (controller.isTyping.value)
-                              const Padding(
+                              Padding(
                                 padding: EdgeInsets.only(top: 8.0),
-                                child: ChatTypingIndicator(),
+                                child: Obx(() {
+                                  final stage = controller.currentStage.value;
+                                  final captions =
+                                      <String>[
+                                        'Procesando…',
+                                        if (stage == 'rag_search' ||
+                                            stage.isEmpty)
+                                          'Analizando vector…',
+                                        if (stage == 'pubmed_search')
+                                          'Buscando en PubMed…',
+                                        if (stage == 'rag_found')
+                                          'Fuente interna encontrada…',
+                                        if (stage == 'pubmed_found')
+                                          'Referencia PubMed encontrada…',
+                                        'Enviando respuesta…',
+                                      ].where((e) => e.isNotEmpty).toList();
+                                  return ChatTypingIndicator(
+                                    captions: captions,
+                                    captionInterval: const Duration(seconds: 2),
+                                  );
+                                }),
                               ),
                           ],
                         ),
@@ -272,12 +295,14 @@ class _ClinicalCaseAnalyticalViewState
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
                     child: OutlineAiButton(
-                      text: controller.isFinalizingCase.value 
-                        ? 'Finalizando...' 
-                        : 'Finalizar Caso',
-                      onPressed: controller.isFinalizingCase.value 
-                        ? null 
-                        : () => controller.finalizeAnalyticalFromUser(),
+                      text:
+                          controller.isFinalizingCase.value
+                              ? 'Finalizando...'
+                              : 'Finalizar Caso',
+                      onPressed:
+                          controller.isFinalizingCase.value
+                              ? null
+                              : () => controller.finalizeAnalyticalFromUser(),
                       isLoading: controller.isFinalizingCase.value,
                     ),
                   );

@@ -96,6 +96,13 @@ class ApiChatData implements IApiChatData {
             // remove only the single space after the colon to restore the exact token from OpenAI.
             var content = line.substring(5); // " <msg>" or " [DONE]"
             if (content.startsWith(' ')) content = content.substring(1);
+            // Stage markers are synthetic tokens that start with __STAGE__:<name>
+            if (content.startsWith('__STAGE__:')) {
+              onStream?.call(
+                content,
+              ); // Pass-through so controller can react to stages
+              continue;
+            }
             print(
               '📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
             );
@@ -205,6 +212,10 @@ class ApiChatData implements IApiChatData {
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
+            if (content.startsWith('__STAGE__:')) {
+              onStream?.call(content);
+              continue;
+            }
             print(
               '📡 [API2] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
             );

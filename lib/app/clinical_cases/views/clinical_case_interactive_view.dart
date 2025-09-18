@@ -17,7 +17,8 @@ class ClinicalCaseInteractiveView extends StatefulWidget {
       _ClinicalCaseInteractiveViewState();
 }
 
-class _ClinicalCaseInteractiveViewState extends State<ClinicalCaseInteractiveView> {
+class _ClinicalCaseInteractiveViewState
+    extends State<ClinicalCaseInteractiveView> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final controller = Get.find<ClinicalCaseController>();
   final scrollController = ScrollController();
@@ -143,7 +144,30 @@ class _ClinicalCaseInteractiveViewState extends State<ClinicalCaseInteractiveVie
 
                         ...items,
 
-                        if (controller.isTyping.value) ChatTypingIndicator(),
+                        if (controller.isTyping.value)
+                          Padding(
+                            padding: EdgeInsets.only(top: 8.0),
+                            child: Obx(() {
+                              final stage = controller.currentStage.value;
+                              final captions =
+                                  <String>[
+                                    'Procesando…',
+                                    if (stage == 'rag_search' || stage.isEmpty)
+                                      'Analizando vector…',
+                                    if (stage == 'pubmed_search')
+                                      'Buscando en PubMed…',
+                                    if (stage == 'rag_found')
+                                      'Fuente interna encontrada…',
+                                    if (stage == 'pubmed_found')
+                                      'Referencia PubMed encontrada…',
+                                    'Enviando respuesta…',
+                                  ].where((e) => e.isNotEmpty).toList();
+                              return ChatTypingIndicator(
+                                captions: captions,
+                                captionInterval: const Duration(seconds: 2),
+                              );
+                            }),
+                          ),
                       ],
                     );
                   }),

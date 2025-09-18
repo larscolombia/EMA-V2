@@ -51,6 +51,9 @@ func init() {
 // non-empty questions are produced before the handler returns a closure turn (finish=1 with empty pregunta).
 // Skipped automatically when the key isn't set to avoid CI/network usage.
 func TestRealInteractiveCase_MultipleRuns(t *testing.T) {
+	if os.Getenv("TESTING") == "1" {
+		t.Skip("TESTING=1; skipping real integration test")
+	}
 	if os.Getenv("OPENAI_API_KEY") == "" {
 		t.Skip("OPENAI_API_KEY not set; skipping real integration test")
 	}
@@ -116,7 +119,7 @@ func TestRealInteractiveCase_MultipleRuns(t *testing.T) {
 				if len(pq) != 0 {
 					texto, _ := pq["texto"].(string)
 					if strings.TrimSpace(texto) != "" {
-						 t.Fatalf("run %d: expected empty pregunta texto on closure, got %#v", run, pq)
+						t.Fatalf("run %d: expected empty pregunta texto on closure, got %#v", run, pq)
 					}
 				}
 				break

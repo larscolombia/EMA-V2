@@ -121,7 +121,26 @@ class _ChatHomeViewState extends State<ChatHomeView>
                 padding: EdgeInsets.only(top: 8.0),
                 child: Column(
                   children: [
-                    const ChatTypingIndicator(),
+                    Obx(() {
+                      final stage = chatController.currentStage.value;
+                      // Map backend stages to user-friendly captions
+                      final captions =
+                          <String>[
+                            'Procesando…',
+                            if (stage == 'rag_search' || stage.isEmpty)
+                              'Analizando vector…',
+                            if (stage == 'pubmed_search') 'Buscando en PubMed…',
+                            if (stage == 'rag_found')
+                              'Fuente interna encontrada…',
+                            if (stage == 'pubmed_found')
+                              'Referencia PubMed encontrada…',
+                            'Enviando respuesta…',
+                          ].where((e) => e.isNotEmpty).toList();
+                      return ChatTypingIndicator(
+                        captions: captions,
+                        captionInterval: const Duration(seconds: 2),
+                      );
+                    }),
                     if (isLongRunning) ...[
                       const SizedBox(height: 8),
                       Container(

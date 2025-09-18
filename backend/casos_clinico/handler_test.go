@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"ema-backend/openai"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,6 +34,17 @@ func (m *mockAI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 	}
 	close(ch)
 	return ch, nil
+}
+
+// New methods to satisfy extended Assistant interface
+func (m *mockAI) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
+	return "", nil
+}
+func (m *mockAI) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error) {
+	return &openai.VectorSearchResult{HasResult: false}, nil
+}
+func (m *mockAI) SearchPubMed(ctx context.Context, query string) (string, error) {
+	return "", nil
 }
 
 func setupRouter(h *Handler) *gin.Engine {

@@ -255,11 +255,17 @@ class ClinicalCasesServices {
     return feedBackAndNewQuestion;
   }
 
-  Future<ChatMessageModel> sendMessage(ChatMessageModel userMessage) async {
+  Future<ChatMessageModel> sendMessage(
+    ChatMessageModel userMessage, {
+    void Function(String token)? onStream,
+  }) async {
     _chatMessagesLocalData.insertOne(userMessage);
 
-    // usar la api
-    final aiMessage = await _apiClinicalCaseData.sendMessage(userMessage);
+    // usar la api con streaming de etapas opcional
+    final aiMessage = await _apiClinicalCaseData.sendMessage(
+      userMessage,
+      onStream: onStream,
+    );
 
     _chatMessagesLocalData.insertOne(aiMessage);
 
