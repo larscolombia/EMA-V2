@@ -589,23 +589,17 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	// Timeout configurable para mensajes para evitar 504
-	msgTout := 25 // segundos por defecto
+	// Timeout más largo como en casos_clinico para dar tiempo a OpenAI
+	msgTout := 90 // segundos - igual que casos_clinico
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 5 && v <= 90 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 120 {
 			msgTout = v
 		}
 	}
+	// Eliminar soft timeout - que cause el feedback vacío
+	// Usar timeout completo como casos_clinico para que OpenAI pueda responder
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(msgTout)*time.Second)
 	defer cancel()
-	// Soft-timeout para respuestas rápidas (mitiga 504)
-	msgSoft := 8 // segundos por defecto
-	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_SOFT_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
-			msgSoft = v
-		}
-	}
-	c.Header("X-Interactive-Message-Soft-Timeout", strconv.Itoa(msgSoft))
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
 		if id, err := h.ai.CreateThread(ctx); err == nil {
@@ -767,22 +761,12 @@ func (h *Handler) Message(c *gin.Context) {
 		return
 	}
 	var content string
-	softTimer := time.NewTimer(time.Duration(msgSoft) * time.Second)
-	defer softTimer.Stop()
 	select {
 	case content = <-ch:
 		// ok
-	case <-softTimer.C:
-		cancel()
-		log.Printf("[InteractiveCase][Message][SoftTimeout] thread=%s soft=%ds", threadID, msgSoft)
-		d := withThread(h.minTurn(), threadID)
-		d["schema_version"] = interactiveSchemaVersion
-		c.JSON(http.StatusOK, map[string]any{"data": d})
-		return
 	case <-ctx.Done():
-		d := withThread(h.minTurn(), threadID)
-		d["schema_version"] = interactiveSchemaVersion
-		c.JSON(http.StatusOK, map[string]any{"data": d})
+		// Timeout - devolver respuesta con timeout como casos_clinico
+		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "assistant timeout"})
 		return
 	}
 
@@ -1048,6 +1032,11 @@ func (h *Handler) Message(c *gin.Context) {
 			}
 		}
 	}
+
+	// Asegurar que siempre haya feedback no vacío
+	if feedback, ok := data["feedback"].(string); !ok || strings.TrimSpace(feedback) == "" {
+		data["feedback"] = "Tu respuesta ha sido registrada. Continuemos explorando diferentes aspectos de este caso clínico para construir un enfoque diagnóstico integral."
+	}
 	log.Printf("[InteractiveCase][Message][Return] thread=%s count=%d max=%d finish=%v closing=%v", threadID, h.getCount(threadID), maxQuestions, data["finish"], closing)
 	c.JSON(http.StatusOK, map[string]any{"data": withThread(data, threadID)})
 }
@@ -1116,7 +1105,7 @@ func validInteractiveTurn(m map[string]any) bool {
 
 func (h *Handler) minTurn() map[string]any {
 	return map[string]any{
-		"feedback": "",
+		"feedback": "Tu respuesta ha sido registrada. Consideremos la información proporcionada y continuemos explorando otros aspectos relevantes del caso clínico para construir un enfoque diagnóstico integral.",
 		"next": map[string]any{
 			"hallazgos": map[string]any{},
 			"pregunta": map[string]any{
