@@ -210,8 +210,23 @@ func (h *Handler) StartCase(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	// Timeouts configurables para evitar 504 a través de Nginx/proxy
+	startTout := 25 // segundos por defecto
+	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 5 && v <= 90 {
+			startTout = v
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(startTout)*time.Second)
 	defer cancel()
+	// Soft-timeout para responder rápido si el asistente demora demasiado (evita 504 en proxy)
+	startSoft := 8 // segundos por defecto
+	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_SOFT_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+			startSoft = v
+		}
+	}
+	c.Header("X-Interactive-Start-Soft-Timeout", strconv.Itoa(startSoft))
 
 	// Use user's max interactions preference if provided, otherwise use default
 	currentMaxQuestions := h.maxQuestions
@@ -334,8 +349,17 @@ func (h *Handler) StartCase(c *gin.Context) {
 	}
 
 	var content string
+	softTimer := time.NewTimer(time.Duration(startSoft) * time.Second)
+	defer softTimer.Stop()
 	select {
 	case content = <-ch:
+		// ok
+	case <-softTimer.C:
+		// Cancelar operación lenta y devolver fallback inmediato
+		cancel()
+		log.Printf("[InteractiveCase][Start][SoftTimeout] thread=%s soft=%ds", threadID, startSoft)
+		c.JSON(http.StatusOK, h.fallbackStart(req, threadID))
+		return
 	case <-ctx.Done():
 		c.JSON(http.StatusOK, h.fallbackStart(req, threadID))
 		return
@@ -506,8 +530,23 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	// Timeout configurable para mensajes para evitar 504
+	msgTout := 25 // segundos por defecto
+	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 5 && v <= 90 {
+			msgTout = v
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(msgTout)*time.Second)
 	defer cancel()
+	// Soft-timeout para respuestas rápidas (mitiga 504)
+	msgSoft := 8 // segundos por defecto
+	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_SOFT_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+			msgSoft = v
+		}
+	}
+	c.Header("X-Interactive-Message-Soft-Timeout", strconv.Itoa(msgSoft))
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
 		if id, err := h.ai.CreateThread(ctx); err == nil {
@@ -648,14 +687,28 @@ func (h *Handler) Message(c *gin.Context) {
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
-		c.JSON(http.StatusOK, map[string]any{"data": withThread(h.minTurn(), threadID)})
+		d := withThread(h.minTurn(), threadID)
+		d["schema_version"] = interactiveSchemaVersion
+		c.JSON(http.StatusOK, map[string]any{"data": d})
 		return
 	}
 	var content string
+	softTimer := time.NewTimer(time.Duration(msgSoft) * time.Second)
+	defer softTimer.Stop()
 	select {
 	case content = <-ch:
+		// ok
+	case <-softTimer.C:
+		cancel()
+		log.Printf("[InteractiveCase][Message][SoftTimeout] thread=%s soft=%ds", threadID, msgSoft)
+		d := withThread(h.minTurn(), threadID)
+		d["schema_version"] = interactiveSchemaVersion
+		c.JSON(http.StatusOK, map[string]any{"data": d})
+		return
 	case <-ctx.Done():
-		c.JSON(http.StatusOK, map[string]any{"data": withThread(h.minTurn(), threadID)})
+		d := withThread(h.minTurn(), threadID)
+		d["schema_version"] = interactiveSchemaVersion
+		c.JSON(http.StatusOK, map[string]any{"data": d})
 		return
 	}
 
@@ -940,8 +993,9 @@ func (h *Handler) fallbackStart(req startReq, threadID string) map[string]any {
 			"final_diagnosis":      "",
 			"management":           "",
 		},
-		"data":      h.minTurn(),
-		"thread_id": threadID,
+		"data":           h.minTurn(),
+		"thread_id":      threadID,
+		"schema_version": interactiveSchemaVersion,
 	}
 }
 

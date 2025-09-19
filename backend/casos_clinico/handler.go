@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -493,8 +494,17 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
+	// Timeout configurable con soft timeout para evitar 504 - habilitado por defecto
+	hardTimeout := getHTTPTimeoutSec()
+	softTimeout := 8 // segundos por defecto, siempre habilitado
+	if s := strings.TrimSpace(os.Getenv("CLINICAL_INTERACTIVE_SOFT_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+			softTimeout = v
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(hardTimeout)*time.Second)
 	defer cancel()
+	c.Header("X-Clinical-Interactive-Soft-Timeout", strconv.Itoa(softTimeout))
 
 	threadID, err := h.aiInteractive.CreateThread(ctx)
 	if err != nil {
@@ -543,8 +553,41 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 		return
 	}
 	var content string
+	softTimer := time.NewTimer(time.Duration(softTimeout) * time.Second)
+	defer softTimer.Stop()
 	select {
 	case content = <-ch:
+		// ok
+	case <-softTimer.C:
+		// Soft timeout - cancelar y devolver fallback inmediato
+		cancel()
+		log.Printf("[ClinicalInteractive][Generate][SoftTimeout] thread=%s soft=%ds", threadID, softTimeout)
+		c.JSON(http.StatusOK, map[string]any{
+			"case": map[string]any{
+				"id":                   0,
+				"title":                "Caso clínico interactivo",
+				"type":                 "interactive",
+				"age":                  strings.TrimSpace(req.Age),
+				"sex":                  strings.TrimSpace(req.Sex),
+				"gestante":             boolToInt(req.Pregnant),
+				"is_real":              1,
+				"anamnesis":            "Caso clínico básico generado por el sistema de respaldo.",
+				"physical_examination": "",
+				"diagnostic_tests":     "",
+				"final_diagnosis":      "",
+				"management":           "",
+			},
+			"data": map[string]any{
+				"questions": map[string]any{
+					"texto":    "¿Qué síntoma clave ampliarías primero?",
+					"tipo":     "open_ended",
+					"opciones": []string{},
+				},
+			},
+			"thread_id": threadID,
+			"note":      "soft_timeout",
+		})
+		return
 	case <-ctx.Done():
 		// Fallback: caso y pregunta mínimos para evitar 504
 		c.JSON(http.StatusOK, map[string]any{
@@ -588,8 +631,8 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	// Ensure minimal question present
 	ensureInteractiveDefaults(parsed, req)
 	// Anexar referencias al management del caso (no altera preguntas)
-	// Solo si está habilitado por env para evitar timeouts prolongados
-	if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+	// Habilitado por defecto para casos interactivos (se puede deshabilitar)
+	if os.Getenv("CLINICAL_APPEND_REFS") != "false" {
 		func() {
 			defer func() { _ = recover() }()
 			if caseMap, ok := parsed["case"].(map[string]any); ok {
@@ -631,6 +674,14 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
+	// Soft timeout para ChatInteractive - habilitado por defecto
+	softTimeout := 8 // segundos por defecto, siempre habilitado
+	if s := strings.TrimSpace(os.Getenv("CLINICAL_INTERACTIVE_CHAT_SOFT_TIMEOUT_SEC")); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+			softTimeout = v
+		}
+	}
+	c.Header("X-Clinical-Interactive-Chat-Soft-Timeout", strconv.Itoa(softTimeout))
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
 		id, err := h.aiInteractive.CreateThread(ctx)
@@ -652,8 +703,28 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 		return
 	}
 	var content string
+	softTimer := time.NewTimer(time.Duration(softTimeout) * time.Second)
+	defer softTimer.Stop()
 	select {
 	case content = <-ch:
+		// ok
+	case <-softTimer.C:
+		// Soft timeout - cancelar y devolver fallback inmediato
+		cancel()
+		log.Printf("[ClinicalInteractive][Chat][SoftTimeout] thread=%s soft=%ds", threadID, softTimeout)
+		c.JSON(http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"feedback": "Sistema de respaldo activado. Intenta nuevamente.",
+				"question": map[string]any{
+					"texto":    "Propón tu diagnóstico diferencial principal.",
+					"tipo":     "open_ended",
+					"opciones": []string{},
+				},
+				"thread_id": threadID,
+			},
+			"note": "soft_timeout",
+		})
+		return
 	case <-ctx.Done():
 		// Fallback: devolver estructura mínima para mantener el flujo
 		c.JSON(http.StatusOK, map[string]any{
@@ -695,7 +766,27 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	if _, ok := parsed["data"].(map[string]any)["feedback"]; !ok {
 		parsed["data"].(map[string]any)["feedback"] = "Respuesta registrada."
 	}
-	// No anexamos referencias en feedback para mantener brevedad (<40 palabras). Las referencias se agregan en GenerateInteractive (management).
+
+	// Validación con evidencia habilitada por defecto (se puede deshabilitar con env var)
+	if os.Getenv("CLINICAL_INTERACTIVE_EVIDENCE_VALIDATION") != "false" {
+		func() {
+			defer func() { _ = recover() }()
+			// Construir query para evidencia basado en la respuesta del usuario
+			evidenceQuery := strings.TrimSpace(userPrompt)
+			if evidenceQuery != "" && len(evidenceQuery) > 5 {
+				// Timeout agresivo para evidencia en chat interactivo
+				refCtx, refCancel := context.WithTimeout(ctx, 6*time.Second)
+				defer refCancel()
+				refs := collectEvidence(refCtx, h.aiInteractive, evidenceQuery)
+				if strings.TrimSpace(refs) != "" {
+					parsed["data"].(map[string]any)["evidence"] = refs
+					log.Printf("[ClinicalInteractive][Chat][Evidence] thread=%s evidence_found=true", threadID)
+				}
+			}
+		}()
+	}
+
+	// No anexamos referencias en feedback para mantener brevedad (<40 palabras). Las referencias se agregan opcionalmente en evidence field.
 	c.JSON(http.StatusOK, parsed)
 }
 
