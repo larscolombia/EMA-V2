@@ -1,10 +1,12 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"ema-backend/login"
 	"ema-backend/migrations"
 
+	"github.com/cloudinary/cloudinary-go/v2"
+	"github.com/cloudinary/cloudinary-go/v2/api/uploader"
 	"github.com/gin-gonic/gin"
 )
 
@@ -193,6 +197,7 @@ func updateProfile(c *gin.Context) {
 			return
 		}
 		log.Printf("[PROFILE][POST] uploading image: filename=%s size=%d userID=%d", file.Filename, file.Size, user.ID)
+
 		// Validaciones básicas de tamaño (10 MB por defecto)
 		maxMB := 10
 		if envMax := os.Getenv("PROFILE_IMAGE_MAX_MB"); envMax != "" {
@@ -208,40 +213,61 @@ func updateProfile(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"message": "Imagen demasiado grande", "code": "image_too_large", "max_size_mb": maxMB})
 			return
 		}
-		// Create media folder per user (respect MEDIA_ROOT)
-		mediaRoot := strings.TrimSpace(os.Getenv("MEDIA_ROOT"))
-		if mediaRoot == "" {
-			mediaRoot = "./media"
+
+		// Check if Cloudinary is configured
+		cloudinaryURL := strings.TrimSpace(os.Getenv("CLOUDINARY_URL"))
+		if cloudinaryURL == "" {
+			log.Printf("[PROFILE][POST] CLOUDINARY_URL not configured, falling back to local storage")
+			// Fallback to local storage (existing code)
+			mediaRoot := strings.TrimSpace(os.Getenv("MEDIA_ROOT"))
+			if mediaRoot == "" {
+				mediaRoot = "./media"
+			}
+			base := filepath.Join(mediaRoot, fmt.Sprintf("user_%d", user.ID))
+			if err := os.MkdirAll(base, 0755); err != nil {
+				log.Printf("[PROFILE][POST] failed to create media dir '%s': %v", base, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo crear carpeta de medios"})
+				return
+			}
+			// Save file
+			ext := normalizeImageExt(file.Filename, file.Header.Get("Content-Type"))
+			fileName := fmt.Sprintf("profile%s", ext)
+			dst := filepath.Join(base, fileName)
+			if err := c.SaveUploadedFile(file, dst); err != nil {
+				log.Printf("[PROFILE][POST] failed to save image to '%s': %v", dst, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo guardar la imagen", "code": "image_save_failed"})
+				return
+			}
+			// Store relative path in DB as a URL path under /media
+			relPath, err := filepath.Rel(mediaRoot, dst)
+			if err != nil {
+				relPath = filepath.Base(dst)
+			}
+			rel := "/media/" + filepath.ToSlash(relPath)
+			if err := migrations.UpdateUserProfileImage(user.ID, rel); err != nil {
+				log.Printf("[PROFILE][POST] failed updating DB with image path '%s' for userID=%d: %v", rel, user.ID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo actualizar el usuario"})
+				return
+			}
+		} else {
+			// Use Cloudinary
+			imageURL, err := uploadToCloudinary(file, user.ID)
+			if err != nil {
+				log.Printf("[PROFILE][POST] failed uploading to Cloudinary for userID=%d: %v", user.ID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo subir la imagen", "code": "cloudinary_upload_failed"})
+				return
+			}
+
+			// Store Cloudinary URL in DB
+			if err := migrations.UpdateUserProfileImage(user.ID, imageURL); err != nil {
+				log.Printf("[PROFILE][POST] failed updating DB with Cloudinary URL '%s' for userID=%d: %v", imageURL, user.ID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo actualizar el usuario"})
+				return
+			}
 		}
-		base := filepath.Join(mediaRoot, fmt.Sprintf("user_%d", user.ID))
-		if err := os.MkdirAll(base, 0755); err != nil {
-			log.Printf("[PROFILE][POST] failed to create media dir '%s': %v", base, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo crear carpeta de medios"})
-			return
-		}
-		// Save file
-		ext := normalizeImageExt(file.Filename, file.Header.Get("Content-Type"))
-		fileName := fmt.Sprintf("profile%s", ext)
-		dst := filepath.Join(base, fileName)
-		if err := c.SaveUploadedFile(file, dst); err != nil {
-			log.Printf("[PROFILE][POST] failed to save image to '%s': %v", dst, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo guardar la imagen", "code": "image_save_failed"})
-			return
-		}
-		// Store relative path in DB as a URL path under /media
-		// Compute path relative to mediaRoot
-		relPath, err := filepath.Rel(mediaRoot, dst)
-		if err != nil {
-			relPath = filepath.Base(dst)
-		}
-		rel := "/media/" + filepath.ToSlash(relPath)
-		if err := migrations.UpdateUserProfileImage(user.ID, rel); err != nil {
-			log.Printf("[PROFILE][POST] failed updating DB with image path '%s' for userID=%d: %v", rel, user.ID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo actualizar el usuario"})
-			return
-		}
+
 		updated := migrations.GetUserByID(user.ID)
-		log.Printf("[PROFILE][POST] image updated successfully for userID=%d path=%s", user.ID, rel)
+		log.Printf("[PROFILE][POST] image updated successfully for userID=%d", user.ID)
 		c.JSON(http.StatusOK, gin.H{"data": userToMap(updated)})
 		return
 	}
@@ -324,4 +350,46 @@ func normalizeImageExt(filename, contentType string) string {
 	default:
 		return ".jpg"
 	}
+}
+
+// uploadToCloudinary uploads a profile image to Cloudinary and returns the public URL
+func uploadToCloudinary(file *multipart.FileHeader, userID int) (string, error) {
+	// Check if Cloudinary is configured
+	cloudinaryURL := strings.TrimSpace(os.Getenv("CLOUDINARY_URL"))
+	if cloudinaryURL == "" {
+		return "", fmt.Errorf("CLOUDINARY_URL no está configurado")
+	}
+
+	// Initialize Cloudinary client
+	cld, err := cloudinary.NewFromURL(cloudinaryURL)
+	if err != nil {
+		return "", fmt.Errorf("error inicializando Cloudinary: %v", err)
+	}
+
+	// Open the uploaded file
+	src, err := file.Open()
+	if err != nil {
+		return "", fmt.Errorf("error abriendo archivo: %v", err)
+	}
+	defer src.Close()
+
+	// Configure upload parameters
+	uploadParams := uploader.UploadParams{
+		PublicID:       fmt.Sprintf("profile_images/user_%d_profile", userID),
+		Folder:         "ema_profiles",              // Organize images in a folder
+		Transformation: "c_fill,g_face,h_400,w_400", // Resize to 400x400, crop to face
+		ResourceType:   "image",
+	}
+
+	// Upload to Cloudinary
+	ctx := context.Background()
+	result, err := cld.Upload.Upload(ctx, src, uploadParams)
+	if err != nil {
+		return "", fmt.Errorf("error subiendo a Cloudinary: %v", err)
+	}
+
+	log.Printf("[CLOUDINARY] Image uploaded successfully: userID=%d, publicID=%s, url=%s",
+		userID, result.PublicID, result.SecureURL)
+
+	return result.SecureURL, nil
 }

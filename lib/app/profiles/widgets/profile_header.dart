@@ -125,19 +125,27 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                   return '$base/${raw.startsWith('/') ? raw.substring(1) : raw}';
                 }();
                 // Agregar cache-buster basado en updatedAt para evitar caché del mismo path
-                final updatedAtMs =
-                    Get.find<ProfileController>()
-                        .currentProfile
-                        .value
-                        .updatedAt
-                        .millisecondsSinceEpoch;
+                // No agregar cache-buster para URLs de Cloudinary (ellos manejan su cache)
                 final imageUrl = () {
                   if (profileImage.isEmpty) return profileImage;
+                  // Si es URL de Cloudinary, no agregar cache-buster
+                  if (profileImage.contains('cloudinary.com')) {
+                    print(
+                      '🖼️ [ProfileHeader] Cargando imagen de Cloudinary: $profileImage',
+                    );
+                    return profileImage;
+                  }
+                  // Para imágenes locales, agregar cache-buster
+                  final updatedAtMs =
+                      Get.find<ProfileController>()
+                          .currentProfile
+                          .value
+                          .updatedAt
+                          .millisecondsSinceEpoch;
                   final sep = profileImage.contains('?') ? '&' : '?';
                   final url = '$profileImage${sep}v=$updatedAtMs';
                   // Debug: mostrar URL final construida
-                  // ignore: avoid_print
-                  print('🖼️ [ProfileHeader] Cargando imagen: ' + url);
+                  print('🖼️ [ProfileHeader] Cargando imagen local: $url');
                   return url;
                 }();
                 return Container(
