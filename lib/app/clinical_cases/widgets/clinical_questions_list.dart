@@ -2,6 +2,8 @@
 
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/controllers/clinical_case_controller.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/widgets/clinical_question_message_single.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/widgets/clinical_question_message_true_false.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -40,11 +42,11 @@ class _ClinicalQuestionsListState extends State<ClinicalQuestionsList> {
     }
 
     if (question.type == QuestionType.singleChoice) {
-      return QuestionMessageSingle(question: question);
+      return ClinicalQuestionMessageSingle(question: question);
     }
 
     if (question.type == QuestionType.trueFalse) {
-      return QuestionMessageTrueFalse(question: question);
+      return ClinicalQuestionMessageTrueFalse(question: question);
     }
 
     return SizedBox();

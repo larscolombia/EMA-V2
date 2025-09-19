@@ -27,7 +27,7 @@ class _ProfileHeaderState extends State<ProfileHeader> {
 
   Future<void> _pickImage() async {
     print('📱 [ProfileHeader] Iniciando selección de imagen');
-    
+
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
       source: ImageSource.gallery,
@@ -36,11 +36,15 @@ class _ProfileHeaderState extends State<ProfileHeader> {
 
     if (pickedFile != null) {
       print('✅ [ProfileHeader] Imagen seleccionada: ${pickedFile.path}');
-      print('📏 [ProfileHeader] Tamaño: ${await File(pickedFile.path).length()} bytes');
-      
+      print(
+        '📏 [ProfileHeader] Tamaño: ${await File(pickedFile.path).length()} bytes',
+      );
+
       final ProfileController profileController = Get.find<ProfileController>();
       try {
-        print('🔄 [ProfileHeader] Llamando al controlador para actualizar imagen...');
+        print(
+          '🔄 [ProfileHeader] Llamando al controlador para actualizar imagen...',
+        );
         await profileController.updateProfileImage(pickedFile);
         print('✅ [ProfileHeader] Actualización completada exitosamente');
       } catch (e) {
@@ -55,10 +59,16 @@ class _ProfileHeaderState extends State<ProfileHeader> {
     }
   }
 
-  final EdgeInsets _paddingDrawer =
-      EdgeInsets.only(top: 25, bottom: 25, right: 16, left: 16);
-  final EdgeInsets _paddingProfile =
-      EdgeInsets.symmetric(horizontal: 28, vertical: 25);
+  final EdgeInsets _paddingDrawer = EdgeInsets.only(
+    top: 25,
+    bottom: 25,
+    right: 16,
+    left: 16,
+  );
+  final EdgeInsets _paddingProfile = EdgeInsets.symmetric(
+    horizontal: 28,
+    vertical: 25,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -97,18 +107,38 @@ class _ProfileHeaderState extends State<ProfileHeader> {
           Stack(
             children: [
               Obx(() {
-                final raw = Get.find<ProfileController>()
-                    .currentProfile
-                    .value
-                    .profileImage;
+                final raw =
+                    Get.find<ProfileController>()
+                        .currentProfile
+                        .value
+                        .profileImage;
                 // Construir URL absoluta si viene relativa (ej: media/user_1/profile.jpg)
                 final profileImage = () {
                   if (raw.isEmpty) return raw;
                   if (raw.startsWith('http://') || raw.startsWith('https://')) {
                     return raw;
                   }
-                  final base = apiUrl.endsWith('/') ? apiUrl.substring(0, apiUrl.length - 1) : apiUrl;
+                  final base =
+                      apiUrl.endsWith('/')
+                          ? apiUrl.substring(0, apiUrl.length - 1)
+                          : apiUrl;
                   return '$base/${raw.startsWith('/') ? raw.substring(1) : raw}';
+                }();
+                // Agregar cache-buster basado en updatedAt para evitar caché del mismo path
+                final updatedAtMs =
+                    Get.find<ProfileController>()
+                        .currentProfile
+                        .value
+                        .updatedAt
+                        .millisecondsSinceEpoch;
+                final imageUrl = () {
+                  if (profileImage.isEmpty) return profileImage;
+                  final sep = profileImage.contains('?') ? '&' : '?';
+                  final url = '$profileImage${sep}v=$updatedAtMs';
+                  // Debug: mostrar URL final construida
+                  // ignore: avoid_print
+                  print('🖼️ [ProfileHeader] Cargando imagen: ' + url);
+                  return url;
                 }();
                 return Container(
                   width: 100,
@@ -116,21 +146,26 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                   decoration: BoxDecoration(
                     color: AppStyles.greyColor,
                     borderRadius: BorderRadius.circular(100),
-                    border: Border.all(
-                      color: AppStyles.primary100,
-                      width: 7,
-                    ),
+                    border: Border.all(color: AppStyles.primary100, width: 7),
                   ),
                   child: ClipOval(
-                    child: profileImage.isNotEmpty
-                        ? Image.network(
-                            profileImage,
-                            fit: BoxFit.cover,
-                            width: 100,
-                            height: 100,
-                            errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 48),
-                          )
-                        : const Icon(Icons.person, size: 48),
+                    child:
+                        imageUrl.isNotEmpty
+                            ? Image.network(
+                              imageUrl,
+                              fit: BoxFit.cover,
+                              width: 100,
+                              height: 100,
+                              errorBuilder: (context, error, stackTrace) {
+                                // ignore: avoid_print
+                                print(
+                                  '❌ [ProfileHeader] Error cargando imagen: ' +
+                                      error.toString(),
+                                );
+                                return const Icon(Icons.person, size: 48);
+                              },
+                            )
+                            : const Icon(Icons.person, size: 48),
                   ),
                 );
               }),
@@ -150,17 +185,19 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                       child: Container(
                         width: 100,
                         height: 100,
-                        color: _showOverlay
-                            ? Colors.black.withAlpha((0.3 * 255).toInt())
-                            : Colors.transparent,
+                        color:
+                            _showOverlay
+                                ? Colors.black.withAlpha((0.3 * 255).toInt())
+                                : Colors.transparent,
                         alignment: Alignment.center,
-                        child: _showOverlay
-                            ? const Icon(
-                                Icons.camera_alt,
-                                color: Colors.white,
-                                size: 36,
-                              )
-                            : null,
+                        child:
+                            _showOverlay
+                                ? const Icon(
+                                  Icons.camera_alt,
+                                  color: Colors.white,
+                                  size: 36,
+                                )
+                                : null,
                       ),
                     ),
                   ),

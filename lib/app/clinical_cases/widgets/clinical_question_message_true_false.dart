@@ -2,13 +2,19 @@ import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/material.dart';
 
-class QuestionMessageTrueFalse extends StatelessWidget {
+class ClinicalQuestionMessageTrueFalse extends StatelessWidget {
   final QuestionResponseModel question;
-
-  const QuestionMessageTrueFalse({super.key, required this.question});
+  const ClinicalQuestionMessageTrueFalse({super.key, required this.question});
 
   @override
   Widget build(BuildContext context) {
+    final base = Theme.of(context).textTheme.bodyMedium;
+    final questionStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      color: Colors.white,
+      fontWeight: FontWeight.w600,
+    );
     return Column(
       mainAxisSize: MainAxisSize.max,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -21,9 +27,12 @@ class QuestionMessageTrueFalse extends StatelessWidget {
               color: AppStyles.primary900,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(question.question, style: AppStyles.chatMessageAi),
+            child: Text(
+              question.question,
+              style: questionStyle,
+              textAlign: TextAlign.justify,
+            ),
           ),
-
         if (question.isAnswered)
           Container(
             margin: const EdgeInsets.only(top: 0, bottom: 8, left: 24),

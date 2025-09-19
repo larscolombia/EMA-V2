@@ -69,7 +69,7 @@ type Handler struct {
 
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
-	const targetVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
+	targetVectorID := booksVectorID()
 
 	// Si el hilo tiene documentos adjuntos, forzar modo "doc-only":
 	// usar EXCLUSIVAMENTE el vector store del hilo y prohibir fuentes externas.
@@ -131,25 +131,31 @@ Instrucciones:
 	}
 
 	if err == nil && searchResult.HasResult && strings.TrimSpace(searchResult.Content) != "" {
-		// Encontramos información en el RAG, construir prompt enriquecido
+		// Encontramos información en el RAG (libros), construir respuesta estructurada con referencias al final
 		log.Printf("[conv][SmartMessage][rag_found] thread=%s source=%s chars=%d", threadID, searchResult.Source, len(searchResult.Content))
 
-		ragPrompt := fmt.Sprintf(`Con base en el libro "%s" (vector %s), responde la siguiente pregunta usando EXCLUSIVAMENTE la información encontrada:
+		structuredPrompt := fmt.Sprintf(`Usa EXCLUSIVAMENTE la información del siguiente fragmento del libro para responder, en español.
 
 Pregunta: %s
 
-Información encontrada en "%s": %s
+Fragmento del libro ("%s"):
+%s
 
-INSTRUCCIONES IMPORTANTES: 
-- Usa ÚNICAMENTE la información proporcionada arriba del libro "%s"
-- Cita textualmente fragmentos relevantes cuando sea apropiado
-- Si el fragmento encontrado NO cubre completamente la pregunta, responde que no hay información suficiente en la fuente consultada
-- Al final indica claramente: "Fuente: %s (vector %s)"
-- NO agregues conocimiento externo o información no presente en el fragmento
-- Si la información es parcial, especifica qué aspectos no se pueden responder con la fuente consultada
-`, searchResult.Source, searchResult.VectorID, prompt, searchResult.Source, searchResult.Content, searchResult.Source, searchResult.Source, searchResult.VectorID)
+FORMATO (sin encabezados markdown, solo texto):
+Resumen: (3–5 líneas)
+Puntos clave:
+- (3 a 5 viñetas breves)
+Razonamiento clínico: (1 párrafo justificando con base en el fragmento)
+Conclusión: (1–2 líneas)
+Referencias:
+- Libro: %s
 
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, ragPrompt, targetVectorID)
+REGLAS:
+- No inventes información.
+- Si el fragmento no cubre algo, dilo en la conclusión.
+- No menciones procesos de búsqueda ni IDs.`, prompt, searchResult.Source, searchResult.Content, searchResult.Source)
+
+		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, structuredPrompt, targetVectorID)
 		return stream, "rag", err
 	}
 
@@ -162,8 +168,7 @@ INSTRUCCIONES IMPORTANTES:
 	if err == nil && strings.TrimSpace(pubmedResult) != "" {
 		log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
 
-		// Formatear una respuesta concisa SIN mencionar el proceso de búsqueda
-		// y con una sección de Referencias al final (Markdown limpio)
+		// Formatear una respuesta estructurada SIN mencionar el proceso de búsqueda
 		formatted := formatPubMedAnswer(prompt, pubmedResult)
 		ch := make(chan string, 1)
 		ch <- formatted
@@ -175,17 +180,17 @@ INSTRUCCIONES IMPORTANTES:
 	log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
 	userFacing := fmt.Sprintf(`No se encontró información relevante sobre "%s" en las fuentes configuradas.
 
-Fuentes consultadas:
-- Base de conocimiento interno (vector %s): sin resultados
-- PubMed (https://pubmed.ncbi.nlm.nih.gov/): sin resultados
+	Fuentes consultadas:
+	- Libros (base de conocimiento interno): sin resultados
+	- PubMed: sin resultados
 
-Sugerencias para continuar:
-- Reformula la pregunta con términos más específicos.
-- Verifica la ortografía de términos médicos.
-- Consulta fuentes médicas adicionales o un profesional de la salud.
-- Usa sinónimos o términos alternativos para el concepto buscado.
+	Sugerencias para continuar:
+	- Reformula la pregunta con términos más específicos.
+	- Verifica la ortografía de términos médicos.
+	- Consulta fuentes médicas adicionales o un profesional de la salud.
+	- Usa sinónimos o términos alternativos para el concepto buscado.
 
-Pregunta original: %s`, prompt, targetVectorID, prompt)
+	Pregunta original: %s`, prompt, prompt)
 
 	// Emitir texto estático y marcar source como 'none'
 	ch := make(chan string, 1)
@@ -381,6 +386,9 @@ Reglas:
 	c.Header("X-Thread-ID", req.ThreadID)
 	c.Header("X-Strict-Threads", "1")
 	c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+	if source == "rag" {
+		c.Header("X-Books-Vector-ID", "vs_680fc484cef081918b2b9588b701e2f4")
+	}
 	log.Printf("[conv][Message][json][smart.stream] thread=%s source=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, source, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
 	// Emitir señales de etapa antes del contenido
 	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
@@ -875,6 +883,11 @@ func sanitizePreview(s string) string {
 		return clean[:100] + "..."
 	}
 	return clean
+}
+
+// booksVectorID devuelve el ID canónico del vector de libros; sin dependencia de env
+func booksVectorID() string {
+	return "vs_680fc484cef081918b2b9588b701e2f4"
 }
 
 // classifyErr produce un code simbólico para facilitar observabilidad lado cliente.

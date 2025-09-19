@@ -688,7 +688,14 @@ func (h *Handler) Message(c *gin.Context) {
 				h.mu.Lock()
 				h.missingCorrectIdx[threadID] = h.missingCorrectIdx[threadID] + 1
 				h.mu.Unlock()
-				if recIdx, ok := h.recoverCorrectIndex(ctx, threadID, qText, opts); ok {
+				// 1) Intentar con evidencia (libros + PubMed) para asegurar base científica
+				if recIdx, ok := h.recoverCorrectIndexEvidence(ctx, qText, opts); ok {
+					h.mu.Lock()
+					h.lastCorrectIndex[threadID] = recIdx
+					ci = recIdx
+					okCI = true
+					h.mu.Unlock()
+				} else if recIdx, ok := h.recoverCorrectIndex(ctx, threadID, qText, opts); ok { // 2) fallback al asistente
 					h.mu.Lock()
 					h.lastCorrectIndex[threadID] = recIdx
 					ci = recIdx
@@ -1480,6 +1487,71 @@ func (h *Handler) recoverCorrectIndex(ctx context.Context, threadID, question st
 		return -1, false
 	}
 	return -1, false
+}
+
+// recoverCorrectIndexEvidence intenta deducir el índice correcto usando evidencia externa
+// (vector de libros y PubMed) cuando el asistente omitió correct_index.
+// Devuelve (index, true) si hay un candidato único con soporte; en empates o sin señal, false.
+func (h *Handler) recoverCorrectIndexEvidence(ctx context.Context, question string, options []string) (int, bool) {
+	if len(options) == 0 {
+		return -1, false
+	}
+	// Limitar presupuesto de tiempo para no bloquear el turno completo
+	tctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	type score struct {
+		s       int    // puntaje discreto
+		details string // opcional, no usado de momento
+	}
+	best := -1
+	bestScore := -1
+	tie := false
+	// Explorar cada opción con consultas breves
+	for i, opt := range options {
+		// Construir consulta compacta combinando pregunta y opción
+		q := strings.TrimSpace(question)
+		o := strings.TrimSpace(opt)
+		if len(q) > 180 {
+			q = q[:180]
+		}
+		if len(o) > 160 {
+			o = o[:160]
+		}
+		query := q
+		if query != "" && o != "" {
+			query = q + " — Candidato: " + o
+		} else if o != "" {
+			query = o
+		}
+		sc := 0
+		// 1) Vector de libros
+		if strings.HasPrefix(strings.TrimSpace(h.vectorID), "vs_") {
+			if res, err := h.ai.SearchInVectorStoreWithMetadata(tctx, h.vectorID, query); err == nil && res != nil {
+				if res.HasResult {
+					sc += 2 // resultado con metadatos vale más
+				} else if txt, err2 := h.ai.SearchInVectorStore(tctx, h.vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
+					sc += 1
+				}
+			}
+		}
+		// 2) PubMed
+		if pm, err := h.ai.SearchPubMed(tctx, query); err == nil && strings.TrimSpace(pm) != "" {
+			sc += 1
+		}
+		// Selección con manejo de empates
+		if sc > bestScore {
+			bestScore = sc
+			best = i
+			tie = false
+		} else if sc == bestScore {
+			tie = true
+		}
+	}
+	if bestScore <= 0 || tie || best < 0 {
+		return -1, false
+	}
+	return best, true
 }
 
 // --- Embedded options parsing helpers --- //

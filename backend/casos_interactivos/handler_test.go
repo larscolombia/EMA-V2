@@ -63,6 +63,79 @@ func (m *mockMissingCI) SearchPubMed(ctx context.Context, query string) (string,
 	return "", nil
 }
 
+// mockEvidenceCI fuerza ausencia de correct_index y expone evidencia sólo para una opción
+type mockEvidenceCI struct{}
+
+func (m *mockEvidenceCI) CreateThread(ctx context.Context) (string, error) { return "thread-evi", nil }
+func (m *mockEvidenceCI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
+	ch := make(chan string, 1)
+	// Siempre responde turnos sin correct_index para forzar recuperación por evidencia
+	ch <- `{"feedback":"Evaluación: INCORRECTO\n","next":{"hallazgos":{},"pregunta":{"tipo":"single-choice","texto":"Pregunta con opciones","opciones":["Beta-bloqueador","IECA","Calcioantagonista","Diurético"]}},"finish":0}`
+	return ch, nil
+}
+func (m *mockEvidenceCI) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
+	// Devolver texto sólo si la opción contiene IECA
+	if strings.Contains(query, "IECA") {
+		return "IECA recomendado en esta condición", nil
+	}
+	return "", nil
+}
+func (m *mockEvidenceCI) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error) {
+	if strings.Contains(query, "IECA") {
+		return &openai.VectorSearchResult{HasResult: true, Source: "Guía clínica", Section: "Tratamiento", Content: "Los IECA son primera línea."}, nil
+	}
+	return &openai.VectorSearchResult{HasResult: false}, nil
+}
+func (m *mockEvidenceCI) SearchPubMed(ctx context.Context, query string) (string, error) {
+	// Sin PubMed; la señal del vector debe bastar
+	return "", nil
+}
+
+func TestEvidenceBasedRecoveryCorrectIndex(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.Default()
+	h := &Handler{ai: &mockEvidenceCI{}, maxQuestions: 3, turnCount: make(map[string]int), threadMaxQuestions: make(map[string]int), askedQuestions: make(map[string][]string), evalCorrect: make(map[string]int), evalAnswers: make(map[string]int), lastCorrectIndex: make(map[string]int), lastOptions: make(map[string][]string), lastQuestionText: make(map[string]string), missingCorrectIdx: make(map[string]int)}
+	// vectorID por defecto (no importa el valor, sólo que tenga prefijo vs_)
+	h.vectorID = "vs_680fc484cef081918b2b9588b701e2f4"
+	h.RegisterRoutes(r)
+
+	// start (consume 1, sin correct_index)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/casos-interactivos/iniciar", strings.NewReader(`{"age":"40","sex":"m","type":"interactive","pregnant":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("start expected 200, got %d", w.Code)
+	}
+	var start map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &start)
+	threadID, _ := start["thread_id"].(string)
+	if threadID == "" {
+		t.Fatalf("missing thread id")
+	}
+
+	// message: usuario responde "IECA"; la recuperación por evidencia debe elegir índice 1
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/casos-interactivos/mensaje", strings.NewReader(`{"thread_id":"`+threadID+`","mensaje":"IECA"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("message expected 200, got %d", w2.Code)
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]any)
+	evalObj := data["evaluation"].(map[string]any)
+	// correct_index debería ser 1 (IECA) y is_correct booleano
+	ciF := evalObj["correct_index"].(float64)
+	if int(ciF) != 1 {
+		t.Fatalf("expected recovered correct_index=1 (IECA), got %v", ciF)
+	}
+	if _, ok := evalObj["is_correct"].(bool); !ok {
+		t.Fatalf("expected boolean is_correct after evidence-based recovery")
+	}
+}
+
 func setup() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.Default()

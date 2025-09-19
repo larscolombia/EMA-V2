@@ -2,13 +2,38 @@ import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/material.dart';
 
-class QuestionMessageTrueFalse extends StatelessWidget {
+class ClinicalQuestionMessageSingle extends StatelessWidget {
   final QuestionResponseModel question;
+  ClinicalQuestionMessageSingle({super.key, required this.question});
 
-  const QuestionMessageTrueFalse({super.key, required this.question});
+  final List<String> letters = const ['A.', 'B.', 'C.', 'D.', 'E.'];
 
   @override
   Widget build(BuildContext context) {
+    final base = Theme.of(context).textTheme.bodyMedium;
+    final questionStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      color: Colors.white,
+      fontWeight: FontWeight.w600,
+    );
+    final optionStyle = base?.copyWith(
+      fontSize: 16,
+      height: 1.4,
+      color: Colors.white,
+    );
+
+    int index = -1;
+    final textOptions =
+        question.options.map((option) {
+          index++;
+          return Text(
+            '${letters[index]} $option',
+            style: optionStyle,
+            textAlign: TextAlign.justify,
+          );
+        }).toList();
+
     return Column(
       mainAxisSize: MainAxisSize.max,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -21,9 +46,18 @@ class QuestionMessageTrueFalse extends StatelessWidget {
               color: AppStyles.primary900,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Text(question.question, style: AppStyles.chatMessageAi),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  question.question,
+                  style: questionStyle,
+                  textAlign: TextAlign.justify,
+                ),
+                ...textOptions,
+              ],
+            ),
           ),
-
         if (question.isAnswered)
           Container(
             margin: const EdgeInsets.only(top: 0, bottom: 8, left: 24),
