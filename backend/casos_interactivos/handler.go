@@ -45,6 +45,7 @@ type Handler struct {
 	lastCorrectIndex  map[string]int      // thread_id -> correct index of last question
 	lastOptions       map[string][]string // thread_id -> slice of option texts of last question
 	lastQuestionText  map[string]string   // thread_id -> texto de la última pregunta
+	lastQuestionType  map[string]string   // thread_id -> tipo de la última pregunta ('open_ended' o 'single-choice')
 	missingCorrectIdx map[string]int      // thread_id -> veces que faltó correct_index (para métricas)
 	closureDue        map[string]bool     // thread_id -> se alcanzó max y el próximo turno debe ser cierre
 }
@@ -55,12 +56,47 @@ func (h *Handler) evaluateLastAnswer(threadID, userAnswer string, explicit *int,
 	if threadID == "" {
 		return false, false
 	}
+
+	// Asegurar que los mapas están inicializados
+	h.mu.Lock()
+	if h.evalAnswers == nil {
+		h.evalAnswers = make(map[string]int)
+	}
+	if h.evalCorrect == nil {
+		h.evalCorrect = make(map[string]int)
+	}
+	if h.lastCorrectIndex == nil {
+		h.lastCorrectIndex = make(map[string]int)
+	}
+	if h.lastOptions == nil {
+		h.lastOptions = make(map[string][]string)
+	}
+	h.mu.Unlock()
+
 	userAns := strings.TrimSpace(userAnswer)
 	h.mu.Lock()
 	ci, okCI := h.lastCorrectIndex[threadID]
 	opts := h.lastOptions[threadID]
 	h.mu.Unlock()
-	if !okCI || ci < 0 || ci >= len(opts) || len(opts) == 0 {
+
+	// Para preguntas abiertas (sin opciones o correct_index = -1), marcar como correcta por defecto
+	// y permitir que el AI genere feedback educativo sin evaluación binaria
+	if len(opts) == 0 || ci == -1 {
+		// Es pregunta abierta, no hacer evaluación binaria
+		fb, _ := data["feedback"].(string)
+		// No agregar prefijo "Evaluación: CORRECTO/INCORRECTO" para preguntas abiertas
+		// El AI debe manejar el feedback educativo directamente
+		data["feedback"] = fb
+		h.mu.Lock()
+		h.evalAnswers[threadID] = h.evalAnswers[threadID] + 1
+		// Para preguntas abiertas, considerar como "correcta" para estadísticas
+		h.evalCorrect[threadID] = h.evalCorrect[threadID] + 1
+		h.mu.Unlock()
+		data["last_is_correct"] = true
+		return true, true
+	}
+
+	if !okCI || ci < 0 || ci >= len(opts) {
 		data["evaluation_pending"] = true
 		return false, false
 	}
@@ -122,6 +158,7 @@ func DefaultHandler() *Handler {
 		lastCorrectIndex:   make(map[string]int),
 		lastOptions:        make(map[string][]string),
 		lastQuestionText:   make(map[string]string),
+		lastQuestionType:   make(map[string]string),
 		missingCorrectIdx:  make(map[string]int),
 		closureDue:         make(map[string]bool),
 	}
@@ -188,6 +225,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 	}
 	if h.lastQuestionText == nil {
 		h.lastQuestionText = make(map[string]string)
+	}
+	if h.lastQuestionType == nil {
+		h.lastQuestionType = make(map[string]string)
 	}
 	if h.missingCorrectIdx == nil {
 		h.missingCorrectIdx = make(map[string]int)
@@ -405,6 +445,12 @@ func (h *Handler) StartCase(c *gin.Context) {
 				if txt, ok := pq["texto"].(string); ok {
 					h.lastQuestionText[threadID] = strings.TrimSpace(txt)
 				}
+				// Almacenar tipo de pregunta
+				if typ, ok := pq["tipo"].(string); ok {
+					h.lastQuestionType[threadID] = strings.TrimSpace(typ)
+				} else {
+					h.lastQuestionType[threadID] = "open_ended" // default para StartCase
+				}
 				// extract options para consistencia (debería estar vacío)
 				h.lastOptions[threadID] = []string{}
 				if rawOpts, ok := pq["opciones"].([]any); ok {
@@ -522,6 +568,9 @@ func (h *Handler) Message(c *gin.Context) {
 	}
 	if h.lastQuestionText == nil {
 		h.lastQuestionText = make(map[string]string)
+	}
+	if h.lastQuestionType == nil {
+		h.lastQuestionType = make(map[string]string)
 	}
 	if h.missingCorrectIdx == nil {
 		h.missingCorrectIdx = make(map[string]int)
@@ -680,11 +729,26 @@ func (h *Handler) Message(c *gin.Context) {
 		currentTurn := h.getCount(threadID) + 1
 		diagnosticInfo := generateProgressiveDiagnostics(currentTurn, threadID)
 
+		// Obtener tipo de pregunta anterior para determinar formato de feedback
+		h.mu.Lock()
+		lastType := h.lastQuestionType[threadID]
+		h.mu.Unlock()
+		if lastType == "" {
+			lastType = "open_ended" // default si no hay info
+		}
+
+		var feedbackFormat string
+		if lastType == "open_ended" {
+			feedbackFormat = "- Pregunta anterior era 'open_ended' (texto libre): NO uses 'Evaluación: CORRECTO/INCORRECTO'. Proporciona feedback educativo directo (120-220 palabras) reconociendo la respuesta del usuario y expandiendo el conocimiento clínico relacionado."
+		} else {
+			feedbackFormat = "- Pregunta anterior era 'single-choice': SÍ usa 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' como primera línea, seguido de explicación académica (120-220 palabras)."
+		}
+
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones, correct_index}}, finish(0).",
-			"Formato 'feedback': primera línea 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' (en mayúsculas).",
-			"Luego una explicación académica y más profunda (120-220 palabras) que explique el razonamiento clínico: por qué la opción es correcta/incorrecta, qué hallazgos la sustentan, y referencias concisas al final." + diagnosticInfo,
-			"La última línea debe empezar con 'Fuente:' y contener 1-2 citas (libro/guía o PMID).",
+			"FORMATO FEEDBACK según tipo de pregunta anterior:",
+			feedbackFormat,
+			"En ambos casos termina con línea 'Fuente:' y 1-2 citas (libro/guía o PMID)." + diagnosticInfo,
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
@@ -856,6 +920,10 @@ func (h *Handler) Message(c *gin.Context) {
 					}
 					if txt, ok := pq["texto"].(string); ok {
 						h.lastQuestionText[threadID] = strings.TrimSpace(txt)
+					}
+					// Almacenar tipo de pregunta para el próximo turno
+					if typ, ok := pq["tipo"].(string); ok {
+						h.lastQuestionType[threadID] = strings.TrimSpace(typ)
 					}
 					if rawOpts, ok := pq["opciones"].([]any); ok {
 						var opts []string

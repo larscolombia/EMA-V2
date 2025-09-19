@@ -19,6 +19,148 @@ func init() {
 	os.Setenv("TESTING", "1")
 }
 
+// Test para verificar que las preguntas abiertas generan feedback inmediato
+func TestOpenEndedQuestionFeedback(t *testing.T) {
+	// Mock AI que simula preguntas abiertas con feedback educativo
+	mockAI := &mockOpenEndedAI{}
+
+	h := &Handler{
+		ai:                 mockAI,
+		maxQuestions:       3,
+		turnCount:          make(map[string]int),
+		threadMaxQuestions: make(map[string]int),
+		askedQuestions:     make(map[string][]string),
+		evalCorrect:        make(map[string]int),
+		evalAnswers:        make(map[string]int),
+		vectorID:           "test-vector",
+		lastCorrectIndex:   make(map[string]int),
+		lastOptions:        make(map[string][]string),
+		lastQuestionText:   make(map[string]string),
+		lastQuestionType:   make(map[string]string),
+		missingCorrectIdx:  make(map[string]int),
+		closureDue:         make(map[string]bool),
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	h.RegisterRoutes(r)
+
+	// 1. Iniciar caso
+	req1 := httptest.NewRequest(http.MethodPost, "/casos-interactivos/iniciar",
+		strings.NewReader(`{"age":"35","sex":"female","pregnant":false}`))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	r.ServeHTTP(w1, req1)
+
+	if w1.Code != 200 {
+		t.Fatalf("Start case failed: %d", w1.Code)
+	}
+
+	var startResp map[string]any
+	if err := json.Unmarshal(w1.Body.Bytes(), &startResp); err != nil {
+		t.Fatalf("Failed to parse start response: %v", err)
+	}
+
+	threadID := startResp["thread_id"].(string)
+	t.Logf("Started case with thread: %s", threadID)
+
+	// 2. Enviar respuesta a pregunta abierta
+	msgBody := `{"thread_id":"` + threadID + `","mensaje":"apendicitis"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/casos-interactivos/mensaje",
+		strings.NewReader(msgBody))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+
+	if w2.Code != 200 {
+		t.Fatalf("Message failed: %d - %s", w2.Code, w2.Body.String())
+	}
+
+	var msgResp map[string]any
+	if err := json.Unmarshal(w2.Body.Bytes(), &msgResp); err != nil {
+		t.Fatalf("Failed to parse message response: %v", err)
+	}
+
+	data := msgResp["data"].(map[string]any)
+	feedback := data["feedback"].(string)
+
+	// 3. Verificar que el feedback no está vacío
+	if strings.TrimSpace(feedback) == "" {
+		t.Error("FEEDBACK IS STILL EMPTY - BUG NOT FIXED!")
+	} else {
+		t.Logf("✓ Feedback received: %s", feedback)
+
+		// Verificar que NO tiene prefijo "Evaluación:" para preguntas abiertas
+		if strings.Contains(feedback, "Evaluación:") {
+			t.Error("Open-ended question should not have Evaluación: prefix")
+		}
+
+		// Verificar que contiene contenido educativo
+		if !strings.Contains(feedback, "apendicitis") {
+			t.Error("Feedback should address user answer (apendicitis)")
+		}
+	}
+}
+
+// Mock AI específico para preguntas abiertas
+type mockOpenEndedAI struct{}
+
+func (m *mockOpenEndedAI) CreateThread(ctx context.Context) (string, error) {
+	return "thread-open-ended-test", nil
+}
+
+func (m *mockOpenEndedAI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
+	ch := make(chan string, 1)
+
+	if strings.Contains(userPrompt, "apendicitis") {
+		// Respuesta para mensaje con feedback educativo (sin "Evaluación:")
+		ch <- `{
+			"feedback": "La apendicitis es una causa frecuente de dolor abdominal en fosa ilíaca derecha. En este caso, los síntomas como el dolor migratorio, náuseas, vómitos y fiebre son compatibles con esta sospecha diagnóstica. Es importante considerar también otras causas como enfermedad inflamatoria pélvica, torsión ovárica o cólico renal, especialmente en mujeres en edad reproductiva.",
+			"next": {
+				"hallazgos": {},
+				"pregunta": {
+					"tipo": "single-choice",
+					"texto": "¿Cuál sería el siguiente paso más apropiado en el manejo diagnóstico?",
+					"opciones": ["Observación y analgesia", "Ecografía pélvica", "TC abdominal con contraste", "Cirugía exploratoria inmediata"],
+					"correct_index": 2
+				}
+			},
+			"finish": 0
+		}`
+	} else {
+		// Respuesta inicial con pregunta abierta
+		ch <- `{
+			"feedback": "Paciente femenina de 35 años que consulta por dolor abdominal de 5 días de evolución, localizado en fosa ilíaca derecha, de intensidad progresiva, asociado a náuseas, vómitos y fiebre de 38.5°C. No refiere alteraciones intestinales ni urinarias.",
+			"next": {
+				"hallazgos": {},
+				"pregunta": {
+					"tipo": "open_ended",
+					"texto": "¿Qué otros aspectos de la anamnesis consideras necesarios explorar en este momento para orientar mejor el diagnóstico?",
+					"opciones": [],
+					"correct_index": -1
+				}
+			},
+			"finish": 0
+		}`
+	}
+
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockOpenEndedAI) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
+	return "", nil
+}
+
+func (m *mockOpenEndedAI) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error) {
+	return &openai.VectorSearchResult{HasResult: false}, nil
+}
+
+func (m *mockOpenEndedAI) SearchPubMed(ctx context.Context, query string) (string, error) {
+	return "", nil
+}
+
 type mockAI struct{}
 
 func (m *mockAI) CreateThread(ctx context.Context) (string, error) { return "thread-1", nil }
