@@ -496,9 +496,9 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	}
 	// Timeout configurable con soft timeout para evitar 504 - habilitado por defecto
 	hardTimeout := getHTTPTimeoutSec()
-	softTimeout := 8 // segundos por defecto, siempre habilitado
+	softTimeout := 25 // segundos por defecto optimizado para AI + evidencia, siempre habilitado
 	if s := strings.TrimSpace(os.Getenv("CLINICAL_INTERACTIVE_SOFT_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 10 && v <= 45 {
 			softTimeout = v
 		}
 	}
@@ -538,17 +538,21 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	userPrompt := strings.Join([]string{
 		"Genera un objeto JSON con 'case' y 'data.questions' (pregunta inicial) para un caso clínico interactivo.",
 		"Perfil: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
-		"La pregunta inicial debe ser SIEMPRE abierta donde el usuario escriba su respuesta libremente (no opciones múltiples).",
-		"El formato es conversacional e interactivo, similar al analítico pero con retroalimentación inmediata.",
+		"La pregunta inicial debe ser COMPLETAMENTE abierta donde el usuario escriba texto libre.",
+		"NUNCA uses opciones A, B, C, D. NUNCA uses single_choice. Solo preguntas de texto libre.",
+		"Ejemplo: '¿Qué aspectos de la anamnesis consideras más relevantes?' o '¿Cuál sería tu aproximación diagnóstica inicial?'",
 		"No incluyas texto fuera del JSON.",
 	}, " ")
 	instr := strings.Join([]string{
 		"Responde en JSON válido con las claves: 'case' y 'data'.",
 		"'case' con: id, title, type('interactive'), age, sex, gestante(0|1) o pregnant, is_real, anamnesis, physical_examination, diagnostic_tests, final_diagnosis, management.",
 		"'data': { 'questions': { 'texto': string, 'tipo': 'open_ended', 'opciones': [] } }.",
-		"IMPORTANTE: tipo SIEMPRE debe ser 'open_ended' y opciones SIEMPRE un array vacío [].",
+		"CRÍTICO: 'tipo' debe ser exactamente 'open_ended' y 'opciones' debe ser exactamente un array vacío [].",
+		"PROHIBIDO: A, B, C, D, single_choice, multiple_choice. Solo preguntas abiertas de texto libre.",
 		"Idioma: español. Sin markdown ni texto adicional.",
 	}, " ")
+	log.Printf("[ClinicalInteractive][Generate][Prompt] userPrompt=%s", userPrompt)
+	log.Printf("[ClinicalInteractive][Generate][Instructions] instr=%s", instr)
 	ch, err := h.aiInteractive.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
@@ -632,6 +636,23 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	parsed["thread_id"] = threadID
 	// Ensure minimal question present
 	ensureInteractiveDefaults(parsed, req)
+
+	// Forzar que la pregunta inicial sea siempre abierta (limpiar cualquier opción múltiple)
+	if data, ok := parsed["data"].(map[string]any); ok {
+		if questionData, ok := data["questions"].(map[string]any); ok {
+			questionData["tipo"] = "open_ended"
+			questionData["opciones"] = []string{}
+
+			// Detectar y limpiar pregunta con opciones A,B,C,D
+			if texto, ok := questionData["texto"].(string); ok {
+				// Si contiene "mejor paso diagnóstico" y opciones A,B,C,D, reformular
+				if strings.Contains(strings.ToLower(texto), "mejor paso") || strings.Contains(strings.ToLower(texto), "diagnóstico") {
+					questionData["texto"] = "¿Qué aspectos de la historia clínica consideras más relevantes para continuar la evaluación?"
+				}
+			}
+		}
+	}
+
 	// Anexar referencias al management del caso (no altera preguntas)
 	// Habilitado por defecto para casos interactivos (se puede deshabilitar)
 	if os.Getenv("CLINICAL_APPEND_REFS") != "false" {
@@ -640,13 +661,15 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 			if caseMap, ok := parsed["case"].(map[string]any); ok {
 				q := buildCaseQuery(caseMap)
 				if strings.TrimSpace(q) != "" {
-					// Timeout agresivo para evidencia en generación interactiva
-					refCtx, refCancel := context.WithTimeout(ctx, 8*time.Second)
+					// Timeout optimizado para evidencia en generación interactiva
+					evidenceTimeout := 5 * time.Second // Reducido para mejorar velocidad general
+					refCtx, refCancel := context.WithTimeout(ctx, evidenceTimeout)
 					defer refCancel()
 					refs := collectEvidence(refCtx, h.aiInteractive, q)
 					if strings.TrimSpace(refs) != "" {
 						mg := strings.TrimSpace(fmt.Sprint(caseMap["management"]))
 						caseMap["management"] = appendRefs(mg, refs)
+						log.Printf("[ClinicalInteractive][Generate][Evidence] evidence_found=true timeout=%s", evidenceTimeout)
 					}
 				}
 			}
@@ -677,9 +700,9 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(getHTTPTimeoutSec())*time.Second)
 	defer cancel()
 	// Soft timeout para ChatInteractive - habilitado por defecto
-	softTimeout := 8 // segundos por defecto, siempre habilitado
+	softTimeout := 25 // segundos por defecto optimizado para AI + evidencia, siempre habilitado
 	if s := strings.TrimSpace(os.Getenv("CLINICAL_INTERACTIVE_CHAT_SOFT_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 3 && v <= 30 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 10 && v <= 45 {
 			softTimeout = v
 		}
 	}
@@ -696,10 +719,14 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 		"Responde estrictamente en JSON válido con la clave 'data' que contenga:",
 		"feedback: string (retroalimentación breve < 40 palabras) y",
 		"question: { texto: string, tipo: 'open_ended', opciones: [] } para el siguiente paso.",
-		"IMPORTANTE: Las preguntas SIEMPRE deben ser abiertas (open_ended) donde el usuario escriba libremente, NO opciones múltiples.",
+		"CRÍTICO: Las preguntas DEBEN ser de texto libre. NUNCA uses A, B, C, D u opciones múltiples.",
+		"PROHIBIDO: single_choice, multiple_choice, opciones como [A, B, C, D].",
+		"Ejemplos válidos: '¿Qué síntomas adicionales investigarías?', '¿Cuál es tu hipótesis diagnóstica?'",
 		"Mantén un flujo de unos 10 turnos desde anamnesis hasta manejo.",
 		"Idioma: español. Sin texto fuera del JSON.",
 	}, " ")
+	log.Printf("[ClinicalInteractive][Chat][Prompt] userPrompt=%s", userPrompt)
+	log.Printf("[ClinicalInteractive][Chat][Instructions] instr=%s", instr)
 	ch, err := h.aiInteractive.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
@@ -758,6 +785,20 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 		parsed["data"] = map[string]any{}
 	}
 	parsed["data"].(map[string]any)["thread_id"] = threadID
+
+	// Forzar que la pregunta sea siempre abierta (limpiar cualquier opción múltiple)
+	if questionData, ok := parsed["data"].(map[string]any)["question"].(map[string]any); ok {
+		questionData["tipo"] = "open_ended"
+		questionData["opciones"] = []string{}
+
+		// Detectar y limpiar pregunta con opciones A,B,C,D
+		if texto, ok := questionData["texto"].(string); ok {
+			if strings.Contains(strings.ToLower(texto), "mejor paso") || strings.Contains(strings.ToLower(texto), "diagnóstico") {
+				questionData["texto"] = "¿Cuál es tu aproximación diagnóstica en este momento?"
+			}
+		}
+	}
+
 	// Ensure minimal shape
 	if _, ok := parsed["data"].(map[string]any)["question"]; !ok {
 		parsed["data"].(map[string]any)["question"] = map[string]any{
@@ -777,13 +818,21 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 			// Construir query para evidencia basado en la respuesta del usuario
 			evidenceQuery := strings.TrimSpace(userPrompt)
 			if evidenceQuery != "" && len(evidenceQuery) > 5 {
-				// Timeout agresivo para evidencia en chat interactivo
-				refCtx, refCancel := context.WithTimeout(ctx, 6*time.Second)
+				// Timeout adaptativo para evidencia basado en tiempo restante
+				remainingTime := time.Until(time.Now().Add(time.Duration(softTimeout) * time.Second))
+				evidenceTimeout := 4 * time.Second
+				if remainingTime > 8*time.Second {
+					evidenceTimeout = 6 * time.Second
+				} else if remainingTime < 6*time.Second {
+					evidenceTimeout = 2 * time.Second
+				}
+
+				refCtx, refCancel := context.WithTimeout(ctx, evidenceTimeout)
 				defer refCancel()
 				refs := collectEvidence(refCtx, h.aiInteractive, evidenceQuery)
 				if strings.TrimSpace(refs) != "" {
 					parsed["data"].(map[string]any)["evidence"] = refs
-					log.Printf("[ClinicalInteractive][Chat][Evidence] thread=%s evidence_found=true", threadID)
+					log.Printf("[ClinicalInteractive][Chat][Evidence] thread=%s evidence_found=true timeout=%s", threadID, evidenceTimeout)
 				}
 			}
 		}()
@@ -902,15 +951,16 @@ func (h *Handler) repairAnalyticalJSON(ctx context.Context, threadID, lastConten
 // repairInteractiveGenerateJSON ensures both 'case' and 'data.questions'.
 func (h *Handler) repairInteractiveGenerateJSON(ctx context.Context, threadID, lastContent string) (string, bool) {
 	prompt := strings.Builder{}
-	prompt.WriteString("Reescribe como JSON válido con 'case' y 'data.questions' {texto,tipo,opciones}. ")
+	prompt.WriteString("Reescribe como JSON válido con 'case' y 'data.questions' {texto,tipo:'open_ended',opciones:[]}. ")
 	prompt.WriteString("'case' debe tener id,title,type('interactive'),age,sex,gestante/pregnant,is_real,anamnesis,physical_examination,diagnostic_tests,final_diagnosis,management. ")
+	prompt.WriteString("CRÍTICO: questions debe tener tipo='open_ended' y opciones=[]. PROHIBIDAS opciones A,B,C,D. Solo preguntas abiertas. ")
 	prompt.WriteString("No incluyas texto fuera del JSON.\n\nMensaje previo:\n")
 	prev := strings.TrimSpace(lastContent)
 	if len(prev) > 4000 {
 		prev = prev[:4000]
 	}
 	prompt.WriteString(prev)
-	instr := "Responde estrictamente en JSON válido con las claves 'case' y 'data'."
+	instr := "Responde estrictamente en JSON válido con las claves 'case' y 'data'. Solo preguntas abiertas de texto libre."
 	ch, err := h.aiInteractive.StreamAssistantJSON(ctx, threadID, prompt.String(), instr)
 	if err != nil {
 		return "", false
@@ -956,14 +1006,15 @@ func (h *Handler) repairAnalyticalChatJSON(ctx context.Context, threadID, lastCo
 // repairInteractiveChatJSON ensures {data:{feedback,question{...}}}.
 func (h *Handler) repairInteractiveChatJSON(ctx context.Context, threadID, lastContent string) (string, bool) {
 	prompt := strings.Builder{}
-	prompt.WriteString("Reescribe como JSON válido con 'data': { 'feedback': string, 'question': { 'texto': string, 'tipo': 'open_ended'|'single_choice', 'opciones': array<string> } }. ")
+	prompt.WriteString("Reescribe como JSON válido con 'data': { 'feedback': string, 'question': { 'texto': string, 'tipo': 'open_ended', 'opciones': [] } }. ")
+	prompt.WriteString("CRÍTICO: tipo DEBE ser 'open_ended' y opciones DEBE ser array vacío []. PROHIBIDAS opciones A,B,C,D. ")
 	prompt.WriteString("Sin texto fuera del JSON.\n\nMensaje previo:\n")
 	prev := strings.TrimSpace(lastContent)
 	if len(prev) > 4000 {
 		prev = prev[:4000]
 	}
 	prompt.WriteString(prev)
-	instr := "Responde estrictamente en JSON válido con la clave 'data'."
+	instr := "Responde estrictamente en JSON válido con la clave 'data'. Solo preguntas abiertas de texto libre."
 	ch, err := h.aiInteractive.StreamAssistantJSON(ctx, threadID, prompt.String(), instr)
 	if err != nil {
 		return "", false
