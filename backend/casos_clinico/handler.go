@@ -538,13 +538,15 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	userPrompt := strings.Join([]string{
 		"Genera un objeto JSON con 'case' y 'data.questions' (pregunta inicial) para un caso clínico interactivo.",
 		"Perfil: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
-		"La pregunta inicial debe ser breve y abierta (texto), o bien de opción única con 4 opciones.",
+		"La pregunta inicial debe ser SIEMPRE abierta donde el usuario escriba su respuesta libremente (no opciones múltiples).",
+		"El formato es conversacional e interactivo, similar al analítico pero con retroalimentación inmediata.",
 		"No incluyas texto fuera del JSON.",
 	}, " ")
 	instr := strings.Join([]string{
 		"Responde en JSON válido con las claves: 'case' y 'data'.",
 		"'case' con: id, title, type('interactive'), age, sex, gestante(0|1) o pregnant, is_real, anamnesis, physical_examination, diagnostic_tests, final_diagnosis, management.",
-		"'data': { 'questions': { 'texto': string, 'tipo': 'open_ended'|'single_choice', 'opciones': array<string> } }.",
+		"'data': { 'questions': { 'texto': string, 'tipo': 'open_ended', 'opciones': [] } }.",
+		"IMPORTANTE: tipo SIEMPRE debe ser 'open_ended' y opciones SIEMPRE un array vacío [].",
 		"Idioma: español. Sin markdown ni texto adicional.",
 	}, " ")
 	ch, err := h.aiInteractive.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
@@ -693,7 +695,8 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'data' que contenga:",
 		"feedback: string (retroalimentación breve < 40 palabras) y",
-		"question: { texto: string, tipo: 'open_ended'|'single_choice', opciones: array<string> } para el siguiente paso.",
+		"question: { texto: string, tipo: 'open_ended', opciones: [] } para el siguiente paso.",
+		"IMPORTANTE: Las preguntas SIEMPRE deben ser abiertas (open_ended) donde el usuario escriba libremente, NO opciones múltiples.",
 		"Mantén un flujo de unos 10 turnos desde anamnesis hasta manejo.",
 		"Idioma: español. Sin texto fuera del JSON.",
 	}, " ")
