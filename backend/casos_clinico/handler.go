@@ -413,7 +413,7 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		}
 
 		// Stream con marcadores de etapa y garantía de pregunta final si el modelo la omite
-		sse.Stream(c, wrapWithFinalQuestion(wrapWithStages(stages, ch), userPrompt))
+		sse.Stream(c, wrapWithFinalQuestion(wrapWithStages(stages, ch), userPrompt, turn))
 		return
 	}
 
@@ -447,10 +447,14 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			}
 			// Responder solo texto para UI: {text, thread_id}
 			if respMap, ok := parsed["respuesta"].(map[string]any); ok {
-				txt := ensureEndsWithQuestion(strings.TrimSpace(fmt.Sprint(respMap["text"])))
+				raw := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+				q := deriveFinalQuestion(raw, req.Mensaje, turn)
+				txt := ensureEndsWithQuestionWithFallback(raw, q)
 				c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
+				raw := strings.TrimSpace(content)
+				q := deriveFinalQuestion(raw, req.Mensaje, turn)
+				c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestionWithFallback(raw, q), "thread_id": threadID})
 			}
 			return
 		}
@@ -465,20 +469,25 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		}
 		// Responder solo texto para UI
 		if respMap, ok := parsed["respuesta"].(map[string]any); ok {
-			txt := ensureEndsWithQuestion(strings.TrimSpace(fmt.Sprint(respMap["text"])))
-			c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
+			raw := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+			q := deriveFinalQuestion(raw, req.Mensaje, turn)
+			c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestionWithFallback(raw, q), "thread_id": threadID})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
+			raw := strings.TrimSpace(content)
+			q := deriveFinalQuestion(raw, req.Mensaje, turn)
+			c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestionWithFallback(raw, q), "thread_id": threadID})
 		}
 		return
 	}
 	// Fallback text
-	c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
+	raw := strings.TrimSpace(content)
+	q := deriveFinalQuestion(raw, req.Mensaje, turn)
+	c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestionWithFallback(raw, q), "thread_id": threadID})
 }
 
 // wrapWithFinalQuestion re-emite el stream y, al finalizar, agrega una pregunta final
 // si el contenido no terminó en una línea de pregunta.
-func wrapWithFinalQuestion(in <-chan string, userPrompt string) <-chan string {
+func wrapWithFinalQuestion(in <-chan string, userPrompt string, turn int) <-chan string {
 	out := make(chan string)
 	go func() {
 		defer close(out)
@@ -487,9 +496,13 @@ func wrapWithFinalQuestion(in <-chan string, userPrompt string) <-chan string {
 			buf.WriteString(msg)
 			out <- msg
 		}
-		// Si no termina en pregunta, emitir sólo el complemento "\n\n<pregunta>"
+		// Si no termina en pregunta, derivar una acorde al contenido y turno
 		if !endsWithQuestionMark(buf.String()) {
-			out <- "\n\n¿Cuál sería el siguiente paso más adecuado?"
+			q := deriveFinalQuestion(buf.String(), userPrompt, turn)
+			if strings.TrimSpace(q) == "" {
+				q = "¿Cuál sería el siguiente paso más adecuado?"
+			}
+			out <- "\n\n" + q
 		}
 	}()
 	return out
@@ -522,6 +535,55 @@ func ensureEndsWithQuestion(text string) string {
 		return q
 	}
 	return t + "\n\n" + q
+}
+
+// ensureEndsWithQuestionWithFallback usa una pregunta sugerida si falta el cierre interrogativo
+func ensureEndsWithQuestionWithFallback(text, fallbackQuestion string) string {
+	if endsWithQuestionMark(text) {
+		return strings.TrimRight(text, " \t\n")
+	}
+	fb := strings.TrimSpace(fallbackQuestion)
+	if fb == "" {
+		return ensureEndsWithQuestion(text)
+	}
+	t := strings.TrimRight(text, " \t\n")
+	if t == "" {
+		return fb
+	}
+	return t + "\n\n" + fb
+}
+
+// deriveFinalQuestion intenta construir una pregunta coherente con el contenido y la fase del turno
+func deriveFinalQuestion(text, userPrompt string, turn int) string {
+	t := strings.ToLower(text)
+	// Reglas por contenido
+	if strings.Contains(t, "diagnóstico") || strings.Contains(t, "diagnostico") {
+		if strings.Contains(t, "diferencial") || strings.Contains(t, "diferenciales") || strings.Contains(t, "otros diagn") {
+			return "¿Qué otros diagnósticos posibles deberían considerarse según los factores de riesgo y la presentación clínica del paciente?"
+		}
+		if strings.Contains(t, "más probable") || strings.Contains(t, "mas probable") || strings.Contains(t, "probabilidad") {
+			return "¿Cuál es tu diagnóstico más probable y por qué?"
+		}
+	}
+	if strings.Contains(t, "ayuda diagn") || strings.Contains(t, "prueba") || strings.Contains(t, "examen") || strings.Contains(t, "estudio") {
+		return "¿Qué ayudas diagnósticas solicitarías ahora y qué hallazgos esperarías?"
+	}
+	if strings.Contains(t, "manejo") || strings.Contains(t, "tratamiento") || strings.Contains(t, "terapéut") || strings.Contains(t, "terapeut") {
+		return "¿Cuál sería el siguiente paso más adecuado en el manejo?"
+	}
+	// Reglas por fase
+	switch {
+	case turn <= 2:
+		return "¿Cuál es tu diagnóstico inicial prioritario y por qué?"
+	case turn <= 4:
+		return "¿Qué ayudas diagnósticas solicitarías ahora y qué hallazgos esperarías?"
+	case turn <= 7:
+		return "¿Qué diagnósticos diferenciales considerarías y cuál es su probabilidad relativa?"
+	case turn < 10:
+		return "¿Cuál sería el plan de manejo inicial más apropiado?"
+	default:
+		return "¿Cuál es tu diagnóstico final y cuál sería el siguiente paso en el manejo?"
+	}
 }
 
 // endsWithQuestionMark informa si la última línea no vacía de s termina con '?'
