@@ -978,6 +978,10 @@ func formatPubMedAnswer(query, raw string) string {
 
 	// Limpiar el contenido principal eliminando referencias duplicadas del cuerpo
 	body := removeInlineReferences(clean)
+
+	// NUEVO: Eliminar secciones de referencias en el cuerpo del texto que duplican información
+	body = removeEmbeddedReferenceSections(body)
+
 	body = strings.TrimSpace(body)
 
 	if body == "" {
@@ -992,7 +996,7 @@ func formatPubMedAnswer(query, raw string) string {
 	// Indicar fuente al final del contenido principal
 	b.WriteString("*(Fuente: PubMed)*\n\n")
 
-	// Sección de referencias al final
+	// Sección de referencias al final - SOLO UNA VEZ
 	b.WriteString("**Referencias:**\n")
 	if len(refs) > 0 {
 		for _, r := range refs {
@@ -1008,6 +1012,24 @@ func formatPubMedAnswer(query, raw string) string {
 	}
 
 	return b.String()
+}
+
+// removeEmbeddedReferenceSections elimina secciones de "Referencias:" que aparecen en el cuerpo del texto
+func removeEmbeddedReferenceSections(s string) string {
+	// Eliminar secciones completas de referencias que aparecen antes del final
+	// Patrón para encontrar "Referencias:" seguido de una lista
+	referencePattern := regexp.MustCompile(`(?i)referencias?\s*:?\s*\n(?:\s*-[^\n]*\n?)*`)
+
+	// También eliminar la pregunta al final que aparece en algunas respuestas
+	questionPattern := regexp.MustCompile(`¿[^?]*\?$`)
+
+	result := referencePattern.ReplaceAllString(s, "")
+	result = questionPattern.ReplaceAllString(result, "")
+
+	// Limpiar saltos de línea excesivos que pudieran haber quedado
+	result = regexp.MustCompile(`\n\s*\n\s*\n`).ReplaceAllString(result, "\n\n")
+
+	return strings.TrimSpace(result)
 }
 
 // removeInlineReferences elimina referencias que aparecen en el cuerpo del texto
