@@ -132,10 +132,54 @@ Instrucciones:
 	}
 
 	if err == nil && searchResult.HasResult && strings.TrimSpace(searchResult.Content) != "" {
-		// Encontramos información en el RAG (libros), construir respuesta estructurada limpia
+		// Encontramos información en el RAG (libros); intentamos complementar con PubMed si aporta valor
 		log.Printf("[conv][SmartMessage][rag_found] thread=%s source=%s chars=%d", threadID, searchResult.Source, len(searchResult.Content))
 
-		structuredPrompt := fmt.Sprintf(`Responde la pregunta usando EXCLUSIVAMENTE la información del siguiente fragmento, en español.
+		// Consulta opcional a PubMed para combinar fuentes
+		pubmedRaw, _ := h.AI.SearchPubMed(ctx, prompt)
+		pubmedRaw = strings.TrimSpace(pubmedRaw)
+
+		if pubmedRaw != "" {
+			pmClean := stripModelPreambles(pubmedRaw)
+			pmBody := removeEmbeddedReferenceSections(removeInlineReferences(pmClean))
+			if len(pmBody) > 2000 {
+				pmBody = pmBody[:2000] + "..."
+			}
+			pmRefs := extractReferenceLines(pmClean)
+			// Construir prompt combinado
+			structuredCombined := fmt.Sprintf(`Responde en español priorizando el siguiente fragmento del libro y complementando, si es relevante, con el resumen de PubMed provisto.
+
+Pregunta: %s
+
+Fragmento del libro ("%s"):
+%s
+
+Resumen de PubMed (limpio):
+%s
+
+Referencias de PubMed detectadas:
+%s
+
+FORMATO DE RESPUESTA (Markdown limpio):
+1. Empieza DIRECTAMENTE con la respuesta al usuario.
+2. Estructura clara y sin preámbulos del tipo "he realizado búsqueda".
+3. Al final del contenido principal, incluye: *(Fuente: Base de conocimientos interna + PubMed)*
+4. Termina con una sección: **Referencias:**
+   - Incluye una línea "Libro: %s"
+   - Luego lista las referencias relevantes de PubMed (si las hay), una por viñeta.
+
+REGLAS:
+- No repitas referencias dentro del cuerpo.
+- No inventes información fuera de las fuentes provistas.
+- Si hay discrepancias entre fuentes, indícalas brevemente.`,
+				prompt, searchResult.Source, searchResult.Content, pmBody, joinRefsForPrompt(pmRefs), searchResult.Source)
+
+			stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, structuredCombined, targetVectorID)
+			return stream, "rag", err
+		}
+
+		// Solo libros (sin PubMed complementario)
+		structuredPrompt := fmt.Sprintf(`Responde la pregunta usando la información del siguiente fragmento, en español.
 
 Pregunta: %s
 
@@ -552,6 +596,9 @@ Reglas:
 		c.Header("X-Thread-ID", threadID)
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+		if source == "rag" {
+			c.Header("X-Books-Vector-ID", "vs_680fc484cef081918b2b9588b701e2f4")
+		}
 		log.Printf("[conv][Message][multipart][audio.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 		switch source {
@@ -1017,13 +1064,17 @@ func formatPubMedAnswer(query, raw string) string {
 // removeEmbeddedReferenceSections elimina secciones de "Referencias:" que aparecen en el cuerpo del texto
 func removeEmbeddedReferenceSections(s string) string {
 	// Eliminar secciones completas de referencias que aparecen antes del final
-	// Patrón para encontrar "Referencias:" seguido de una lista
-	referencePattern := regexp.MustCompile(`(?i)referencias?\s*:?\s*\n(?:\s*-[^\n]*\n?)*`)
+	// Patrón para encontrar "Referencias:" o "Referencias seleccionadas:" seguido de una lista con viñetas
+	referencePattern := regexp.MustCompile(`(?i)referencias?(?:\s+seleccionadas)?\s*:?[\t ]*\n(?:[\t ]*-[^\n]*\n?)*`)
+
+	// También eliminar secciones inline: desde "Referencias:" hasta el final del texto
+	inlinePattern := regexp.MustCompile(`(?is)(?i)\breferencias[^:]*:\s*.*$`)
 
 	// También eliminar la pregunta al final que aparece en algunas respuestas
 	questionPattern := regexp.MustCompile(`¿[^?]*\?$`)
 
 	result := referencePattern.ReplaceAllString(s, "")
+	result = inlinePattern.ReplaceAllString(result, "")
 	result = questionPattern.ReplaceAllString(result, "")
 
 	// Limpiar saltos de línea excesivos que pudieran haber quedado
@@ -1051,9 +1102,9 @@ func removeInlineReferences(s string) string {
 		result = re.ReplaceAllString(result, "")
 	}
 
-	// Limpiar espacios dobles y saltos de línea excesivos
-	result = regexp.MustCompile(`\s+`).ReplaceAllString(result, " ")
-	result = regexp.MustCompile(`\n\s*\n\s*\n`).ReplaceAllString(result, "\n\n")
+	// Limpiar espacios dobles y saltos de línea excesivos, preservando saltos de línea
+	result = regexp.MustCompile(` {2,}`).ReplaceAllString(result, " ")
+	result = regexp.MustCompile(`\n{3,}`).ReplaceAllString(result, "\n\n")
 
 	return strings.TrimSpace(result)
 }
@@ -1163,23 +1214,50 @@ func stripModelPreambles(s string) string {
 	return strings.Join(cleanLines, "\n")
 }
 
+// joinRefsForPrompt convierte un slice de referencias en una lista con viñetas apta para incrustar en un prompt
+func joinRefsForPrompt(refs []string) string {
+	if len(refs) == 0 {
+		return "(sin referencias detectadas)"
+	}
+	b := &strings.Builder{}
+	for i, r := range refs {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		if i > 10 { // limitar para no inflar el prompt
+			break
+		}
+		fmt.Fprintf(b, "- %s\n", r)
+	}
+	return b.String()
+}
+
 // extractReferenceLines intenta extraer líneas que parecen citas/DOI/PMID o URLs.
 func extractReferenceLines(s string) []string {
 	out := []string{}
+	yearRe := regexp.MustCompile(`\b(19|20)\d{2}\b`)
+	volIssueRe := regexp.MustCompile(`\d+\(\d+\)`) // e.g., 50(1)
+	startNumHeading := regexp.MustCompile(`^\d+[\.|\)]\s`)
+
 	for _, ln := range strings.Split(s, "\n") {
 		l := strings.TrimSpace(ln)
 		if l == "" {
 			continue
 		}
 		ll := strings.ToLower(l)
-		// Heurísticas simples para identificar referencias
-		if strings.Contains(ll, "pmid") || strings.Contains(ll, "doi:") || strings.Contains(ll, "pubmed") || strings.Contains(ll, "http") {
-			out = append(out, l)
+
+		// Evitar encabezados numerados tipo "2. Gastritis..." si no contienen señales de referencia
+		if startNumHeading.MatchString(l) && !strings.Contains(ll, "pmid") && !strings.Contains(ll, "doi") {
+			continue
 		}
-		// También títulos tipo Autor (Año). Título. Revista.
-		if strings.Contains(l, ")") && strings.Contains(l, ".") && (strings.Contains(l, ";") || strings.Contains(l, ":")) {
-			// Muy heurístico, pero útil como fallback
+
+		if strings.Contains(ll, "pmid") || strings.Contains(ll, "doi:") || strings.Contains(ll, "http://") || strings.Contains(ll, "https://") || strings.Contains(ll, "pubmed") {
 			out = append(out, l)
+			continue
+		}
+		if yearRe.MatchString(l) && (volIssueRe.MatchString(l) || strings.Contains(l, ";") || strings.Contains(l, ":")) && strings.Contains(l, ".") {
+			out = append(out, l)
+			continue
 		}
 	}
 	// Deduplicar manteniendo orden
