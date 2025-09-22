@@ -412,8 +412,8 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			stages = append(stages, "__STAGE__:streaming_answer")
 		}
 
-		// Stream con garantía de pregunta final si el modelo la omite
-		sse.Stream(c, wrapWithFinalQuestion(ch, userPrompt))
+		// Stream con marcadores de etapa y garantía de pregunta final si el modelo la omite
+		sse.Stream(c, wrapWithFinalQuestion(wrapWithStages(stages, ch), userPrompt))
 		return
 	}
 
@@ -487,15 +487,9 @@ func wrapWithFinalQuestion(in <-chan string, userPrompt string) <-chan string {
 			buf.WriteString(msg)
 			out <- msg
 		}
-		final := ensureEndsWithQuestion(buf.String())
-		// Si se añadió una pregunta (cambió el final), emitir solo el extra
-		if final != buf.String() {
-			// separar con un salto de línea en blanco y la pregunta final
-			// ensureEndsWithQuestion ya añade doble salto y pregunta; emitimos solo el complemento
-			extra := strings.TrimPrefix(final, buf.String())
-			if strings.TrimSpace(extra) != "" {
-				out <- extra
-			}
+		// Si no termina en pregunta, emitir sólo el complemento "\n\n<pregunta>"
+		if !endsWithQuestionMark(buf.String()) {
+			out <- "\n\n¿Cuál sería el siguiente paso más adecuado?"
 		}
 	}()
 	return out
@@ -528,6 +522,23 @@ func ensureEndsWithQuestion(text string) string {
 		return q
 	}
 	return t + "\n\n" + q
+}
+
+// endsWithQuestionMark informa si la última línea no vacía de s termina con '?'
+func endsWithQuestionMark(s string) bool {
+	t := strings.TrimRight(s, " \t\n")
+	if t == "" {
+		return false
+	}
+	lines := strings.Split(t, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		last := strings.TrimSpace(lines[i])
+		if last == "" {
+			continue
+		}
+		return strings.HasSuffix(last, "?")
+	}
+	return false
 }
 
 // GenerateInteractive creates the case and an initial question: returns { case: {...}, data: { questions: { texto,tipo,opciones } }, thread_id }
