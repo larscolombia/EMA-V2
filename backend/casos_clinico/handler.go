@@ -412,7 +412,8 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			stages = append(stages, "__STAGE__:streaming_answer")
 		}
 
-		sse.Stream(c, wrapWithStages(stages, ch))
+		// Stream con garantía de pregunta final si el modelo la omite
+		sse.Stream(c, wrapWithFinalQuestion(ch, userPrompt))
 		return
 	}
 
@@ -446,10 +447,10 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			}
 			// Responder solo texto para UI: {text, thread_id}
 			if respMap, ok := parsed["respuesta"].(map[string]any); ok {
-				txt := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+				txt := ensureEndsWithQuestion(strings.TrimSpace(fmt.Sprint(respMap["text"])))
 				c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
 			} else {
-				c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+				c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
 			}
 			return
 		}
@@ -464,15 +465,69 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		}
 		// Responder solo texto para UI
 		if respMap, ok := parsed["respuesta"].(map[string]any); ok {
-			txt := strings.TrimSpace(fmt.Sprint(respMap["text"]))
+			txt := ensureEndsWithQuestion(strings.TrimSpace(fmt.Sprint(respMap["text"])))
 			c.JSON(http.StatusOK, gin.H{"text": txt, "thread_id": threadID})
 		} else {
-			c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+			c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
 		}
 		return
 	}
 	// Fallback text
-	c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+	c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestion(strings.TrimSpace(content)), "thread_id": threadID})
+}
+
+// wrapWithFinalQuestion re-emite el stream y, al finalizar, agrega una pregunta final
+// si el contenido no terminó en una línea de pregunta.
+func wrapWithFinalQuestion(in <-chan string, userPrompt string) <-chan string {
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		var buf strings.Builder
+		for msg := range in {
+			buf.WriteString(msg)
+			out <- msg
+		}
+		final := ensureEndsWithQuestion(buf.String())
+		// Si se añadió una pregunta (cambió el final), emitir solo el extra
+		if final != buf.String() {
+			// separar con un salto de línea en blanco y la pregunta final
+			// ensureEndsWithQuestion ya añade doble salto y pregunta; emitimos solo el complemento
+			extra := strings.TrimPrefix(final, buf.String())
+			if strings.TrimSpace(extra) != "" {
+				out <- extra
+			}
+		}
+	}()
+	return out
+}
+
+// ensureEndsWithQuestion garantiza que el texto termine con una pregunta en la última línea.
+// Si ya termina con '?', no hace cambios. Si no, agrega dos saltos de línea y una pregunta genérica breve.
+func ensureEndsWithQuestion(text string) string {
+	t := strings.TrimRight(text, " \t\n")
+	// encontrar última línea no vacía
+	lines := strings.Split(t, "\n")
+	i := len(lines) - 1
+	for ; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			break
+		}
+	}
+	if i >= 0 {
+		last := strings.TrimSpace(lines[i])
+		if strings.HasSuffix(last, "?") {
+			return t
+		}
+	} else {
+		// texto vacío
+		t = ""
+	}
+	// Añadir pregunta breve por defecto
+	q := "¿Cuál sería el siguiente paso más adecuado?"
+	if t == "" {
+		return q
+	}
+	return t + "\n\n" + q
 }
 
 // GenerateInteractive creates the case and an initial question: returns { case: {...}, data: { questions: { texto,tipo,opciones } }, thread_id }
