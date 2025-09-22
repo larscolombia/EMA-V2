@@ -69,7 +69,7 @@ class _ChatMessageAiState extends State<ChatMessageAi>
               top: 8,
               bottom: 8,
               right: 8, // Reducido el margen derecho
-              left: 8,  // Reducido el margen izquierdo
+              left: 8, // Reducido el margen izquierdo
             ),
             // Usar todo el ancho disponible sin restricciones
             width: double.infinity,
@@ -81,14 +81,15 @@ class _ChatMessageAiState extends State<ChatMessageAi>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      minHeight: 50, // Asegurar altura mínima
-                    ),
-                    child: ChatMarkdownWrapper(
-                      text: widget.message.text,
-                      style: const TextStyle(fontSize: 15, color: Colors.white),
+                  padding: const EdgeInsets.all(
+                    16,
+                  ), // Más padding para mejor respiración
+                  child: ChatMarkdownWrapper(
+                    text: widget.message.text,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      color: Colors.white,
+                      height: 1.5, // Mejor interlineado
                     ),
                   ),
                 ),

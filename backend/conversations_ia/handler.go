@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -131,29 +132,29 @@ Instrucciones:
 	}
 
 	if err == nil && searchResult.HasResult && strings.TrimSpace(searchResult.Content) != "" {
-		// Encontramos información en el RAG (libros), construir respuesta estructurada con referencias al final
+		// Encontramos información en el RAG (libros), construir respuesta estructurada limpia
 		log.Printf("[conv][SmartMessage][rag_found] thread=%s source=%s chars=%d", threadID, searchResult.Source, len(searchResult.Content))
 
-		structuredPrompt := fmt.Sprintf(`Usa EXCLUSIVAMENTE la información del siguiente fragmento del libro para responder, en español.
+		structuredPrompt := fmt.Sprintf(`Responde la pregunta usando EXCLUSIVAMENTE la información del siguiente fragmento, en español.
 
 Pregunta: %s
 
 Fragmento del libro ("%s"):
 %s
 
-FORMATO (sin encabezados markdown, solo texto):
-Resumen: (3–5 líneas)
-Puntos clave:
-- (3 a 5 viñetas breves)
-Razonamiento clínico: (1 párrafo justificando con base en el fragmento)
-Conclusión: (1–2 líneas)
-Referencias:
-- Libro: %s
+FORMATO DE RESPUESTA (en Markdown limpio):
+1. Inicia INMEDIATAMENTE con la respuesta directa a la pregunta del usuario.
+2. Desarrolla la información de manera clara y estructurada.
+3. Al final del contenido principal, incluye: *(Fuente: Base de conocimientos interna)*
+4. Termina con una sección: **Referencias:**
+5. Lista las referencias en formato: - Libro: %s
 
-REGLAS:
-- No inventes información.
-- Si el fragmento no cubre algo, dilo en la conclusión.
-- No menciones procesos de búsqueda ni IDs.`, prompt, searchResult.Source, searchResult.Content, searchResult.Source)
+REGLAS ESTRICTAS:
+- NO uses frases como "he realizado búsqueda" o "según el fragmento".
+- NO repitas referencias en el cuerpo del texto.
+- NO inventes información fuera del fragmento.
+- Si el fragmento no es suficiente, indica claramente las limitaciones.
+- Usa SOLO Markdown, sin HTML.`, prompt, searchResult.Source, searchResult.Content, searchResult.Source)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, structuredPrompt, targetVectorID)
 		return stream, "rag", err
@@ -178,19 +179,19 @@ REGLAS:
 
 	// Si no encontramos en ninguna fuente, responder claramente con una guía general
 	log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
-	userFacing := fmt.Sprintf(`No se encontró información relevante sobre "%s" en las fuentes configuradas.
+	userFacing := fmt.Sprintf(`No se encontró información específica sobre "%s" en las fuentes médicas consultadas.
 
-	Fuentes consultadas:
-	- Libros (base de conocimiento interno): sin resultados
-	- PubMed: sin resultados
+**Sugerencias para continuar:**
+- Reformula la pregunta con términos más específicos
+- Verifica la ortografía de términos médicos
+- Utiliza sinónimos o términos alternativos
+- Consulta directamente con un profesional de la salud
 
-	Sugerencias para continuar:
-	- Reformula la pregunta con términos más específicos.
-	- Verifica la ortografía de términos médicos.
-	- Consulta fuentes médicas adicionales o un profesional de la salud.
-	- Usa sinónimos o términos alternativos para el concepto buscado.
+*(Fuente: Búsqueda sin resultados)*
 
-	Pregunta original: %s`, prompt, prompt)
+**Referencias:**
+- Base de conocimientos interna: sin resultados relevantes
+- PubMed: sin resultados relevantes`, prompt)
 
 	// Emitir texto estático y marcar source como 'none'
 	ch := make(chan string, 1)
@@ -970,59 +971,174 @@ func (h *Handler) VectorFiles(c *gin.Context) {
 }
 
 // --- Helpers de formato PubMed ---
-// formatPubMedAnswer crea una salida amigable, directa y con referencias (sin mencionar el proceso de búsqueda).
+// formatPubMedAnswer crea una respuesta estructurada y limpia basada en información de PubMed
 func formatPubMedAnswer(query, raw string) string {
 	clean := stripModelPreambles(raw)
 	refs := extractReferenceLines(clean)
-	// Si el contenido tiene secciones, conservarlas; sino, presentarlo como resumen
-	body := strings.TrimSpace(clean)
+
+	// Limpiar el contenido principal eliminando referencias duplicadas del cuerpo
+	body := removeInlineReferences(clean)
+	body = strings.TrimSpace(body)
+
 	if body == "" {
-		body = "No se encontró un resumen claro en la evidencia consultada."
+		body = "No se encontró información suficiente en PubMed para responder de manera precisa."
 	}
+
 	b := &strings.Builder{}
-	// Título conciso (no obligatorio, pero ayuda visualmente)
-	// Evitamos palabras como "Según", "Se encontró" o "Búsqueda".
+
+	// Respuesta principal directa (sin preámbulos)
 	fmt.Fprintf(b, "%s\n\n", body)
-	// Agregar referencias si las hay
+
+	// Indicar fuente al final del contenido principal
+	b.WriteString("*(Fuente: PubMed)*\n\n")
+
+	// Sección de referencias al final
+	b.WriteString("**Referencias:**\n")
 	if len(refs) > 0 {
-		b.WriteString("Referencias:\n")
 		for _, r := range refs {
-			// Asegurar viñetas limpias
+			// Formatear referencias de manera consistente
+			formattedRef := formatReference(r)
 			b.WriteString("- ")
-			b.WriteString(strings.TrimSpace(r))
-			if !strings.Contains(strings.ToLower(r), "pubmed") {
-				b.WriteString(" (PubMed)")
-			}
+			b.WriteString(formattedRef)
 			b.WriteString("\n")
 		}
 	} else {
 		// Fallback a referencia general de PubMed
-		b.WriteString("Referencias:\n- PubMed: https://pubmed.ncbi.nlm.nih.gov/\n")
+		b.WriteString("- PubMed: https://pubmed.ncbi.nlm.nih.gov/\n")
 	}
+
 	return b.String()
 }
 
-// stripModelPreambles elimina frases de sistema/comando comunes tipo "Claro", "A continuación", "Realizo una búsqueda...".
+// removeInlineReferences elimina referencias que aparecen en el cuerpo del texto
+func removeInlineReferences(s string) string {
+	// Eliminar patrones comunes de referencias inline
+	patterns := []string{
+		`\(PMID:\s*\d+\)`,
+		`\[PMID:\s*\d+\]`,
+		`【PMID:\s*\d+】`,
+		`\(doi:\s*[^\)]+\)`,
+		`\[doi:\s*[^\]]+\]`,
+		`\(PubMed\)`,
+		`\[PubMed\]`,
+	}
+
+	result := s
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		result = re.ReplaceAllString(result, "")
+	}
+
+	// Limpiar espacios dobles y saltos de línea excesivos
+	result = regexp.MustCompile(`\s+`).ReplaceAllString(result, " ")
+	result = regexp.MustCompile(`\n\s*\n\s*\n`).ReplaceAllString(result, "\n\n")
+
+	return strings.TrimSpace(result)
+}
+
+// formatReference formatea una referencia de manera consistente
+func formatReference(ref string) string {
+	ref = strings.TrimSpace(ref)
+
+	// Si ya tiene formato de referencia académica, mantenerlo
+	if strings.Contains(ref, ".") && (strings.Contains(ref, ";") || strings.Contains(ref, ":")) {
+		// Limpiar PMID/DOI duplicados al final si ya están en el formato
+		if strings.Contains(strings.ToLower(ref), "pmid") && strings.Count(strings.ToLower(ref), "pmid") > 1 {
+			// Mantener solo el primer PMID
+			parts := strings.Split(ref, "PMID")
+			if len(parts) > 2 {
+				ref = parts[0] + "PMID" + parts[1]
+			}
+		}
+		return ref
+	}
+
+	// Si es solo un PMID, DOI o URL, formatearlo apropiadamente
+	lower := strings.ToLower(ref)
+	if strings.HasPrefix(lower, "pmid") {
+		return ref
+	}
+	if strings.HasPrefix(lower, "doi") {
+		return ref
+	}
+	if strings.HasPrefix(lower, "http") {
+		return ref
+	}
+
+	// Para otros casos, devolver tal como está
+	return ref
+}
+
+// stripModelPreambles elimina frases de sistema/comando comunes y preámbulos innecesarios
 func stripModelPreambles(s string) string {
 	t := strings.TrimSpace(s)
-	lowers := []string{
-		"claro,", "claro.", "claro:", "a continuación", "realizo una búsqueda", "procedo a buscar", "investigaré en pubmed", "haré una búsqueda",
-		"según la búsqueda", "de acuerdo con la búsqueda", "priorizando estudios", "a continuación presento", "voy a",
+
+	// Patrones de preámbulos a eliminar (case insensitive)
+	preambles := []string{
+		"claro,", "claro.", "claro:", "desde luego,", "desde luego.", "desde luego:",
+		"a continuación", "a continuación,", "a continuación:",
+		"realizo una búsqueda", "he realizado una búsqueda", "realicé una búsqueda",
+		"procedo a buscar", "voy a buscar", "buscaré en", "consulto en",
+		"investigaré en pubmed", "haré una búsqueda", "busco información",
+		"según la búsqueda", "de acuerdo con la búsqueda", "según los resultados",
+		"basándome en la búsqueda", "tras consultar", "después de buscar",
+		"priorizando estudios", "a continuación presento", "voy a", "te proporciono",
+		"aquí tienes", "aquí está", "he encontrado", "encontré que",
+		"según mi búsqueda", "según mi investigación", "según mi consulta",
+		"permíteme", "déjame", "me complace", "con gusto",
+		"para responder", "para contestar", "en respuesta a",
 	}
+
 	lt := strings.ToLower(t)
-	// Si detectamos estas frases al inicio, recortamos la primera línea o el preámbulo.
-	for _, p := range lowers {
+
+	// Eliminar preámbulos del inicio
+	for _, p := range preambles {
 		if strings.HasPrefix(lt, p) {
-			// Quitar primera línea o primera oración
-			if idx := strings.Index(t, "\n"); idx >= 0 {
-				t = strings.TrimSpace(t[idx+1:])
-			} else if idx := strings.IndexAny(t, ".!?"); idx >= 0 && idx+1 < len(t) {
-				t = strings.TrimSpace(t[idx+1:])
+			// Buscar el final de la oración o línea para cortar apropiadamente
+			cutPos := len(p)
+
+			// Buscar hasta el próximo punto, salto de línea o dos puntos
+			remaining := t[cutPos:]
+			for i, r := range remaining {
+				if r == '.' || r == '\n' || r == ':' {
+					cutPos += i + 1
+					break
+				}
 			}
+
+			t = strings.TrimSpace(t[cutPos:])
+			lt = strings.ToLower(t)
 			break
 		}
 	}
-	return t
+
+	// Eliminar líneas completas que son solo preámbulos
+	lines := strings.Split(t, "\n")
+	var cleanLines []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		lineLower := strings.ToLower(line)
+		isPreamble := false
+
+		for _, p := range preambles {
+			if strings.Contains(lineLower, p) && len(line) < 100 {
+				// Si es una línea corta que contiene preámbulos, probablemente sea solo preámbulo
+				isPreamble = true
+				break
+			}
+		}
+
+		if !isPreamble {
+			cleanLines = append(cleanLines, line)
+		}
+	}
+
+	return strings.Join(cleanLines, "\n")
 }
 
 // extractReferenceLines intenta extraer líneas que parecen citas/DOI/PMID o URLs.
