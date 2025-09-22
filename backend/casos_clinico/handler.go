@@ -325,32 +325,32 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	var phaseInstr string
 	switch {
 	case turn < 3:
-		phaseInstr = "Extiende el razonamiento clínico inicial: analiza síntomas cardinales, factores de riesgo y plantea hipótesis diagnósticas preliminares."
+		phaseInstr = "Extiende el razonamiento clínico inicial: analiza síntomas cardinales, factores de riesgo y plantea hipótesis diagnósticas preliminares. Integra resultados de ayudas diagnósticas (laboratorio, imagen, etc.) si ya existen en el hilo/caso; si no existen, sugiere las más pertinentes y explica qué hallazgos esperarías y cómo cambiarían la probabilidad diagnóstica."
 	case turn < 6:
-		phaseInstr = "Profundiza correlación fisiopatológica y justifica qué datos faltan; sugiere exámenes complementarios pertinentes."
+		phaseInstr = "Profundiza correlación fisiopatológica. Integra explícitamente resultados de ayudas diagnósticas disponibles y su impacto en hipótesis; si faltan, propone exámenes concretos y justifica su utilidad."
 	case turn < 9:
-		phaseInstr = "Integra hallazgos y prioriza diagnósticos diferenciales con justificación comparativa (por qué uno es más probable que otro)."
+		phaseInstr = "Integra hallazgos (incluyendo resultados de pruebas diagnósticas) y prioriza diagnósticos diferenciales con justificación comparativa (por qué uno es más probable que otro)."
 	default:
-		phaseInstr = "Prepara el cierre: sintetiza los datos clave y guía al usuario hacia diagnóstico final y plan terapéutico; aún formula una última pregunta exploratoria si no es la despedida definitiva."
+		phaseInstr = "Prepara el cierre: sintetiza los datos clave, incluyendo ayudas diagnósticas y su interpretación, y guía al usuario hacia diagnóstico final y plan terapéutico."
 	}
 
 	closingInstr := ""
-	// Solo permitir bibliografía y cierre completo después del turno 9 (>=10)
+	// Tras el turno 9 (> =10), permite conclusión y referencias PERO siempre con pregunta final breve.
 	if turn >= 10 {
-		closingInstr = "Si el usuario lo sugiere o la información es suficiente para cerrar, entonces entrega: Conclusión final + Plan de manejo + 'Referencias:' con 2-3 citas (formato narrativo abreviado). Si cierras, NO hagas más preguntas."
+		closingInstr = "Si la información es suficiente para cerrar, entrega: Conclusión final + Plan de manejo + 'Referencias:' con 2-3 citas (formato narrativo abreviado). AÚN ASÍ, SIEMPRE añade al final una pregunta breve relacionada con el caso (p. ej., siguiente paso, diagnóstico diferencial a descartar, o seguimiento)."
 	} else {
 		closingInstr = "No cierres todavía ni des conclusiones definitivas. No incluyas bibliografía aún."
 	}
 
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
-		"Estructura del texto: 1) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) 2) Pregunta final (salvo cierre).",
+		"Estructura del texto: 1) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales; integra resultados de ayudas diagnósticas cuando existan) 2) Retroalimentación breve (1–2 líneas) 3) Pregunta final.",
 		phaseInstr,
 		closingInstr,
+		"Incluye SIEMPRE una línea de 'Retroalimentación: <comentario>' inmediatamente antes de la pregunta final.",
 		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
 		"Referenciar hallazgos previos sin repetirlos literalmente; añade nueva inferencia o hipótesis en cada turno.",
-		"La última línea (si NO cierras) debe ser SOLO la pregunta, sin texto adicional antes ni después.",
-		"Si cierras, no formules pregunta y añade referencias según se indicó.",
+		"La ÚLTIMA línea debe ser SOLO la pregunta, sin texto adicional antes ni después.",
 		"No inventes datos que no se hayan introducido implícita o explícitamente en el hilo.",
 		"Idioma: español.",
 	}, " ")
@@ -361,11 +361,12 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		// Instrucciones textuales equivalentes a la versión JSON:
 		textInstr := strings.Join([]string{
 			"Responde en TEXTO PLANO en español, sin markdown ni JSON.",
-			"Estructura: 2–3 párrafos (150–220 palabras en total) de razonamiento clínico progresivo,",
+			"Estructura: 2–3 párrafos (150–220 palabras en total) de razonamiento clínico progresivo integrando resultados de ayudas diagnósticas disponibles (laboratorio, imagen, etc.).",
 			phaseInstr,
 			closingInstr,
+			"Incluye SIEMPRE una línea de 'Retroalimentación: <comentario>' inmediatamente antes de la pregunta final.",
 			"Separa párrafos con UNA línea en blanco. No uses viñetas ni tablas.",
-			"La ÚLTIMA línea (si NO cierras) debe ser SOLO una pregunta, sin prefijos ni texto adicional.",
+			"La ÚLTIMA línea debe ser SOLO una pregunta, sin prefijos ni texto adicional.",
 			"No inventes datos; apóyate en lo ya discutido. No incluyas 'Referencias' salvo que se indique cerrar.",
 		}, " ")
 

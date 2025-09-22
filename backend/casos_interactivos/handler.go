@@ -293,10 +293,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 			"next": map[string]any{
 				"hallazgos": map[string]any{},
 				"pregunta": map[string]any{
-					"tipo":          "open_ended",
-					"texto":         "¿Qué aspectos de la anamnesis consideras más relevantes para continuar la evaluación?",
-					"opciones":      []string{},
-					"correct_index": -1,
+					"tipo":          "single-choice",
+					"texto":         "¿Cuál sería el siguiente paso más apropiado?",
+					"opciones":      []string{"Opción 1", "Opción 2", "Opción 3", "Opción 4"},
+					"correct_index": 0,
 				},
 			},
 			"finish": 0.0,
@@ -304,9 +304,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 		// Inicializar contadores y estado
 		h.mu.Lock()
 		h.turnCount[threadID] = 1
-		h.lastCorrectIndex[threadID] = -1
-		h.lastOptions[threadID] = []string{}
-		h.lastQuestionText[threadID] = "¿Qué aspectos de la anamnesis consideras más relevantes para continuar la evaluación?"
+		h.lastCorrectIndex[threadID] = 0
+		h.lastOptions[threadID] = []string{"Opción 1", "Opción 2", "Opción 3", "Opción 4"}
+		h.lastQuestionText[threadID] = "¿Cuál sería el siguiente paso más apropiado?"
+		h.lastQuestionType[threadID] = "single-choice"
 		h.askedQuestions[threadID] = append(h.askedQuestions[threadID], h.lastQuestionText[threadID])
 		h.mu.Unlock()
 		clinicalHistory := "Historia clínica inicial proporcionada por el sistema."
@@ -370,15 +371,14 @@ func (h *Handler) StartCase(c *gin.Context) {
 		"INICIO DE SESIÓN (rol system): Recibirás el caso clínico completo y NO comentarás. Guarda para usar más adelante.",
 		"FASE DE ANAMNESIS: En 'feedback' muestra la historia clínica completa (síntomas, antecedentes, contexto social/familiar, evolución) con 3-4 párrafos detallados.",
 		"Incluye motivo de consulta, historia de la enfermedad actual, antecedentes, examen físico inicial. Al final del feedback añade una línea 'Referencias:' seguida de UNA cita abreviada basada en el vector " + h.vectorID + " (no menciones el id) o un PMID.",
-		"Formato estricto: JSON con keys: feedback, next{hallazgos{}, pregunta{tipo:'open_ended', texto, opciones:[], correct_index:-1}}, finish:0. La pregunta debe ser ABIERTA donde el usuario escriba texto libre. NUNCA uses opciones A,B,C,D.",
+		"Formato estricto: JSON con keys: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones:[4 opciones claras], correct_index:0..3}}, finish:0. La pregunta debe ser de OPCIÓN MÚLTIPLE (single-choice).",
 		"Paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
 	}, " ")
 	instr := strings.Join([]string{
 		"Responde SOLO en JSON válido con claves: feedback, next{hallazgos, pregunta{tipo, texto, opciones, correct_index}}, finish.",
 		"'feedback' (200-300 palabras) termina con una línea 'Referencias:' y 1 cita (libro guía o PMID) sin mencionar vectores ni IDs internos.",
-		"CRÍTICO: 'tipo' debe ser exactamente 'open_ended', 'opciones' debe ser array vacío [], 'correct_index' debe ser -1.",
-		"La pregunta debe ser abierta y conversacional, por ejemplo: '¿Qué aspectos adicionales de la anamnesis consideras relevantes?'",
-		"PROHIBIDO: single-choice, multiple-choice, opciones A/B/C/D. Solo preguntas de texto libre.",
+		"CRÍTICO: 'tipo' debe ser exactamente 'single-choice', 'opciones' debe ser un array con 4 opciones clínicas claras y 'correct_index' un entero válido.",
+		"La pregunta debe ser de opción múltiple (una sola correcta), no abierta.",
 		"No omitas claves ni uses nombres distintos. Sin null ni cadenas vacías. Usa {} si no hay hallazgos. finish=0.",
 		"Cada pregunta debe ser única y coherente con el caso. Idioma: español. Sin markdown.",
 	}, " ")
@@ -417,17 +417,55 @@ func (h *Handler) StartCase(c *gin.Context) {
 		data = h.minTurn()
 	}
 
-	// Forzar pregunta abierta (limpiar cualquier opción múltiple)
-	if nx, ok := data["next"].(map[string]any); ok {
-		if pq, ok := nx["pregunta"].(map[string]any); ok {
-			pq["tipo"] = "open_ended"
-			pq["opciones"] = []string{}
-			pq["correct_index"] = -1
+	// Detectar si el asistente omitió correct_index en el JSON original
+	hadCIOriginal := false
+	if nx0, ok := data["next"].(map[string]any); ok {
+		if pq0, ok := nx0["pregunta"].(map[string]any); ok {
+			if _, ok := pq0["correct_index"]; ok {
+				hadCIOriginal = true
+			}
 		}
 	}
 
-	// NO aplicar randomización de opciones para preguntas abiertas
-	// applyOptionShuffle(data) - COMENTADO
+	// Forzar pregunta de opción múltiple (single-choice) con opciones válidas
+	if nx, ok := data["next"].(map[string]any); ok {
+		if pq, ok := nx["pregunta"].(map[string]any); ok {
+			pq["tipo"] = "single-choice"
+			// Normalizar opciones: mínimo 4, si faltan rellenar con opciones genéricas
+			var opts []string
+			if raw, ok := pq["opciones"].([]any); ok {
+				for _, v := range raw {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						opts = append(opts, strings.TrimSpace(s))
+					}
+				}
+			} else if raw2, ok := pq["opciones"].([]string); ok {
+				for _, s := range raw2 {
+					if strings.TrimSpace(s) != "" {
+						opts = append(opts, strings.TrimSpace(s))
+					}
+				}
+			}
+			for len(opts) < 4 {
+				opts = append(opts, fmt.Sprintf("Opción %d", len(opts)+1))
+			}
+			pq["opciones"] = opts[:4]
+			// Asegurar correct_index válido
+			if ci, ok := pq["correct_index"].(float64); ok {
+				if int(ci) < 0 || int(ci) >= len(opts) {
+					pq["correct_index"] = 0
+				}
+			} else if ci2, ok := pq["correct_index"].(int); ok {
+				if ci2 < 0 || ci2 >= len(opts) {
+					pq["correct_index"] = 0
+				}
+			} else {
+				pq["correct_index"] = 0
+			}
+		}
+	}
+
+	// NO aplicar randomización de opciones aquí (se hace en Message)
 
 	// Initialize turn counter: first question was asked in this turn
 	if threadID != "" {
@@ -440,8 +478,20 @@ func (h *Handler) StartCase(c *gin.Context) {
 		// capture initial correct_index & options (optional structure)
 		if nx, ok := data["next"].(map[string]any); ok {
 			if pq, ok := nx["pregunta"].(map[string]any); ok {
-				// Para preguntas abiertas, siempre usar -1
-				h.lastCorrectIndex[threadID] = -1
+				// Capturar correct_index y opciones del primer turno
+				if hadCIOriginal {
+					if ci, ok := pq["correct_index"].(float64); ok {
+						h.lastCorrectIndex[threadID] = int(ci)
+					} else if ci2, ok := pq["correct_index"].(int); ok {
+						h.lastCorrectIndex[threadID] = ci2
+					} else {
+						h.lastCorrectIndex[threadID] = -1
+					}
+				} else {
+					// Marcar como faltante para permitir recuperación por evidencia en el primer mensaje
+					h.lastCorrectIndex[threadID] = -1
+					h.missingCorrectIdx[threadID] = h.missingCorrectIdx[threadID] + 1
+				}
 				if txt, ok := pq["texto"].(string); ok {
 					h.lastQuestionText[threadID] = strings.TrimSpace(txt)
 				}
@@ -449,9 +499,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 				if typ, ok := pq["tipo"].(string); ok {
 					h.lastQuestionType[threadID] = strings.TrimSpace(typ)
 				} else {
-					h.lastQuestionType[threadID] = "open_ended" // default para StartCase
+					h.lastQuestionType[threadID] = "single-choice" // default para StartCase
 				}
-				// extract options para consistencia (debería estar vacío)
+				// extract options para consistencia
 				h.lastOptions[threadID] = []string{}
 				if rawOpts, ok := pq["opciones"].([]any); ok {
 					var opts []string
@@ -732,17 +782,14 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 
 		var feedbackFormat string
-		if lastType == "open_ended" {
-			feedbackFormat = "- Pregunta anterior era 'open_ended' (texto libre): NO uses 'Evaluación: CORRECTO/INCORRECTO'. Proporciona feedback educativo directo (120-220 palabras) reconociendo la respuesta del usuario y expandiendo el conocimiento clínico relacionado."
-		} else {
-			feedbackFormat = "- Pregunta anterior era 'single-choice': SÍ usa 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' como primera línea, seguido de explicación académica (120-220 palabras)."
-		}
+		// Forzar formato single-choice siempre
+		feedbackFormat = "- Pregunta anterior era 'single-choice': SÍ usa 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' como primera línea, seguido de explicación académica (120-220 palabras)."
 
 		instr = strings.Join([]string{
-			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice'|'open_ended', texto, opciones, correct_index}}, finish(0).",
+			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
 			"FORMATO FEEDBACK según tipo de pregunta anterior:",
 			feedbackFormat,
-			"En ambos casos termina con línea 'Fuente:' y 1-2 citas (libro/guía o PMID)." + diagnosticInfo,
+			"En todos los casos termina con línea 'Fuente:' y 1-2 citas (libro/guía o PMID)." + diagnosticInfo,
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
@@ -1109,10 +1156,10 @@ func (h *Handler) minTurn() map[string]any {
 		"next": map[string]any{
 			"hallazgos": map[string]any{},
 			"pregunta": map[string]any{
-				"tipo":          "open_ended",
-				"texto":         "¿Qué aspectos adicionales consideras relevantes para continuar la evaluación?",
-				"opciones":      []string{},
-				"correct_index": -1,
+				"tipo":          "single-choice",
+				"texto":         "¿Cuál de las siguientes acciones es la más apropiada a continuación?",
+				"opciones":      []string{"Solicitar laboratorio básico", "Indicar imagen diagnóstica", "Iniciar manejo sintomático", "Referir a especialista"},
+				"correct_index": 0,
 			},
 		},
 		"finish": 0,

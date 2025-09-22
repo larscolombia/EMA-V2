@@ -68,6 +68,13 @@ type Handler struct {
 	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
 }
 
+// Documento representa una pieza de contexto recuperado
+type Documento struct {
+	Titulo    string
+	Contenido string
+	Fuente    string // "vector" o "pubmed"
+}
+
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
 	targetVectorID := booksVectorID()
@@ -101,147 +108,55 @@ Instrucciones:
 		return ch, "smalltalk", nil
 	}
 
-	// Primero intentar búsqueda en el vector store específico con metadatos
-	log.Printf("[conv][SmartMessage][start] thread=%s target_vector=%s", threadID, targetVectorID)
+	// Flujo híbrido: consultar vector y PubMed, fusionar, y pasar contexto al modelo
+	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s", threadID, targetVectorID)
 
-	// Verificar si el cliente soporta metadatos
-	var searchResult *VectorSearchResult
-	var err error
+	vdocs := h.buscarVector(ctx, targetVectorID, prompt)
+	pdocs := h.buscarPubMed(ctx, prompt)
 
-	if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
-		searchResult, err = clientWithMeta.SearchInVectorStoreWithMetadata(ctx, targetVectorID, prompt)
-	} else {
-		// Fallback al método original
-		ragContent, searchErr := h.AI.SearchInVectorStore(ctx, targetVectorID, prompt)
-		if searchErr == nil && strings.TrimSpace(ragContent) != "" {
-			searchResult = &VectorSearchResult{
-				Content:   ragContent,
-				Source:    "Base de conocimiento médico",
-				VectorID:  targetVectorID,
-				HasResult: true,
-			}
-		} else {
-			searchResult = &VectorSearchResult{
-				Content:   "",
-				Source:    "",
-				VectorID:  targetVectorID,
-				HasResult: false,
-			}
-		}
-		err = searchErr
-	}
+	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
-	if err == nil && searchResult.HasResult && strings.TrimSpace(searchResult.Content) != "" {
-		// Encontramos información en el RAG (libros); intentamos complementar con PubMed si aporta valor
-		log.Printf("[conv][SmartMessage][rag_found] thread=%s source=%s chars=%d", threadID, searchResult.Source, len(searchResult.Content))
+	vecHas := strings.TrimSpace(ctxVec) != ""
+	pubHas := strings.TrimSpace(ctxPub) != ""
 
-		// Consulta opcional a PubMed para combinar fuentes
-		pubmedRaw, _ := h.AI.SearchPubMed(ctx, prompt)
-		pubmedRaw = strings.TrimSpace(pubmedRaw)
-
-		if pubmedRaw != "" {
-			pmClean := stripModelPreambles(pubmedRaw)
-			pmBody := removeEmbeddedReferenceSections(removeInlineReferences(pmClean))
-			if len(pmBody) > 2000 {
-				pmBody = pmBody[:2000] + "..."
-			}
-			pmRefs := extractReferenceLines(pmClean)
-			// Construir prompt combinado
-			structuredCombined := fmt.Sprintf(`Responde en español priorizando el siguiente fragmento del libro y complementando, si es relevante, con el resumen de PubMed provisto.
-
-Pregunta: %s
-
-Fragmento del libro ("%s"):
-%s
-
-Resumen de PubMed (limpio):
-%s
-
-Referencias de PubMed detectadas:
-%s
-
-FORMATO DE RESPUESTA (Markdown limpio):
-1. Empieza DIRECTAMENTE con la respuesta al usuario.
-2. Estructura clara y sin preámbulos del tipo "he realizado búsqueda".
-3. Al final del contenido principal, incluye: *(Fuente: Base de conocimientos interna + PubMed)*
-4. Termina con una sección: **Referencias:**
-   - Incluye una línea "Libro: %s"
-   - Luego lista las referencias relevantes de PubMed (si las hay), una por viñeta.
-
-REGLAS:
-- No repitas referencias dentro del cuerpo.
-- No inventes información fuera de las fuentes provistas.
-- Si hay discrepancias entre fuentes, indícalas brevemente.`,
-				prompt, searchResult.Source, searchResult.Content, pmBody, joinRefsForPrompt(pmRefs), searchResult.Source)
-
-			stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, structuredCombined, targetVectorID)
-			return stream, "rag", err
-		}
-
-		// Solo libros (sin PubMed complementario)
-		structuredPrompt := fmt.Sprintf(`Responde la pregunta usando la información del siguiente fragmento, en español.
-
-Pregunta: %s
-
-Fragmento del libro ("%s"):
-%s
-
-FORMATO DE RESPUESTA (en Markdown limpio):
-1. Inicia INMEDIATAMENTE con la respuesta directa a la pregunta del usuario.
-2. Desarrolla la información de manera clara y estructurada.
-3. Al final del contenido principal, incluye: *(Fuente: Base de conocimientos interna)*
-4. Termina con una sección: **Referencias:**
-5. Lista las referencias en formato: - Libro: %s
-
-REGLAS ESTRICTAS:
-- NO uses frases como "he realizado búsqueda" o "según el fragmento".
-- NO repitas referencias en el cuerpo del texto.
-- NO inventes información fuera del fragmento.
-- Si el fragmento no es suficiente, indica claramente las limitaciones.
-- Usa SOLO Markdown, sin HTML.`, prompt, searchResult.Source, searchResult.Content, searchResult.Source)
-
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, structuredPrompt, targetVectorID)
-		return stream, "rag", err
-	}
-
-	// Si no encontramos en el RAG, responder claramente que no hay información
-	log.Printf("[conv][SmartMessage][rag_empty] thread=%s, no results found", threadID)
-
-	log.Printf("[conv][SmartMessage][trying_pubmed] thread=%s", threadID)
-
-	pubmedResult, err := h.AI.SearchPubMed(ctx, prompt)
-	if err == nil && strings.TrimSpace(pubmedResult) != "" {
-		log.Printf("[conv][SmartMessage][pubmed_found] thread=%s chars=%d", threadID, len(pubmedResult))
-
-		// Formatear una respuesta estructurada SIN mencionar el proceso de búsqueda
-		formatted := formatPubMedAnswer(prompt, pubmedResult)
+	if !vecHas && !pubHas {
+		// Fallback claro cuando no hay contexto de ninguna fuente
+		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s", threadID)
+		fallback := "No se encontró información relevante para responder."
 		ch := make(chan string, 1)
-		ch <- formatted
+		ch <- fallback + "\n\n*(Fuente: Búsqueda sin resultados)*"
 		close(ch)
-		return ch, "pubmed", nil
+		return ch, "none", nil
 	}
 
-	// Si no encontramos en ninguna fuente, responder claramente con una guía general
-	log.Printf("[conv][SmartMessage][no_sources] thread=%s", threadID)
-	userFacing := fmt.Sprintf(`No se encontró información específica sobre "%s" en las fuentes médicas consultadas.
+	// Preparar input con bloques de contexto y una instrucción clara de fuente al final
+	fuenteLine := "*(Fuente: PubMed)*"
+	if vecHas && pubHas {
+		fuenteLine = "*(Fuente: Base de conocimientos interna — PDFs: " + joinDocTitles(vdocs) + " + PubMed)*"
+	} else if vecHas {
+		fuenteLine = "*(Fuente: Base de conocimientos interna — PDFs: " + joinDocTitles(vdocs) + ")*"
+	}
 
-**Sugerencias para continuar:**
-- Reformula la pregunta con términos más específicos
-- Verifica la ortografía de términos médicos
-- Utiliza sinónimos o términos alternativos
-- Consulta directamente con un profesional de la salud
+	input := fmt.Sprintf(
+		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
+			"Contexto complementario (PubMed):\n%s\n\n"+
+			"Pregunta del usuario:\n%s\n\n"+
+			"FORMATO Y REGLAS (estrictas):\n"+
+			"- Prioriza SIEMPRE el vector store; si hay conflicto con PubMed, gana el vector.\n"+
+			"- Empieza DIRECTAMENTE con la respuesta (sin preámbulos del tipo 'he realizado una búsqueda').\n"+
+			"- No repitas referencias dentro del cuerpo del texto.\n"+
+			"- Al final del contenido principal, agrega EXACTAMENTE esta línea de fuente: %s\n"+
+			"- Si corresponde, termina con una sección final '**Referencias:**' (Markdown) con viñetas.\n",
+		ctxVec, ctxPub, prompt, fuenteLine,
+	)
 
-*(Fuente: Búsqueda sin resultados)*
-
-**Referencias:**
-- Base de conocimientos interna: sin resultados relevantes
-- PubMed: sin resultados relevantes`, prompt)
-
-	// Emitir texto estático y marcar source como 'none'
-	ch := make(chan string, 1)
-	ch <- userFacing
-	close(ch)
-	return ch, "none", nil
+	// Usar el asistente configurado y el vector store de libros para mantener grounding y el historial del hilo
+	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, input, targetVectorID)
+	source := "pubmed"
+	if vecHas {
+		source = "rag"
+	}
+	return stream, source, err
 }
 
 // isSmallTalk detecta saludos breves y cortesía sin contenido médico
@@ -931,6 +846,100 @@ func sanitizePreview(s string) string {
 		return clean[:100] + "..."
 	}
 	return clean
+}
+
+// buscarVector consulta el vector store canónico y devuelve documentos relevantes
+func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Documento {
+	out := []Documento{}
+	if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
+		if res, err := clientWithMeta.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult && strings.TrimSpace(res.Content) != "" {
+			out = append(out, Documento{Titulo: res.Source, Contenido: strings.TrimSpace(res.Content), Fuente: "vector"})
+			return out
+		}
+	}
+	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
+		// Título legacy esperado por tests cuando no hay metadatos
+		out = append(out, Documento{Titulo: "Base de conocimiento médico", Contenido: strings.TrimSpace(s), Fuente: "vector"})
+	}
+	return out
+}
+
+// buscarPubMed consulta PubMed y normaliza el contenido para evitar ruido en el prompt
+func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
+	out := []Documento{}
+	raw, err := h.AI.SearchPubMed(ctx, query)
+	if err != nil {
+		return out
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return out
+	}
+	clean := stripModelPreambles(raw)
+	body := removeEmbeddedReferenceSections(removeInlineReferences(clean))
+	if len(body) > 2500 {
+		body = body[:2500] + "..."
+	}
+	out = append(out, Documento{Titulo: "PubMed", Contenido: strings.TrimSpace(body), Fuente: "pubmed"})
+	return out
+}
+
+// fusionarResultados prepara dos bloques de contexto según contrato requerido
+func fusionarResultados(vectorDocs, pubmedDocs []Documento) (ctxVec, ctxPub string) {
+	if len(vectorDocs) > 0 {
+		var b strings.Builder
+		for _, d := range vectorDocs {
+			if strings.TrimSpace(d.Contenido) == "" {
+				continue
+			}
+			if d.Titulo != "" {
+				fmt.Fprintf(&b, "- %s:\n%s\n\n", d.Titulo, d.Contenido)
+			} else {
+				fmt.Fprintf(&b, "- %s\n\n", d.Contenido)
+			}
+		}
+		ctxVec = strings.TrimSpace(b.String())
+	}
+	if len(pubmedDocs) > 0 {
+		var b strings.Builder
+		for _, d := range pubmedDocs {
+			if strings.TrimSpace(d.Contenido) == "" {
+				continue
+			}
+			if d.Titulo != "" {
+				fmt.Fprintf(&b, "- %s:\n%s\n\n", d.Titulo, d.Contenido)
+			} else {
+				fmt.Fprintf(&b, "- %s\n\n", d.Contenido)
+			}
+		}
+		ctxPub = strings.TrimSpace(b.String())
+	}
+	return
+}
+
+// joinDocTitles toma documentos (vector) y devuelve títulos únicos y concisos separados por ", "
+func joinDocTitles(docs []Documento) string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, d := range docs {
+		t := strings.TrimSpace(d.Titulo)
+		if t == "" {
+			continue
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return "(desconocido)"
+	}
+	// Limitar longitud total razonable
+	s := strings.Join(out, ", ")
+	if len(s) > 200 {
+		return s[:200] + "…"
+	}
+	return s
 }
 
 // booksVectorID devuelve el ID canónico del vector de libros; sin dependencia de env

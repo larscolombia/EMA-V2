@@ -20,9 +20,9 @@ func init() {
 }
 
 // Test para verificar que las preguntas abiertas generan feedback inmediato
-func TestOpenEndedQuestionFeedback(t *testing.T) {
-	// Mock AI que simula preguntas abiertas con feedback educativo
-	mockAI := &mockOpenEndedAI{}
+func TestSingleChoiceOnlyFlow_StartAndMessage(t *testing.T) {
+	// Mock AI que entrega single-choice desde el inicio y en mensajes
+	mockAI := &mockAI{}
 
 	h := &Handler{
 		ai:                 mockAI,
@@ -52,54 +52,46 @@ func TestOpenEndedQuestionFeedback(t *testing.T) {
 	req1.Header.Set("Content-Type", "application/json")
 	w1 := httptest.NewRecorder()
 	r.ServeHTTP(w1, req1)
-
 	if w1.Code != 200 {
 		t.Fatalf("Start case failed: %d", w1.Code)
 	}
-
 	var startResp map[string]any
 	if err := json.Unmarshal(w1.Body.Bytes(), &startResp); err != nil {
 		t.Fatalf("Failed to parse start response: %v", err)
 	}
-
 	threadID := startResp["thread_id"].(string)
-	t.Logf("Started case with thread: %s", threadID)
-
-	// 2. Enviar respuesta a pregunta abierta
-	msgBody := `{"thread_id":"` + threadID + `","mensaje":"apendicitis"}`
+	if threadID == "" {
+		t.Fatalf("missing thread_id on start")
+	}
+	dataStart := startResp["data"].(map[string]any)
+	nextStart := dataStart["next"].(map[string]any)
+	preguntaStart := nextStart["pregunta"].(map[string]any)
+	if typ, _ := preguntaStart["tipo"].(string); typ != "single-choice" {
+		t.Fatalf("expected single-choice on start, got %s", typ)
+	}
+	// 2. Responder con opción correcta por texto (Op3 del mockAI)
+	msgBody := `{"thread_id":"` + threadID + `","mensaje":"Op3"}`
 	req2 := httptest.NewRequest(http.MethodPost, "/casos-interactivos/mensaje",
 		strings.NewReader(msgBody))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
-
 	if w2.Code != 200 {
 		t.Fatalf("Message failed: %d - %s", w2.Code, w2.Body.String())
 	}
-
 	var msgResp map[string]any
 	if err := json.Unmarshal(w2.Body.Bytes(), &msgResp); err != nil {
 		t.Fatalf("Failed to parse message response: %v", err)
 	}
-
 	data := msgResp["data"].(map[string]any)
 	feedback := data["feedback"].(string)
-
-	// 3. Verificar que el feedback no está vacío
-	if strings.TrimSpace(feedback) == "" {
-		t.Error("FEEDBACK IS STILL EMPTY - BUG NOT FIXED!")
-	} else {
-		t.Logf("✓ Feedback received: %s", feedback)
-
-		// Verificar que NO tiene prefijo "Evaluación:" para preguntas abiertas
-		if strings.Contains(feedback, "Evaluación:") {
-			t.Error("Open-ended question should not have Evaluación: prefix")
-		}
-
-		// Verificar que contiene contenido educativo
-		if !strings.Contains(feedback, "apendicitis") {
-			t.Error("Feedback should address user answer (apendicitis)")
-		}
+	if !strings.Contains(feedback, "Evaluación:") {
+		t.Fatalf("expected Evaluación prefix for single-choice feedback")
+	}
+	next := data["next"].(map[string]any)
+	pregunta := next["pregunta"].(map[string]any)
+	if typ, _ := pregunta["tipo"].(string); typ != "single-choice" {
+		t.Fatalf("expected next question to be single-choice, got %s", typ)
 	}
 }
 
@@ -113,37 +105,8 @@ func (m *mockOpenEndedAI) CreateThread(ctx context.Context) (string, error) {
 func (m *mockOpenEndedAI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
 	ch := make(chan string, 1)
 
-	if strings.Contains(userPrompt, "apendicitis") {
-		// Respuesta para mensaje con feedback educativo (sin "Evaluación:")
-		ch <- `{
-			"feedback": "La apendicitis es una causa frecuente de dolor abdominal en fosa ilíaca derecha. En este caso, los síntomas como el dolor migratorio, náuseas, vómitos y fiebre son compatibles con esta sospecha diagnóstica. Es importante considerar también otras causas como enfermedad inflamatoria pélvica, torsión ovárica o cólico renal, especialmente en mujeres en edad reproductiva.",
-			"next": {
-				"hallazgos": {},
-				"pregunta": {
-					"tipo": "single-choice",
-					"texto": "¿Cuál sería el siguiente paso más apropiado en el manejo diagnóstico?",
-					"opciones": ["Observación y analgesia", "Ecografía pélvica", "TC abdominal con contraste", "Cirugía exploratoria inmediata"],
-					"correct_index": 2
-				}
-			},
-			"finish": 0
-		}`
-	} else {
-		// Respuesta inicial con pregunta abierta
-		ch <- `{
-			"feedback": "Paciente femenina de 35 años que consulta por dolor abdominal de 5 días de evolución, localizado en fosa ilíaca derecha, de intensidad progresiva, asociado a náuseas, vómitos y fiebre de 38.5°C. No refiere alteraciones intestinales ni urinarias.",
-			"next": {
-				"hallazgos": {},
-				"pregunta": {
-					"tipo": "open_ended",
-					"texto": "¿Qué otros aspectos de la anamnesis consideras necesarios explorar en este momento para orientar mejor el diagnóstico?",
-					"opciones": [],
-					"correct_index": -1
-				}
-			},
-			"finish": 0
-		}`
-	}
+	// Simplificar: siempre devolver single-choice como contrato nuevo
+	ch <- `{"feedback":"Turno inicial","next":{"hallazgos":{},"pregunta":{"tipo":"single-choice","texto":"¿Paso?","opciones":["Op1","Op2","Op3","Op4"],"correct_index":2}},"finish":0}`
 
 	close(ch)
 	return ch, nil
@@ -186,8 +149,8 @@ type mockMissingCI struct{}
 func (m *mockMissingCI) CreateThread(ctx context.Context) (string, error) { return "thread-miss", nil }
 func (m *mockMissingCI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
 	ch := make(chan string, 1)
-	// Si el prompt pide correct_index (recuperación) respondemos sólo con correct_index JSON
-	if strings.Contains(jsonInstructions, "correct_index") || strings.Contains(userPrompt, "correct_index") {
+	// Si es la recuperación explícita (nuestro código usa esta frase), respondemos sólo con correct_index JSON
+	if strings.Contains(jsonInstructions, "Devuelve solo JSON con correct_index") || strings.Contains(userPrompt, "{\"correct_index\":") {
 		ch <- `{"correct_index":1}`
 		return ch, nil
 	}
@@ -212,7 +175,7 @@ func (m *mockEvidenceCI) CreateThread(ctx context.Context) (string, error) { ret
 func (m *mockEvidenceCI) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
 	ch := make(chan string, 1)
 	// Siempre responde turnos sin correct_index para forzar recuperación por evidencia
-	ch <- `{"feedback":"Evaluación: INCORRECTO\n","next":{"hallazgos":{},"pregunta":{"tipo":"single-choice","texto":"Pregunta con opciones","opciones":["Beta-bloqueador","IECA","Calcioantagonista","Diurético"]}},"finish":0}`
+	ch <- `{"feedback":"Inicio","next":{"hallazgos":{},"pregunta":{"tipo":"single-choice","texto":"Pregunta con opciones","opciones":["Beta-bloqueador","IECA","Calcioantagonista","Diurético"]}},"finish":0}`
 	return ch, nil
 }
 func (m *mockEvidenceCI) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
