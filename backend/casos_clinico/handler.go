@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -502,6 +503,13 @@ func wrapWithFinalQuestion(in <-chan string, userPrompt string, turn int) <-chan
 			if strings.TrimSpace(q) == "" {
 				q = "¿Cuál sería el siguiente paso más adecuado?"
 			}
+			if os.Getenv("CLINICAL_DEBUG_FINALQ") == "true" {
+				tail := buf.String()
+				if len(tail) > 180 {
+					tail = tail[len(tail)-180:]
+				}
+				log.Printf("[analytical][sse] appended final question | turn=%d | derived='%s' | tail=\n%s", turn, q, tail)
+			}
 			out <- "\n\n" + q
 		}
 	}()
@@ -549,6 +557,13 @@ func ensureEndsWithQuestionWithFallback(text, fallbackQuestion string) string {
 	t := strings.TrimRight(text, " \t\n")
 	if t == "" {
 		return fb
+	}
+	if os.Getenv("CLINICAL_DEBUG_FINALQ") == "true" {
+		tail := t
+		if len(tail) > 180 {
+			tail = tail[len(tail)-180:]
+		}
+		log.Printf("[analytical][json] appended final question | derived='%s' | tail=\n%s", fb, tail)
 	}
 	return t + "\n\n" + fb
 }
@@ -598,7 +613,22 @@ func endsWithQuestionMark(s string) bool {
 		if last == "" {
 			continue
 		}
-		return strings.HasSuffix(last, "?")
+		// Permitir comillas/paréntesis/cierre ASCII después del '?'
+		// Recorremos de derecha a izquierda saltando cierres comunes (ASCII seguro).
+		r := []rune(last)
+		j := len(r) - 1
+		for j >= 0 {
+			switch r[j] {
+			case ' ', '\t', '\n', '\r', '"', '\'', ')', ']', '}', '.':
+				j--
+				continue
+			}
+			break
+		}
+		if j >= 0 && r[j] == '?' {
+			return true
+		}
+		return false
 	}
 	return false
 }
