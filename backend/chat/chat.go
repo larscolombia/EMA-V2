@@ -18,11 +18,11 @@ import (
 )
 
 type Handler struct {
-	AI AIClient
+	AI             AIClient
 	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
-	mu sync.Mutex
+	mu             sync.Mutex
 	// maps client provided thread IDs (any format) to OpenAI assistant thread IDs (thread_*)
-	threadMap map[string]string
+	threadMap  map[string]string
 	lastPrompt map[string]string
 	// when true, only real assistant thread ids (thread_*) are accepted for /message endpoints.
 	// a start request must successfully create an assistant thread; no local UUID fallbacks.
@@ -35,7 +35,9 @@ func NewHandler(ai AIClient) *Handler {
 }
 
 // SetQuotaValidator allows injection from main
-func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) { h.quotaValidator = fn }
+func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) {
+	h.quotaValidator = fn
+}
 
 func (h *Handler) Start(c *gin.Context) {
 	var req struct {
@@ -69,7 +71,9 @@ func (h *Handler) Start(c *gin.Context) {
 	var initial strings.Builder
 	_ = req
 	resp := gin.H{"thread_id": threadID, "text": initial.String()}
-	if h.strictThreads { resp["strict_threads"] = true }
+	if h.strictThreads {
+		resp["strict_threads"] = true
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -81,8 +85,12 @@ func (h *Handler) Message(c *gin.Context) {
 			field, _ := c.Get("quota_error_field")
 			reason, _ := c.Get("quota_error_reason")
 			resp := gin.H{"error": "chat quota exceeded"}
-			if f, ok := field.(string); ok && f != "" { resp["field"] = f }
-			if r, ok := reason.(string); ok && r != "" { resp["reason"] = r }
+			if f, ok := field.(string); ok && f != "" {
+				resp["field"] = f
+			}
+			if r, ok := reason.(string); ok && r != "" {
+				resp["reason"] = r
+			}
 			c.JSON(http.StatusForbidden, resp)
 			return
 		}
@@ -246,12 +254,16 @@ func (h *Handler) Message(c *gin.Context) {
 						if err := h.quotaValidator(c.Request.Context(), c, "file_upload"); err != nil {
 							// If quota exhausted for files, abort before running assistant
 							field, _ := c.Get("quota_error_field")
-						reason, _ := c.Get("quota_error_reason")
-						resp := gin.H{"error": "file quota exceeded"}
-						if f, ok := field.(string); ok && f != "" { resp["field"] = f }
-						if r, ok := reason.(string); ok && r != "" { resp["reason"] = r }
-						c.JSON(http.StatusForbidden, resp)
-						return
+							reason, _ := c.Get("quota_error_reason")
+							resp := gin.H{"error": "file quota exceeded"}
+							if f, ok := field.(string); ok && f != "" {
+								resp["field"] = f
+							}
+							if r, ok := reason.(string); ok && r != "" {
+								resp["reason"] = r
+							}
+							c.JSON(http.StatusForbidden, resp)
+							return
 						}
 						if v, ok := c.Get("quota_remaining"); ok {
 							c.Header("X-Quota-Files-Remaining", toString(v)) // legacy
@@ -262,32 +274,22 @@ func (h *Handler) Message(c *gin.Context) {
 					// increase session bytes
 					h.AI.AddSessionBytes(formThreadID, upFile.Size)
 					base := strings.TrimSpace(prompt)
-					if base == "" {
+					if base == "" { // No auto-resumen: solo confirmar carga y disponibilidad
 						fname := filepath.Base(upFile.Filename)
-						structured := os.Getenv("STRUCTURED_PDF_SUMMARY") == "1"
-						if structured {
-							// Prompt estructurado (activable) para informes ejecutivos normalizados
-							base = "Elabora un resumen estructurado y conciso del documento adjunto (archivo: " + fname + "). Produce EXACTAMENTE las secciones numeradas en español a continuación, empezando DIRECTAMENTE por '1. Resumen Ejecutivo:' sin frases introductorias (no uses 'Claro', 'Aquí tienes', etc.) ni explicaciones sobre el proceso. Si un punto no está presente en el documento responde 'No especificado' únicamente para ese punto. No inventes información.\n" +
-								"1. Resumen Ejecutivo (3-4 líneas).\n" +
-								"2. Objetivo o Propósito.\n" +
-								"3. Alcance y Componentes Clave.\n" +
-								"4. Propuesta de Valor / Diferenciadores.\n" +
-								"5. Entregables y Cronograma (si se mencionan).\n" +
-								"6. Modelo Comercial / Costos (si aparecen).\n" +
-								"7. Riesgos, Supuestos o Limitaciones.\n" +
-								"8. Próximos Pasos sugeridos.\n" +
-								"Al final agrega una sección 'Recomendación Breve' (1-2 líneas) y nada más. No repitas el nombre del archivo fuera de la primera línea."
-						} else {
-							// Prompt genérico: permite análisis amplio para otros tipos de documentos
-							base = "Analiza el documento adjunto (" + fname + ") y genera: 1) Un resumen ejecutivo de 4-6 líneas. 2) Una lista de los temas o secciones principales detectadas. 3) Hallazgos o insights clave. 4) Cualquier métrica, cifra o dato cuantitativo relevante. 5) Riesgos o limitaciones si se infieren del texto. 6) Recomendaciones accionables (máx 3). No inventes datos; si algo no existe omite el apartado correspondiente en lugar de rellenarlo. No uses frases introductorias como 'Claro'." 
-						}
-						// Instrucción global inicial (si configurada) que aplica a TODOS los documentos sin importar tipo.
-						if pre := strings.TrimSpace(os.Getenv("DOC_SUMMARY_PREAMBLE")); pre != "" {
-							base = pre + "\n\n" + base
-						}
+						msg := "Documento '" + fname + "' cargado y procesado correctamente. No se generará resumen automático. Puedes hacer preguntas específicas sobre este PDF.\n\nFuente: " + fname
+						c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+						c.Header("X-RAG", "1")
+						c.Header("X-RAG-File", fname)
+						c.Header("X-RAG-Prompt", "doc-only-v1")
+						c.Header("X-Source-Used", "doc_only")
+						one := make(chan string, 1)
+						one <- msg
+						close(one)
+						sse.Stream(c, one)
+						return
 					}
 					log.Printf("{\"event\":\"run.start\",\"thread\":%q,\"vs\":%q,\"file_id\":%q}", formThreadID, vsID, fileID)
-						stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, base)
+					stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, base)
 					if err != nil {
 						// Fallback: responder sin RAG (sin documento)
 						fb := base + "\n\nNota: no se pudo usar el documento adjunto."
@@ -300,25 +302,28 @@ func (h *Handler) Message(c *gin.Context) {
 						sse.Stream(c, fbs)
 						return
 					}
-						c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+					c.Header("X-Assistant-Start-Ms", time.Since(start).String())
 					c.Header("X-RAG", "1")
 					c.Header("X-RAG-File", filepath.Base(upFile.Filename))
-					c.Header("X-RAG-Prompt", "structured-v1")
-						if os.Getenv("TEST_CAPTURE_FULL") == "1" {
-							// En modo test, interceptamos stream y añadimos token final con contenido completo
-							buf := &strings.Builder{}
-							proxy := make(chan string)
-							go func(){
-								for tok := range stream { buf.WriteString(tok); proxy <- tok }
-								close(proxy)
-							}()
-							// Enviar tokens interceptados
-							sse.Stream(c, proxy)
-							// Agregar línea final FULL (no estándar SSE pero útil en test)
-							c.Writer.Write([]byte("data: __FULL__ "+buf.String()+"\n\n"))
-							return
-						}
-						sse.Stream(c, stream)
+					c.Header("X-RAG-Prompt", "doc-only-v1")
+					if os.Getenv("TEST_CAPTURE_FULL") == "1" {
+						// En modo test, interceptamos stream y añadimos token final con contenido completo
+						buf := &strings.Builder{}
+						proxy := make(chan string)
+						go func() {
+							for tok := range stream {
+								buf.WriteString(tok)
+								proxy <- tok
+							}
+							close(proxy)
+						}()
+						// Enviar tokens interceptados
+						sse.Stream(c, proxy)
+						// Agregar línea final FULL (no estándar SSE pero útil en test)
+						c.Writer.Write([]byte("data: __FULL__ " + buf.String() + "\n\n"))
+						return
+					}
+					sse.Stream(c, stream)
 					return
 				}
 			} else {
@@ -327,9 +332,21 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 
 		// If Assistants is configured and thread_id provided, use Assistants flow
-	formThreadID := h.resolveAssistantThread(c, c.PostForm("thread_id"))
-	log.Printf("[chat][Message][multipart.tail] resolved_thread=%s assistant_id=%s prompt_len=%d", formThreadID, h.AI.GetAssistantID(), len(prompt))
-	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
+		formThreadID := h.resolveAssistantThread(c, c.PostForm("thread_id"))
+		log.Printf("[chat][Message][multipart.tail] resolved_thread=%s assistant_id=%s prompt_len=%d", formThreadID, h.AI.GetAssistantID(), len(prompt))
+		if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
+			// Si el hilo ya tiene documentos cargados, forzar modo doc-only para esta pregunta
+			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" {
+				prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
+					"Pregunta: " + prompt + "\n\n" +
+					"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
+				c.Header("X-Source-Used", "doc_only")
+			} else if strings.TrimSpace(prompt) != "" {
+				// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed
+				srcRules := "Tono académico (preciso y conciso). Prioriza SIEMPRE la biblioteca interna (vector de libros vs_680fc484cef081918b2b9588b701e2f4). Si hay conflicto con PubMed, prevalece la biblioteca. Al final añade una línea 'Fuente:' especificando los PDF de la biblioteca usados (si aplica). Si usas PubMed, agrega una sección '**Referencias (PubMed):**' con entradas completas (Autores, Título, Revista, Año, DOI/PMID) de 2020 en adelante. No repitas referencias dentro del cuerpo."
+				prompt = prompt + "\n\n" + srcRules
+				c.Header("X-Source-Policy", "books+pubmed")
+			}
 			// allow client thread id but we create our own thread on /start; we just send the prompt here
 			stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, prompt)
 			if err != nil {
@@ -345,9 +362,13 @@ func (h *Handler) Message(c *gin.Context) {
 				return
 			}
 			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-			if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
+			if v, ok := c.Get("quota_remaining"); ok {
+				c.Header("X-Quota-Remaining", toString(v))
+			}
 			c.Header("X-Thread-ID", formThreadID)
-			if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+			if h.strictThreads {
+				c.Header("X-Strict-Threads", "1")
+			}
 			sse.Stream(c, stream)
 			return
 		}
@@ -358,9 +379,13 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 		// Add simple timing header for client/testing
 		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-		if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
+		if v, ok := c.Get("quota_remaining"); ok {
+			c.Header("X-Quota-Remaining", toString(v))
+		}
 		c.Header("X-Thread-ID", formThreadID)
-		if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+		if h.strictThreads {
+			c.Header("X-Strict-Threads", "1")
+		}
 		sse.Stream(c, stream)
 		return
 	}
@@ -383,7 +408,20 @@ func (h *Handler) Message(c *gin.Context) {
 	// Use Assistants flow when configured
 	resolved := h.resolveAssistantThread(c, req.ThreadID)
 	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(resolved, "thread_") {
-		stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), resolved, req.Prompt)
+		// Si el hilo ya tiene documentos cargados, forzar modo doc-only para esta pregunta
+		prompt := req.Prompt
+		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" {
+			prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
+				"Pregunta: " + prompt + "\n\n" +
+				"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
+			c.Header("X-Source-Used", "doc_only")
+		} else if strings.TrimSpace(prompt) != "" {
+			// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed
+			srcRules := "Tono académico (preciso y conciso). Prioriza SIEMPRE la biblioteca interna (vector de libros vs_680fc484cef081918b2b9588b701e2f4). Si hay conflicto con PubMed, prevalece la biblioteca. Al final añade una línea 'Fuente:' especificando los PDF de la biblioteca usados (si aplica). Si usas PubMed, agrega una sección '**Referencias (PubMed):**' con entradas completas (Autores, Título, Revista, Año, DOI/PMID) de 2020 en adelante. No repitas referencias dentro del cuerpo."
+			prompt = prompt + "\n\n" + srcRules
+			c.Header("X-Source-Policy", "books+pubmed")
+		}
+		stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), resolved, prompt)
 		if err != nil {
 			// Fallback: responder sin Assistants si falla
 			log.Printf("ERROR StreamAssistantMessage (json): %v", err)
@@ -393,14 +431,20 @@ func (h *Handler) Message(c *gin.Context) {
 				return
 			}
 			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-			if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+			if h.strictThreads {
+				c.Header("X-Strict-Threads", "1")
+			}
 			sse.Stream(c, fbStream)
 			return
 		}
 		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-		if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
+		if v, ok := c.Get("quota_remaining"); ok {
+			c.Header("X-Quota-Remaining", toString(v))
+		}
 		c.Header("X-Thread-ID", resolved)
-		if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+		if h.strictThreads {
+			c.Header("X-Strict-Threads", "1")
+		}
 		c.Header("X-RAG", "1")
 		log.Printf("[chat][Message][json][assist] thread=%s elapsed_ms=%d", resolved, time.Since(startWall).Milliseconds())
 		sse.Stream(c, stream)
@@ -412,9 +456,13 @@ func (h *Handler) Message(c *gin.Context) {
 		return
 	}
 	c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-	if v, ok := c.Get("quota_remaining"); ok { c.Header("X-Quota-Remaining", toString(v)) }
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+	}
 	c.Header("X-Thread-ID", resolved)
-	if h.strictThreads { c.Header("X-Strict-Threads", "1") }
+	if h.strictThreads {
+		c.Header("X-Strict-Threads", "1")
+	}
 	c.Header("X-RAG", "0")
 	log.Printf("[chat][Message][json][fallback-no-assistant] thread=%s elapsed_ms=%d", resolved, time.Since(startWall).Milliseconds())
 	sse.Stream(c, stream)
@@ -422,23 +470,43 @@ func (h *Handler) Message(c *gin.Context) {
 
 // VectorReset: fuerza un nuevo vector store limpio para el hilo dado.
 func (h *Handler) VectorReset(c *gin.Context) {
-	var req struct { ThreadID string `json:"thread_id"` }
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ThreadID)=="" { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
-	if !strings.HasPrefix(req.ThreadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+	var req struct {
+		ThreadID string `json:"thread_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ThreadID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id requerido"})
+		return
+	}
+	if !strings.HasPrefix(req.ThreadID, "thread_") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id inválido"})
+		return
+	}
 	vsID, err := h.AI.ForceNewVectorStore(c.Request.Context(), req.ThreadID)
-	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()}); return }
-	c.JSON(http.StatusOK, gin.H{"status":"reset","vector_store_id":vsID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "reset", "vector_store_id": vsID})
 }
 
 // VectorFiles: lista archivos asociados al vector store del hilo.
 func (h *Handler) VectorFiles(c *gin.Context) {
 	threadID := strings.TrimSpace(c.Query("thread_id"))
-	if threadID=="" { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id requerido"}); return }
-	if !strings.HasPrefix(threadID, "thread_") { c.JSON(http.StatusBadRequest, gin.H{"error":"thread_id inválido"}); return }
+	if threadID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id requerido"})
+		return
+	}
+	if !strings.HasPrefix(threadID, "thread_") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id inválido"})
+		return
+	}
 	files, err := h.AI.ListVectorStoreFiles(c.Request.Context(), threadID)
-	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()}); return }
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	vsID := h.AI.GetVectorStoreID(threadID)
-	c.JSON(http.StatusOK, gin.H{"thread_id":threadID, "vector_store_id":vsID, "files":files})
+	c.JSON(http.StatusOK, gin.H{"thread_id": threadID, "vector_store_id": vsID, "files": files})
 }
 
 // helper to stringify interface
@@ -449,7 +517,7 @@ func toString(v interface{}) string {
 	case int:
 		return strconv.Itoa(t)
 	case int64:
-		return strconv.FormatInt(t,10)
+		return strconv.FormatInt(t, 10)
 	default:
 		return ""
 	}

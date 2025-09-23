@@ -683,33 +683,42 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		}
 	}
 	base := strings.TrimSpace(prompt)
-	structured := os.Getenv("STRUCTURED_PDF_SUMMARY") == "1"
-	ragPromptTag := "generic-v1"
 	if base == "" {
+		// No generar resumen automático. Solo confirmación y listo para preguntas.
 		fname := filepath.Base(upFile.Filename)
-		if structured {
-			base = "Elabora un resumen estructurado y conciso del documento adjunto (archivo: " + fname + "). Produce EXACTAMENTE las secciones numeradas en español a continuación, empezando DIRECTAMENTE por '1. Resumen Ejecutivo:' sin frases introductorias (no uses 'Claro', 'Aquí tienes', etc.) ni explicaciones sobre el proceso. Si un punto no está presente en el documento responde 'No especificado' únicamente para ese punto. No inventes información.\n" +
-				"1. Resumen Ejecutivo (3-4 líneas).\n" +
-				"2. Objetivo o Propósito.\n" +
-				"3. Alcance y Componentes Clave.\n" +
-				"4. Propuesta de Valor / Diferenciadores.\n" +
-				"5. Entregables y Cronograma (si se mencionan).\n" +
-				"6. Modelo Comercial / Costos (si aparecen).\n" +
-				"7. Riesgos, Supuestos o Limitaciones.\n" +
-				"8. Próximos Pasos sugeridos.\n" +
-				"Al final agrega: a) una sección 'Recomendación Breve' (1-2 líneas), b) una sección 'Verificación: Alineado con el documento: Sí/No' (indica 'Sí' solo si TODA la respuesta proviene del documento), y c) una sección 'Bibliografía' con viñetas que incluyan el nombre del archivo ('" + fname + "') y, si es posible, fragmentos textuales o números de página. No repitas el nombre del archivo fuera de la primera línea."
-			ragPromptTag = "structured-v1"
-		} else {
-			base = "Analiza el documento adjunto (" + fname + ") y genera: 1) Un resumen ejecutivo de 4-6 líneas. 2) Una lista de los temas o secciones principales detectadas. 3) Hallazgos o insights clave. 4) Cualquier métrica, cifra o dato cuantitativo relevante. 5) Riesgos o limitaciones si se infieren del texto. 6) Recomendaciones accionables (máx 3). No inventes datos; si algo no existe omite el apartado correspondiente en lugar de rellenarlo. No uses frases introductorias como 'Claro'. Al final agrega dos secciones: 'Verificación: Alineado con el documento: Sí/No' (marca 'Sí' solo si TODA la respuesta está sustentada en el documento) y 'Bibliografía' con el nombre del archivo ('" + fname + "') y, si es posible, fragmentos textuales o números de página."
+		msg := "Documento '" + fname + "' cargado y procesado correctamente. No se generará resumen automático. Puedes hacer preguntas específicas sobre este PDF.\n\nFuente: " + fname
+		if v, ok := c.Get("quota_remaining"); ok {
+			c.Header("X-Quota-Remaining", toString(v))
 		}
-		if pre := strings.TrimSpace(os.Getenv("DOC_SUMMARY_PREAMBLE")); pre != "" {
-			base = pre + "\n\n" + base
-		}
+		c.Header("X-RAG", "1")
+		c.Header("X-Grounded", "1")
+		c.Header("X-RAG-File", fname)
+		c.Header("X-RAG-Prompt", "doc-only-v1")
+		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+		c.Header("X-Thread-ID", threadID)
+		c.Header("X-Strict-Threads", "1")
+		c.Header("X-Source-Used", "doc_only")
+		log.Printf("[conv][PDF][confirm] thread=%s file=%s doc_only=1 elapsed_ms=%d", threadID, upFile.Filename, time.Since(start).Milliseconds())
+		one := make(chan string, 1)
+		one <- msg
+		close(one)
+		stages := []string{"__STAGE__:start", "__STAGE__:doc_only", "__STAGE__:streaming_answer"}
+		sseMaybeCapture(c, wrapWithStages(stages, one), threadID)
+		return
 	}
-	// Al generar el resumen inicial, forzar que la respuesta se base EXCLUSIVAMENTE en el documento subido
-	// Reusar el vector store ya asegurado para este hilo
-	docSummaryPrompt := base + "\n\nReglas estrictas: Tu única fuente es el PDF adjunto. No uses conocimiento externo ni inventes. No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente. Si algún apartado no está presente en el documento, indícalo como 'No especificado' (y si una pregunta no puede responderse, responde exactamente: 'El documento no contiene información para responder esta pregunta.'). Estilo profesional, claro y preciso; prioriza la precisión antes que la extensión. Cita el nombre del PDF utilizado si corresponde. Al final añade: 'Fuente: " + filepath.Base(upFile.Filename) + "'."
-	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, docSummaryPrompt, vsID)
+	// Si viene prompt junto al PDF, responder en modo doc-only usando el vector store del hilo
+	p := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
+
+Pregunta: %s
+
+Reglas estrictas:
+- No agregues conocimiento externo; no inventes.
+- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
+- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
+- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
+- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
+- Añade al final: "Fuente: documentos adjuntos del hilo".`, base)
+	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
@@ -721,13 +730,12 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	c.Header("X-RAG", "1")
 	c.Header("X-Grounded", "1")
 	c.Header("X-RAG-File", filepath.Base(upFile.Filename))
-	c.Header("X-RAG-Prompt", ragPromptTag)
+	c.Header("X-RAG-Prompt", "doc-only-v1")
 	c.Header("X-Assistant-Start-Ms", time.Since(start).String())
 	c.Header("X-Thread-ID", threadID)
 	c.Header("X-Strict-Threads", "1")
 	c.Header("X-Source-Used", "doc_only")
-	log.Printf("[conv][PDF][stream] thread=%s file=%s doc_only=1 rag_prompt=%s elapsed_ms=%d", threadID, upFile.Filename, ragPromptTag, time.Since(start).Milliseconds())
-	// Señales de etapa específicas para doc_only
+	log.Printf("[conv][PDF][doc_only.stream] thread=%s file=%s elapsed_ms=%d", threadID, upFile.Filename, time.Since(start).Milliseconds())
 	stages := []string{"__STAGE__:start", "__STAGE__:doc_only", "__STAGE__:streaming_answer"}
 	sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 }
