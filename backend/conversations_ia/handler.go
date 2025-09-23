@@ -73,6 +73,8 @@ type Documento struct {
 	Titulo    string
 	Contenido string
 	Fuente    string // "vector" o "pubmed"
+	// Referencias bibliográficas asociadas al contenido (cuando la fuente es PubMed)
+	Referencias []string
 }
 
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
@@ -116,6 +118,21 @@ Instrucciones:
 
 	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
+	// Reunir referencias de PubMed ya extraídas y filtradas (>=2020)
+	var pubRefs []string
+	seenRef := map[string]bool{}
+	for _, d := range pdocs {
+		for _, r := range d.Referencias {
+			k := strings.TrimSpace(strings.ToLower(r))
+			if k == "" || seenRef[k] {
+				continue
+			}
+			seenRef[k] = true
+			pubRefs = append(pubRefs, r)
+		}
+	}
+	refsBlock := joinRefsForPrompt(pubRefs)
+
 	vecHas := strings.TrimSpace(ctxVec) != ""
 	pubHas := strings.TrimSpace(ctxPub) != ""
 
@@ -140,14 +157,19 @@ Instrucciones:
 	input := fmt.Sprintf(
 		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
 			"Contexto complementario (PubMed):\n%s\n\n"+
+			"Referencias (PubMed ≥2020, procesadas):\n%s\n\n"+
 			"Pregunta del usuario:\n%s\n\n"+
 			"FORMATO Y REGLAS (estrictas):\n"+
-			"- Prioriza SIEMPRE el vector store; si hay conflicto con PubMed, gana el vector.\n"+
-			"- Empieza DIRECTAMENTE con la respuesta (sin preámbulos del tipo 'he realizado una búsqueda').\n"+
-			"- No repitas referencias dentro del cuerpo del texto.\n"+
-			"- Al final del contenido principal, agrega EXACTAMENTE esta línea de fuente: %s\n"+
-			"- Si corresponde, termina con una sección final '**Referencias:**' (Markdown) con viñetas.\n",
-		ctxVec, ctxPub, prompt, fuenteLine,
+			"- Tono académico: preciso, formal y con profundidad; evita preámbulos y frases coloquiales.\n"+
+			"- Prioriza SIEMPRE el vector store (biblioteca). Si hay conflicto con PubMed, prevalece la biblioteca.\n"+
+			"- Empieza DIRECTAMENTE con la respuesta, sin frases introductorias.\n"+
+			"- Si usas información de la biblioteca, incluye los nombres de los PDF utilizados (p. ej., en 'Fuentes (biblioteca)').\n"+
+			"- Si usas PubMed, añade una sección final '**Referencias (PubMed):**' con entradas completas (Autor/es, Título, Revista, Año), solo de 2020 en adelante.\n"+
+			"- Si usas PubMed, añade una sección final '**Referencias (PubMed):**' con entradas completas (Autor/es, Título, Revista, Año, DOI/PMID), solo de 2020 en adelante.\n"+
+			"- Además, incluye una sección genérica '**Referencias:**' si corresponde (Markdown con viñetas).\n"+
+			"- No repitas las referencias dentro del cuerpo; colócalas únicamente en la sección de referencias.\n"+
+			"- Al final del contenido principal, agrega EXACTAMENTE esta línea de fuente: %s\n",
+		ctxVec, ctxPub, refsBlock, prompt, fuenteLine,
 	)
 
 	// Usar el asistente configurado y el vector store de libros para mantener grounding y el historial del hilo
@@ -315,13 +337,16 @@ func (h *Handler) Message(c *gin.Context) {
 	)
 	if h.threadHasDocuments(c.Request.Context(), req.ThreadID) {
 		vsID := h.AI.GetVectorStoreID(req.ThreadID)
-		prompt := fmt.Sprintf(`Responde usando EXCLUSIVAMENTE los documentos adjuntos de este hilo.
+		prompt := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
 
 Pregunta: %s
 
-Reglas:
-- No agregues conocimiento externo.
-- Si falta información, indícalo explícitamente.
+Reglas estrictas:
+- No agregues conocimiento externo; no inventes.
+- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
+- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
+- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
+- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
 - Añade al final: "Fuente: documentos adjuntos del hilo".`, req.Prompt)
 		stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), req.ThreadID, prompt, vsID)
 		source = "doc_only"
@@ -409,13 +434,16 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		)
 		if h.threadHasDocuments(c.Request.Context(), threadID) {
 			vsID := h.AI.GetVectorStoreID(threadID)
-			p := fmt.Sprintf(`Responde usando EXCLUSIVAMENTE los documentos adjuntos de este hilo.
+			p := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
 
 Pregunta: %s
 
-Reglas:
-- No agregues conocimiento externo.
-- Si falta información, indícalo explícitamente.
+Reglas estrictas:
+- No agregues conocimiento externo; no inventes.
+- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
+- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
+- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
+- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
 - Añade al final: "Fuente: documentos adjuntos del hilo".`, prompt)
 			stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 			source = "doc_only"
@@ -680,7 +708,7 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	}
 	// Al generar el resumen inicial, forzar que la respuesta se base EXCLUSIVAMENTE en el documento subido
 	// Reusar el vector store ya asegurado para este hilo
-	docSummaryPrompt := base + "\n\nReglas estrictas: Usa ÚNICAMENTE el contenido del documento adjunto. Si algún apartado no está presente en el documento, indícalo como 'No especificado'. No uses conocimiento externo. Al final añade: 'Fuente: " + filepath.Base(upFile.Filename) + "'."
+	docSummaryPrompt := base + "\n\nReglas estrictas: Tu única fuente es el PDF adjunto. No uses conocimiento externo ni inventes. No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente. Si algún apartado no está presente en el documento, indícalo como 'No especificado' (y si una pregunta no puede responderse, responde exactamente: 'El documento no contiene información para responder esta pregunta.'). Estilo profesional, claro y preciso; prioriza la precisión antes que la extensión. Cita el nombre del PDF utilizado si corresponde. Al final añade: 'Fuente: " + filepath.Base(upFile.Filename) + "'."
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, docSummaryPrompt, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
@@ -876,11 +904,15 @@ func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 		return out
 	}
 	clean := stripModelPreambles(raw)
+	// Extraer referencias crudas y filtrarlas por año >= 2020
+	refsAll := extractReferenceLines(clean)
+	refs := filterRefsByYear(refsAll, 2020)
+	// Cuerpo depurado sin referencias embebidas ni inline
 	body := removeEmbeddedReferenceSections(removeInlineReferences(clean))
 	if len(body) > 2500 {
 		body = body[:2500] + "..."
 	}
-	out = append(out, Documento{Titulo: "PubMed", Contenido: strings.TrimSpace(body), Fuente: "pubmed"})
+	out = append(out, Documento{Titulo: "PubMed", Contenido: strings.TrimSpace(body), Fuente: "pubmed", Referencias: refs})
 	return out
 }
 
@@ -1284,4 +1316,24 @@ func extractReferenceLines(s string) []string {
 		return uniq[:5]
 	}
 	return uniq
+}
+
+// filterRefsByYear filtra referencias que contengan un año >= minYear
+func filterRefsByYear(refs []string, minYear int) []string {
+	out := make([]string, 0, len(refs))
+	yearRe := regexp.MustCompile(`\b(19|20)\d{2}\b`)
+	for _, r := range refs {
+		yrs := yearRe.FindAllString(r, -1)
+		keep := false
+		for _, ys := range yrs {
+			if y, err := strconv.Atoi(ys); err == nil && y >= minYear {
+				keep = true
+				break
+			}
+		}
+		if keep {
+			out = append(out, r)
+		}
+	}
+	return out
 }
