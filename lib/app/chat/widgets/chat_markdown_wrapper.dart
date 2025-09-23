@@ -176,16 +176,38 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // Remove all existing reference sections
     String cleaned = content.replaceAll(referencePattern, '');
 
-    // Remove any remaining question at the end
-    cleaned = cleaned.replaceAll(RegExp(r'¿[^?]*\?$'), '');
+    // Detect trailing question to preserve it as the last line
+    String? trailingQuestion;
+    final tqMatch = RegExp(
+      r'(.*?)(\s*)(¿[^?]*\?)\s*$',
+      dotAll: true,
+    ).firstMatch(cleaned);
+    if (tqMatch != null) {
+      cleaned = tqMatch.group(1)!.trimRight();
+      trailingQuestion = tqMatch.group(3)!.trim();
+    }
 
     // Add consolidated references section if we have any
     if (pmidReferences.isNotEmpty) {
       final sortedRefs = pmidReferences.values.toList()..sort();
-      cleaned += '\n\n**Referencias:**\n';
+      final buffer = StringBuffer();
+      buffer.write(cleaned.trimRight());
+      buffer.write('\n\n**Referencias:**\n');
       for (final ref in sortedRefs) {
-        cleaned += '- $ref\n';
+        buffer.write('- ');
+        buffer.write(ref);
+        buffer.write('\n');
       }
+      if (trailingQuestion != null && trailingQuestion.isNotEmpty) {
+        buffer.write('\n');
+        buffer.write(trailingQuestion);
+      }
+      return buffer.toString().trim();
+    }
+
+    // No references to add; if there was a trailing question, re-append it
+    if (trailingQuestion != null && trailingQuestion.isNotEmpty) {
+      cleaned = cleaned.trimRight() + '\n\n' + trailingQuestion;
     }
 
     return cleaned.trim();
