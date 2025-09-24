@@ -1041,17 +1041,32 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 			titulo := "Base de conocimiento médico" // Default fallback
 			contenido := trimmed
 
+			// DEBUG: Analizar el contenido de la respuesta
+			preview := trimmed
+			if len(trimmed) > 100 {
+				preview = trimmed[:100]
+			}
+			log.Printf("[conv][buscarVector][simple.debug] vector=%s trimmed_preview=\"%s\" starts_with_brace=%v contains_source_book=%v",
+				vectorID, preview, strings.HasPrefix(trimmed, "{"), strings.Contains(trimmed, "source_book"))
+
 			// Si la respuesta parece ser JSON, intentar extraer source_book
 			if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "source_book") {
+				log.Printf("[conv][buscarVector][simple.attempting_json] vector=%s", vectorID)
 				var jsonData map[string]interface{}
 				if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
+					log.Printf("[conv][buscarVector][simple.json_parsed] vector=%s json_len=%d", vectorID, len(jsonData))
 					if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
 						titulo = strings.TrimSpace(sourceBook)
 						log.Printf("[conv][buscarVector][simple.extracted_source] vector=%s source_book=\"%s\"", vectorID, titulo)
+					} else {
+						log.Printf("[conv][buscarVector][simple.source_book_missing] vector=%s source_book_exists=%v source_book_type=%T",
+							vectorID, ok, jsonData["source_book"])
 					}
 					if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
 						contenido = strings.TrimSpace(snippet)
 					}
+				} else {
+					log.Printf("[conv][buscarVector][simple.json_parse_error] vector=%s err=%v", vectorID, err)
 				}
 			}
 
