@@ -101,11 +101,15 @@ Instrucciones:
 		return stream, "focus_doc", nil
 	}
 
-	// Si el hilo tiene documentos adjuntos, usar EXCLUSIVAMENTE el vector store del hilo
-	// Esto asegura que las preguntas se respondan con los PDFs subidos por el usuario
-	if hasDocs := h.threadHasDocuments(ctx, threadID); hasDocs {
+	// Si el hilo tiene documentos adjuntos Y la pregunta parece referirse a ellos, usar modo doc-only
+	// Solo activar doc-only automático si la pregunta menciona explícitamente el documento/PDF
+	hasDocs := h.threadHasDocuments(ctx, threadID)
+	refersToDoc := h.questionRefersToDocument(prompt)
+	log.Printf("[conv][SmartMessage][routing] thread=%s has_docs=%v refers_to_doc=%v prompt_preview=\"%s\"", threadID, hasDocs, refersToDoc, sanitizePreview(prompt))
+
+	if hasDocs && refersToDoc {
 		vsID := h.AI.GetVectorStoreID(threadID)
-		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s", threadID, vsID)
+		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=question_refers_to_doc", threadID, vsID)
 
 		// Prompt restrictivo: solo con documentos del hilo
 		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos PDF adjuntos de este hilo.
@@ -136,7 +140,7 @@ Instrucciones:
 	}
 
 	// Flujo híbrido: consultar vector y PubMed, fusionar, y pasar contexto al modelo
-	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s", threadID, targetVectorID)
+	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s reason=general_question", threadID, targetVectorID)
 
 	vdocs := h.buscarVector(ctx, targetVectorID, prompt)
 	pdocs := h.buscarPubMed(ctx, prompt)
@@ -784,6 +788,32 @@ func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool 
 		return false
 	}
 	return len(files) > 0
+}
+
+// questionRefersToDocument detecta si la pregunta se refiere explícitamente a un documento
+func (h *Handler) questionRefersToDocument(prompt string) bool {
+	prompt = strings.ToLower(strings.TrimSpace(prompt))
+	if prompt == "" {
+		return false
+	}
+
+	// Palabras clave que indican referencia a documentos
+	docKeywords := []string{
+		"documento", "pdf", "archivo", "adjunto", "subido", "subí", "cargado", "cargué",
+		"en el documento", "en el pdf", "en el archivo", "según el documento",
+		"que dice el documento", "que dice el pdf", "en este documento",
+		"del documento", "del pdf", "del archivo",
+		"resumen", "resume", "resumir", "qué contiene", "contenido del",
+		"explica el documento", "analiza el documento", "análisis del documento",
+	}
+
+	for _, keyword := range docKeywords {
+		if strings.Contains(prompt, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 func errMsg(err error) string {
 	if err == nil {

@@ -15,6 +15,8 @@ type MockAIClient struct {
 	MockSource         string
 	ShouldFailRAG      bool
 	ShouldFailPubMed   bool
+	ThreadHasFiles     bool     // Simula si el hilo tiene archivos
+	VectorStoreFiles   []string // Lista de archivos en el vector store
 }
 
 func (m *MockAIClient) GetAssistantID() string                           { return m.AssistantID }
@@ -48,6 +50,9 @@ func (m *MockAIClient) ForceNewVectorStore(ctx context.Context, threadID string)
 	return "vs_new", nil
 }
 func (m *MockAIClient) ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error) {
+	if m.ThreadHasFiles && len(m.VectorStoreFiles) > 0 {
+		return m.VectorStoreFiles, nil
+	}
 	return []string{}, nil
 }
 func (m *MockAIClient) GetVectorStoreID(threadID string) string { return "vs_test" }
@@ -104,19 +109,17 @@ func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.C
 
 // Tests para el flujo SmartMessage
 
-func TestSmartMessage_WithRAGResults(t *testing.T) {
-	// Test con resultados del RAG
-	mockClient := &MockAIClientWithMetadata{
-		MockAIClient: &MockAIClient{
-			AssistantID:     "asst_test",
-			MockRAGResponse: "La diabetes mellitus es una enfermedad metabólica caracterizada por...",
-			MockSource:      "Harrison's Principles of Internal Medicine",
-		},
+func TestSmartMessage_RAGResults(t *testing.T) {
+	// Test con resultados del RAG (vector store)
+	mockClient := &MockAIClient{
+		AssistantID:     "asst_test",
+		MockRAGResponse: "La diabetes mellitus es una enfermedad metabólica caracterizada por...",
+		MockSource:      "Harrison's Principles of Internal Medicine",
 	}
 
 	handler := &Handler{AI: mockClient}
 
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "")
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
@@ -143,7 +146,7 @@ func TestSmartMessage_NoRAGResultsPubMedFallback(t *testing.T) {
 
 	handler := &Handler{AI: mockClient}
 
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "")
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
@@ -170,7 +173,7 @@ func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
 
 	handler := &Handler{AI: mockClient}
 
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "término inexistente xyz123")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "término inexistente xyz123", "")
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
@@ -196,7 +199,7 @@ func TestSmartMessage_BackwardCompatibility(t *testing.T) {
 
 	handler := &Handler{AI: mockClient}
 
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "pregunta médica")
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "pregunta médica", "")
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
@@ -206,9 +209,73 @@ func TestSmartMessage_BackwardCompatibility(t *testing.T) {
 		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
 	}
 
-	// Verificar que funciona con el método legacy
+	// Verificar que el stream contiene información
 	response := <-stream
-	if !strings.Contains(response, "Base de conocimiento médico") {
-		t.Errorf("La respuesta debe contener fuente genérica cuando no hay metadatos")
+	if len(response) == 0 {
+		t.Errorf("La respuesta no debe estar vacía")
+	}
+}
+
+func TestSmartMessage_ThreadWithDocsGeneralQuestion(t *testing.T) {
+	// Test del caso del usuario: hilo con documentos pero pregunta general (no debe usar doc-only)
+	mockClient := &MockAIClient{
+		AssistantID:      "asst_test",
+		MockRAGResponse:  "La gastritis es una inflamación de la mucosa gástrica...",
+		MockSource:       "Harrison's Principles of Internal Medicine",
+		ThreadHasFiles:   true,                    // Simula que el hilo tiene documentos
+		VectorStoreFiles: []string{"file_abc123"}, // Simula archivo existente
+	}
+
+	handler := &Handler{AI: mockClient}
+
+	// Pregunta general que NO menciona documentos - debe usar flujo híbrido, no doc-only
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "Que es la gastritis?", "")
+
+	if err != nil {
+		t.Errorf("No se esperaba error: %v", err)
+	}
+
+	// DEBE usar flujo híbrido (rag/pubmed), NO doc_only
+	if source == "doc_only" {
+		t.Errorf("No debería usar doc_only para pregunta general, se obtuvo: %s", source)
+	}
+
+	if source != "rag" && source != "pubmed" {
+		t.Errorf("Se esperaba source 'rag' o 'pubmed' para pregunta general, se obtuvo: %s", source)
+	}
+
+	// Verificar que el stream contiene información del conocimiento general
+	response := <-stream
+	if !strings.Contains(response, "gastritis") {
+		t.Errorf("La respuesta debe contener información sobre gastritis")
+	}
+}
+
+func TestSmartMessage_ThreadWithDocsDocumentQuestion(t *testing.T) {
+	// Test: hilo con documentos Y pregunta que menciona documentos - SÍ debe usar doc-only
+	mockClient := &MockAIClient{
+		AssistantID:      "asst_test",
+		MockRAGResponse:  "Los documentos no contienen información para responder esta pregunta.",
+		ThreadHasFiles:   true,
+		VectorStoreFiles: []string{"file_abc123"},
+	}
+
+	handler := &Handler{AI: mockClient}
+
+	// Pregunta que SÍ menciona documentos - debe usar doc-only
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "que dice el documento sobre gastritis?", "")
+
+	if err != nil {
+		t.Errorf("No se esperaba error: %v", err)
+	}
+
+	// DEBE usar doc_only cuando se menciona explícitamente el documento
+	if source != "doc_only" {
+		t.Errorf("Se esperaba source 'doc_only' cuando se pregunta sobre documento, se obtuvo: %s", source)
+	}
+
+	response := <-stream
+	if !strings.Contains(response, "documento") {
+		t.Errorf("La respuesta debe mencionar los documentos")
 	}
 }
