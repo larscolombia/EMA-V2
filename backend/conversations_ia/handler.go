@@ -1030,12 +1030,14 @@ func fusionarResultados(vectorDocs, pubmedDocs []Documento) (ctxVec, ctxPub stri
 	if len(vectorDocs) > 0 {
 		var b strings.Builder
 		for _, d := range vectorDocs {
-			if strings.TrimSpace(d.Contenido) == "" {
-				continue
-			}
+			// Si tiene título específico (source_book), incluirlo aunque el contenido esté vacío
 			if d.Titulo != "" {
-				fmt.Fprintf(&b, "- %s:\n%s\n\n", d.Titulo, d.Contenido)
-			} else {
+				if strings.TrimSpace(d.Contenido) != "" {
+					fmt.Fprintf(&b, "- %s:\n%s\n\n", d.Titulo, d.Contenido)
+				} else {
+					fmt.Fprintf(&b, "- %s:\nInformación disponible en el documento\n\n", d.Titulo)
+				}
+			} else if strings.TrimSpace(d.Contenido) != "" {
 				fmt.Fprintf(&b, "- %s\n\n", d.Contenido)
 			}
 		}
