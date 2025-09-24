@@ -101,8 +101,9 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     print(
       '🔍 [ChatMessageAi] Mensaje recibido - Longitud: ${widget.message.text.length}',
     );
+    print('🔍 [ChatMessageAi] Texto completo: "${widget.message.text}"');
     print(
-      '🔍 [ChatMessageAi] Primeros 200 caracteres: ${widget.message.text.length > 200 ? widget.message.text.substring(0, 200) + "..." : widget.message.text}',
+      '🔍 [ChatMessageAi] Contenido principal: "${_getMainContent(widget.message.text)}"',
     );
 
     // Si no hay texto útil, no renderizar la burbuja para evitar espacios en blanco y overflows innecesarios

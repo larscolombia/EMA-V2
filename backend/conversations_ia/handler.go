@@ -101,9 +101,30 @@ Instrucciones:
 		return stream, "focus_doc", nil
 	}
 
-	// REMOVIDO: No forzar modo doc-only automáticamente por tener documentos
-	// Solo activar cuando se especifique focusDocID explícitamente
-	// Esto permite al usuario hacer preguntas generales incluso con PDFs en el thread
+	// Si el hilo tiene documentos adjuntos, usar EXCLUSIVAMENTE el vector store del hilo
+	// Esto asegura que las preguntas se respondan con los PDFs subidos por el usuario
+	if hasDocs := h.threadHasDocuments(ctx, threadID); hasDocs {
+		vsID := h.AI.GetVectorStoreID(threadID)
+		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s", threadID, vsID)
+
+		// Prompt restrictivo: solo con documentos del hilo
+		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos PDF adjuntos de este hilo.
+
+Pregunta del usuario: %s
+
+Instrucciones:
+- No utilices conocimiento externo ni otras fuentes.
+- Si los documentos no contienen información suficiente para responder, di claramente: "Los documentos no contienen información para responder esta pregunta".
+- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuentes: nombres de archivos y páginas si es posible]`, prompt)
+
+		log.Printf("[conv][SmartMessage][doc_only.prompt] thread=%s prompt_len=%d", threadID, len(docOnlyPrompt))
+
+		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
+		if err != nil {
+			return nil, "doc_only", err
+		}
+		return stream, "doc_only", nil
+	}
 
 	// Smalltalk/Saludo: responder cordialmente sin consultar fuentes
 	if isSmallTalk(prompt) {
