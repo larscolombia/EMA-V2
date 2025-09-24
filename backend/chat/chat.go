@@ -288,8 +288,12 @@ func (h *Handler) Message(c *gin.Context) {
 						sse.Stream(c, one)
 						return
 					}
+					// Si viene prompt junto al PDF, responder en modo doc-only (forzado al vector del hilo)
+					docOnly := "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
+						"Pregunta: " + base + "\n\n" +
+						"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
 					log.Printf("{\"event\":\"run.start\",\"thread\":%q,\"vs\":%q,\"file_id\":%q}", formThreadID, vsID, fileID)
-					stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, base)
+					stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, docOnly)
 					if err != nil {
 						// Fallback: responder sin RAG (sin documento)
 						fb := base + "\n\nNota: no se pudo usar el documento adjunto."
@@ -306,6 +310,7 @@ func (h *Handler) Message(c *gin.Context) {
 					c.Header("X-RAG", "1")
 					c.Header("X-RAG-File", filepath.Base(upFile.Filename))
 					c.Header("X-RAG-Prompt", "doc-only-v1")
+					c.Header("X-Source-Used", "doc_only")
 					if os.Getenv("TEST_CAPTURE_FULL") == "1" {
 						// En modo test, interceptamos stream y añadimos token final con contenido completo
 						buf := &strings.Builder{}
@@ -335,8 +340,8 @@ func (h *Handler) Message(c *gin.Context) {
 		formThreadID := h.resolveAssistantThread(c, c.PostForm("thread_id"))
 		log.Printf("[chat][Message][multipart.tail] resolved_thread=%s assistant_id=%s prompt_len=%d", formThreadID, h.AI.GetAssistantID(), len(prompt))
 		if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
-			// Si el hilo ya tiene documentos cargados, forzar modo doc-only para esta pregunta
-			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" {
+			// Si el hilo ya tiene documentos, solo forzar doc-only si el prompt hace referencia al PDF/documento
+			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" && referencesDocument(prompt) {
 				prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
 					"Pregunta: " + prompt + "\n\n" +
 					"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
@@ -346,6 +351,7 @@ func (h *Handler) Message(c *gin.Context) {
 				srcRules := "Tono académico (preciso y conciso). Prioriza SIEMPRE la biblioteca interna (vector de libros vs_680fc484cef081918b2b9588b701e2f4). Si hay conflicto con PubMed, prevalece la biblioteca. Al final añade una línea 'Fuente:' especificando los PDF de la biblioteca usados (si aplica). Si usas PubMed, agrega una sección '**Referencias (PubMed):**' con entradas completas (Autores, Título, Revista, Año, DOI/PMID) de 2020 en adelante. No repitas referencias dentro del cuerpo."
 				prompt = prompt + "\n\n" + srcRules
 				c.Header("X-Source-Policy", "books+pubmed")
+				c.Header("X-Source-Used", "hybrid")
 			}
 			// allow client thread id but we create our own thread on /start; we just send the prompt here
 			stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), formThreadID, prompt)
@@ -410,7 +416,7 @@ func (h *Handler) Message(c *gin.Context) {
 	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(resolved, "thread_") {
 		// Si el hilo ya tiene documentos cargados, forzar modo doc-only para esta pregunta
 		prompt := req.Prompt
-		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" {
+		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" && referencesDocument(prompt) {
 			prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
 				"Pregunta: " + prompt + "\n\n" +
 				"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
@@ -420,6 +426,7 @@ func (h *Handler) Message(c *gin.Context) {
 			srcRules := "Tono académico (preciso y conciso). Prioriza SIEMPRE la biblioteca interna (vector de libros vs_680fc484cef081918b2b9588b701e2f4). Si hay conflicto con PubMed, prevalece la biblioteca. Al final añade una línea 'Fuente:' especificando los PDF de la biblioteca usados (si aplica). Si usas PubMed, agrega una sección '**Referencias (PubMed):**' con entradas completas (Autores, Título, Revista, Año, DOI/PMID) de 2020 en adelante. No repitas referencias dentro del cuerpo."
 			prompt = prompt + "\n\n" + srcRules
 			c.Header("X-Source-Policy", "books+pubmed")
+			c.Header("X-Source-Used", "hybrid")
 		}
 		stream, err := h.AI.StreamAssistantMessage(c.Request.Context(), resolved, prompt)
 		if err != nil {
@@ -535,6 +542,24 @@ func (h *Handler) Delete(c *gin.Context) {
 	// Best-effort cleanup; even if some resources are missing, we aim to clear local state
 	_ = h.AI.DeleteThreadArtifacts(c.Request.Context(), req.ThreadID)
 	c.Status(http.StatusNoContent)
+}
+
+// referencesDocument detecta si el usuario está pidiendo algo explícitamente del/los PDF(s) del hilo.
+// Heurística simple basada en palabras clave comunes.
+func referencesDocument(s string) bool {
+	t := strings.ToLower(s)
+	if strings.TrimSpace(t) == "" {
+		return false
+	}
+	keywords := []string{
+		"en el pdf", "del pdf", "según el pdf", "del documento", "en el documento", "adjunto", "adjuntos", "archivos adjuntos", "documentos del hilo", "este documento", "el documento", "la propuesta", "este pdf",
+	}
+	for _, k := range keywords {
+		if strings.Contains(t, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveAssistantThread ensures we have a usable OpenAI assistant thread id when Assistants flow is available.

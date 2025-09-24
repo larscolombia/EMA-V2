@@ -32,13 +32,31 @@ import 'package:sqflite/sqflite.dart';
 
 // Fakes mínimos ajustados a la firma real
 class FakeAttachmentService extends AttachmentService {}
-class FakeUiObserverService extends UiObserverService { FakeUiObserverService(){ isKeyboardVisible = false.obs; } }
+
+class FakeUiObserverService extends UiObserverService {
+  FakeUiObserverService() {
+    isKeyboardVisible = false.obs;
+  }
+}
 
 class FakeUserService extends UserService {
-  FakeUserService(){ currentUser.value = UserModel(
-    id:1, firstName:'A', lastName:'B', email:'a@b', status:true, language:'es', darkMode:false,
-    createdAt:DateTime.now(), updatedAt:DateTime.now(), fullName:'A B', profileImage:'', authToken:'token', countryName:''
-  ); }
+  FakeUserService() {
+    currentUser.value = UserModel(
+      id: 1,
+      firstName: 'A',
+      lastName: 'B',
+      email: 'a@b',
+      status: true,
+      language: 'es',
+      darkMode: false,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      fullName: 'A B',
+      profileImage: '',
+      authToken: 'token',
+      countryName: '',
+    );
+  }
 }
 
 // Stubs para dependencias de UserService
@@ -46,39 +64,103 @@ class FakeLaravelAuthService extends LaravelAuthService {}
 
 class FakeUserLocalDataService extends UserLocalDataService {
   UserModel? _mem;
-  @override Future<void> clear() async { _mem = null; }
-  @override Future<UserModel> load() async { if(_mem!=null) return _mem!; throw Exception('No user'); }
-  @override Future<void> save(UserModel user) async { _mem = user; }
-  @override Future<void> deleteAll() async { _mem = null; }
+  @override
+  Future<void> clear() async {
+    _mem = null;
+  }
+
+  @override
+  Future<UserModel> load() async {
+    if (_mem != null) return _mem!;
+    throw Exception('No user');
+  }
+
+  @override
+  Future<void> save(UserModel user) async {
+    _mem = user;
+  }
+
+  @override
+  Future<void> deleteAll() async {
+    _mem = null;
+  }
 }
 
 class FakeProfileService implements ProfileService {
-  @override Future<UserModel> fetchDetailedProfile(UserModel profile) async => profile;
-  @override Future<UserModel> updateProfile(UserModel profile) async => profile;
-  @override Future<UserModel> updateProfileImage(UserModel profile, XFile imageFile) async => profile;
+  @override
+  Future<UserModel> fetchDetailedProfile(UserModel profile) async => profile;
+  @override
+  Future<UserModel> updateProfile(UserModel profile) async => profile;
+  @override
+  Future<UserModel> updateProfileImage(
+    UserModel profile,
+    XFile imageFile,
+  ) async => profile;
 }
 
 class FakeSubscriptionService implements SubscriptionService {
-  @override Future<Subscription> createSubscription({required int userId, required int subscriptionPlanId, required int frequency, required String authToken}) async => Subscription(
-    id:1, name:'Free', currency:'USD', price:0, billing:'Mensual', questionnaires:999, consultations:999, clinicalCases:999, files:999, frequency:frequency, statistics:1);
-  @override Future<List<Subscription>> fetchSubscriptions({required String authToken}) async => [];
-  @override Future<void> updateSubscriptionQuantities({required int subscriptionId, required String authToken, int? consultations, int? questionnaires, int? clinicalCases, int? files}) async {}
+  @override
+  Future<Subscription> createSubscription({
+    required int userId,
+    required int subscriptionPlanId,
+    required int frequency,
+    required String authToken,
+  }) async => Subscription(
+    id: 1,
+    name: 'Free',
+    currency: 'USD',
+    price: 0,
+    billing: 'Mensual',
+    questionnaires: 999,
+    consultations: 999,
+    clinicalCases: 999,
+    files: 999,
+    frequency: frequency,
+    statistics: 1,
+  );
+  @override
+  Future<List<Subscription>> fetchSubscriptions({
+    required String authToken,
+  }) async => [];
+  @override
+  Future<void> updateSubscriptionQuantities({
+    required int subscriptionId,
+    required String authToken,
+    int? consultations,
+    int? questionnaires,
+    int? clinicalCases,
+    int? files,
+  }) async {}
 }
 
 class FakeCountryService extends CountryService {
-  @override Future<List<CountryModel>> getCountries() async => [];
+  @override
+  Future<List<CountryModel>> getCountries() async => [];
 }
 
 class FakeProfileController extends ProfileController {
-  FakeProfileController(){ currentProfile.value = userService.currentUser.value; }
-  @override void onInit() { super.onInit(); } // mantiene contrato mustCallSuper
-  @override bool canCreateMoreChats() => true;
-  @override bool canUploadMoreFiles() => true;
-  @override Future<bool> decrementChatQuota() async => false; // server-side now
-  @override Future<bool> decrementFileQuota() async => false; // server-side now
-  @override void refreshChatQuota() {}
-  @override void refreshFileQuota() {}
-  @override Future<void> refreshProfile({bool forceCancel = false}) async {}
+  FakeProfileController() {
+    currentProfile.value = userService.currentUser.value;
+  }
+  @override
+  void onInit() {
+    super.onInit();
+  } // mantiene contrato mustCallSuper
+
+  @override
+  bool canCreateMoreChats() => true;
+  @override
+  bool canUploadMoreFiles() => true;
+  @override
+  Future<bool> decrementChatQuota() async => false; // server-side now
+  @override
+  Future<bool> decrementFileQuota() async => false; // server-side now
+  @override
+  void refreshChatQuota() {}
+  @override
+  void refreshFileQuota() {}
+  @override
+  Future<void> refreshProfile({bool forceCancel = false}) async {}
 }
 
 class FakeChatsService extends ChatsService {
@@ -86,7 +168,13 @@ class FakeChatsService extends ChatsService {
   bool alwaysThrow = false;
 
   @override
-  Future<ChatMessageModel> sendMessage({required String threadId, required ChatMessageModel userMessage, PdfAttachment? file, void Function(String token)? onStream}) async {
+  Future<ChatMessageModel> sendMessage({
+    required String threadId,
+    required ChatMessageModel userMessage,
+    PdfAttachment? file,
+    String? focusDocId,
+    void Function(String token)? onStream,
+  }) async {
     if (throwAfterFirstToken) {
       onStream?.call('Parcial ');
       throw Exception('DioException 504');
@@ -95,39 +183,69 @@ class FakeChatsService extends ChatsService {
       throw Exception('DioException 504');
     }
     onStream?.call('Respuesta ');
-    return ChatMessageModel.ai(chatId: userMessage.chatId, text: 'Respuesta completa');
+    return ChatMessageModel.ai(
+      chatId: userMessage.chatId,
+      text: 'Respuesta completa',
+    );
   }
 }
 
 class FakeApiChatData implements IApiChatData {
-  @override Future<ChatStartResponse> startChat(String prompt) async => ChatStartResponse(threadId: 't123', text: '');
-  @override Future<ChatModel?> getChatById(String id) async => null;
-  @override Future<List<ChatModel>> getChatsByUserId({required String userId}) async => [];
-  @override Future<List<ChatMessageModel>> getMessagesById({required String id}) async => [];
-  @override Future<ChatMessageModel> sendMessage({required String threadId, required String prompt, CancelToken? cancelToken, void Function(String token)? onStream}) async {
+  @override
+  Future<ChatStartResponse> startChat(String prompt) async =>
+      ChatStartResponse(threadId: 't123', text: '');
+  @override
+  Future<ChatModel?> getChatById(String id) async => null;
+  @override
+  Future<List<ChatModel>> getChatsByUserId({required String userId}) async =>
+      [];
+  @override
+  Future<List<ChatMessageModel>> getMessagesById({required String id}) async =>
+      [];
+  @override
+  Future<ChatMessageModel> sendMessage({
+    required String threadId,
+    required String prompt,
+    CancelToken? cancelToken,
+    String? focusDocId,
+    void Function(String token)? onStream,
+  }) async {
     onStream?.call('Respuesta ');
     return ChatMessageModel.ai(chatId: 'chat1', text: 'Respuesta completa');
   }
-  @override Future<ChatMessageModel> sendPdfUpload({required String threadId, required String prompt, required PdfAttachment file, CancelToken? cancelToken, Function(int, int)? onSendProgress, void Function(String token)? onStream}) async {
+
+  @override
+  Future<ChatMessageModel> sendPdfUpload({
+    required String threadId,
+    required String prompt,
+    required PdfAttachment file,
+    CancelToken? cancelToken,
+    String? focusDocId,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
+  }) async {
     onStream?.call('Respuesta ');
     return ChatMessageModel.ai(chatId: 'chat1', text: 'Respuesta completa');
   }
 }
 
-void main(){
+void main() {
   setUp(() async {
     Get.reset();
     SharedPreferences.setMockInitialValues({});
   });
 
-  Future<ChatController> _build({bool throwAfterFirstToken=false, bool alwaysThrow=false}) async {
+  Future<ChatController> _build({
+    bool throwAfterFirstToken = false,
+    bool alwaysThrow = false,
+  }) async {
     // Inicializar DB FFI solo una vez
     if (Get.isRegistered<DatabaseService>() == false) {
       sqfliteFfiInit();
       databaseFactory = databaseFactoryFfi;
       final dbService = Get.put(DatabaseService());
       // ignore: invalid_use_of_visible_for_testing_member
-  await dbService.init();
+      await dbService.init();
       Get.put(LocalActionsData());
       Get.put(LocalChatData());
       Get.put(LocalChatMessageData());
@@ -136,27 +254,36 @@ void main(){
     }
     Get.put<AttachmentService>(FakeAttachmentService());
     Get.put<UiObserverService>(FakeUiObserverService());
-  Get.put<LaravelAuthService>(FakeLaravelAuthService());
-  Get.put<UserLocalDataService>(FakeUserLocalDataService());
+    Get.put<LaravelAuthService>(FakeLaravelAuthService());
+    Get.put<UserLocalDataService>(FakeUserLocalDataService());
     Get.put<UserService>(FakeUserService());
-  Get.put<ProfileService>(FakeProfileService());
-  Get.put<SubscriptionService>(FakeSubscriptionService());
-  Get.put<CountryService>(FakeCountryService());
+    Get.put<ProfileService>(FakeProfileService());
+    Get.put<SubscriptionService>(FakeSubscriptionService());
+    Get.put<CountryService>(FakeCountryService());
     Get.put<ProfileController>(FakeProfileController());
-    final chats = FakeChatsService()
-      ..throwAfterFirstToken=throwAfterFirstToken
-      ..alwaysThrow=alwaysThrow;
+    final chats =
+        FakeChatsService()
+          ..throwAfterFirstToken = throwAfterFirstToken
+          ..alwaysThrow = alwaysThrow;
     Get.put<ChatsService>(chats);
     final controller = Get.put(ChatController());
     controller.threadId = 'threadX';
     controller.currentChat.value = ChatModel(
-      uid: 'chat1', threadId: 'threadX', userId:1, shortTitle:'stub', createdAt: DateTime.now(), updatedAt: DateTime.now());
-    controller.messages.add(ChatMessageModel.user(chatId: 'chat1', text: 'inicio'));
-  return controller;
+      uid: 'chat1',
+      threadId: 'threadX',
+      userId: 1,
+      shortTitle: 'stub',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    controller.messages.add(
+      ChatMessageModel.user(chatId: 'chat1', text: 'inicio'),
+    );
+    return controller;
   }
 
   test('504 sin tokens: estados reseteados y burbuja temporal', () async {
-    final c = await _build(alwaysThrow:true);
+    final c = await _build(alwaysThrow: true);
     await c.sendMessage('hola');
     expect(c.isSending.value, false);
     expect(c.isTyping.value, false);
@@ -166,9 +293,9 @@ void main(){
   });
 
   test('504 tras token parcial: conserva parcial + burbuja error', () async {
-    final c = await _build(throwAfterFirstToken:true);
+    final c = await _build(throwAfterFirstToken: true);
     await c.sendMessage('hola');
-    final aiMessages = c.messages.where((m)=>m.aiMessage).toList();
+    final aiMessages = c.messages.where((m) => m.aiMessage).toList();
     expect(aiMessages.length >= 2, true);
     expect(aiMessages.first.text.startsWith('Parcial'), true);
     expect(aiMessages.last.text.contains('Ups'), true);
@@ -177,12 +304,12 @@ void main(){
   });
 
   test('Retry después de error 504 genera respuesta completa', () async {
-    final c = await _build(alwaysThrow:true);
+    final c = await _build(alwaysThrow: true);
     await c.sendMessage('hola');
     // Cambiar a éxito
     final service = Get.find<ChatsService>() as FakeChatsService;
     service.alwaysThrow = false;
     await c.retryLastSend();
-    expect(c.messages.any((m)=> m.text.contains('Respuesta completa')), true);
+    expect(c.messages.any((m) => m.text.contains('Respuesta completa')), true);
   });
 }

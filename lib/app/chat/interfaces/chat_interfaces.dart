@@ -23,6 +23,7 @@ abstract class IApiChatData {
     required String prompt,
     CancelToken? cancelToken,
     void Function(String token)? onStream,
+    String? focusDocId,
   });
 
   Future<ChatMessageModel> sendPdfUpload({
@@ -32,5 +33,6 @@ abstract class IApiChatData {
     CancelToken? cancelToken,
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
+    String? focusDocId,
   });
 }

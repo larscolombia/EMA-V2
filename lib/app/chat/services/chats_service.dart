@@ -107,6 +107,7 @@ class ChatsService extends GetxService {
     required ChatMessageModel userMessage,
     PdfAttachment? file,
     void Function(String token)? onStream,
+    String? focusDocId,
   }) async {
     // Persisting of the user message is handled by the controller to avoid duplicates.
 
@@ -116,6 +117,7 @@ class ChatsService extends GetxService {
         prompt: userMessage.text,
         file: file,
         onStream: onStream,
+        focusDocId: focusDocId,
       );
       final aiPdfMessage = ChatMessageModel.ai(
         chatId: userMessage.chatId,
@@ -129,6 +131,7 @@ class ChatsService extends GetxService {
       threadId: threadId,
       prompt: userMessage.text,
       onStream: onStream,
+      focusDocId: focusDocId,
     );
     final aiMessage = ChatMessageModel.ai(
       chatId: userMessage.chatId,

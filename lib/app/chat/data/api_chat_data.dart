@@ -60,11 +60,15 @@ class ApiChatData implements IApiChatData {
     required String prompt,
     CancelToken? cancelToken,
     void Function(String token)? onStream,
+    String? focusDocId,
   }) async {
     const endpoint = '/conversations/message';
 
     try {
       final data = {'thread_id': threadId, 'prompt': prompt};
+      if (focusDocId != null && focusDocId.isNotEmpty) {
+        data['focus_doc_id'] = focusDocId;
+      }
 
       _cancelTokens[threadId] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId]!;
@@ -140,6 +144,7 @@ class ApiChatData implements IApiChatData {
     CancelToken? cancelToken,
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
+    String? focusDocId,
   }) async {
     const endpoint = '/conversations/message';
     try {
@@ -158,6 +163,11 @@ class ApiChatData implements IApiChatData {
         'prompt': prompt,
         'thread_id': threadId,
       });
+
+      // Agregar focus_doc_id si está presente
+      if (focusDocId != null && focusDocId.isNotEmpty) {
+        formData.fields.add(MapEntry('focus_doc_id', focusDocId));
+      }
 
       // formData.fields.forEach((field) {
       //   print('Field: ${field.key}, Value: ${field.value}');

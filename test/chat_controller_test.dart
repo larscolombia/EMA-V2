@@ -1,14 +1,14 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/controllers/chat_controller.dart';
-import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
-import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
-import 'package:ema_educacion_medica_avanzada/core/attachments/attachment_service.dart';
-import 'package:ema_educacion_medica_avanzada/core/ui/ui_observer_service.dart';
-import 'package:ema_educacion_medica_avanzada/app/profiles/controllers/profile_controller.dart';
+import 'package:ema_educacion_medica_avanzada/app/attachment/services/attachment_service.dart';
+import 'package:ema_educacion_medica_avanzada/core/observer/ui_observer_service.dart';
+import 'package:ema_educacion_medica_avanzada/app/chat/model/chat_message_model.dart';
+import 'package:ema_educacion_medica_avanzada/app/chat/model/pdf_attachment_model.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_model.dart';
+import 'package:ema_educacion_medica_avanzada/app/actions/services/actions_service.dart';
 
 // Fake ChatsService to simulate responses
 class FakeChatsService extends ChatsService {
@@ -17,6 +17,7 @@ class FakeChatsService extends ChatsService {
     required String threadId,
     required ChatMessageModel userMessage,
     PdfAttachment? file,
+    String? focusDocId,
     void Function(String token)? onStream,
   }) async {
     // Simulate streaming by sending two tokens
@@ -40,6 +41,7 @@ void main() {
   setUp(() {
     Get.reset();
     // Provide fake dependencies
+    Get.put<ActionsService>(ActionsService());
     // ChatsService with streaming behavior
     Get.put<ChatsService>(FakeChatsService());
     // AttachmentService stub

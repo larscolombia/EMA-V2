@@ -78,8 +78,28 @@ type Documento struct {
 }
 
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
-func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt string) (<-chan string, string, error) {
+func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt, focusDocID string) (<-chan string, string, error) {
 	targetVectorID := booksVectorID()
+
+	// Si focusDocID está especificado, usar EXCLUSIVAMENTE ese documento
+	if focusDocID != "" {
+		// Prompt restrictivo: solo con el documento específico
+		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en el documento con ID: %s
+
+Pregunta del usuario: %s
+
+Instrucciones:
+- No utilices conocimiento externo ni otras fuentes.
+- Si el documento no contiene información suficiente para responder, di claramente: "El documento no contiene información para responder esta pregunta".
+- Cita el nombre del archivo específico si está disponible.
+- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuente: Nombre del documento]`, focusDocID, prompt)
+
+		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, h.AI.GetVectorStoreID(threadID))
+		if err != nil {
+			return nil, "focus_doc", err
+		}
+		return stream, "focus_doc", nil
+	}
 
 	// Si el hilo tiene documentos adjuntos, forzar modo "doc-only":
 	// usar EXCLUSIVAMENTE el vector store del hilo y prohibir fuentes externas.
@@ -93,7 +113,7 @@ Pregunta del usuario: %s
 Instrucciones:
 - No utilices conocimiento externo ni otras fuentes.
 - Si los documentos no contienen información suficiente para responder, di claramente: "No hay suficiente información en los documentos adjuntos para responder".
-- Cita al final: "Fuente: documentos adjuntos del hilo".`, prompt)
+- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuentes: nombres de archivos y páginas si es posible]`, prompt)
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
 			return nil, "doc_only", err
@@ -146,30 +166,29 @@ Instrucciones:
 		return ch, "none", nil
 	}
 
-	// Preparar input con bloques de contexto y una instrucción clara de fuente al final
-	fuenteLine := "*(Fuente: PubMed)*"
-	if vecHas && pubHas {
-		fuenteLine = "*(Fuente: Base de conocimientos interna — PDFs: " + joinDocTitles(vdocs) + " + PubMed)*"
-	} else if vecHas {
-		fuenteLine = "*(Fuente: Base de conocimientos interna — PDFs: " + joinDocTitles(vdocs) + ")*"
-	}
-
+	// Preparar input con bloques de contexto estructurados
 	input := fmt.Sprintf(
 		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
 			"Contexto complementario (PubMed):\n%s\n\n"+
 			"Referencias (PubMed ≥2020, procesadas):\n%s\n\n"+
 			"Pregunta del usuario:\n%s\n\n"+
-			"FORMATO Y REGLAS (estrictas):\n"+
-			"- Tono académico: preciso, formal y con profundidad; evita preámbulos y frases coloquiales.\n"+
-			"- Prioriza SIEMPRE el vector store (biblioteca). Si hay conflicto con PubMed, prevalece la biblioteca.\n"+
-			"- Empieza DIRECTAMENTE con la respuesta, sin frases introductorias.\n"+
-			"- Si usas información de la biblioteca, incluye los nombres de los PDF utilizados (p. ej., en 'Fuentes (biblioteca)').\n"+
-			"- Si usas PubMed, añade una sección final '**Referencias (PubMed):**' con entradas completas (Autor/es, Título, Revista, Año), solo de 2020 en adelante.\n"+
-			"- Si usas PubMed, añade una sección final '**Referencias (PubMed):**' con entradas completas (Autor/es, Título, Revista, Año, DOI/PMID), solo de 2020 en adelante.\n"+
-			"- Además, incluye una sección genérica '**Referencias:**' si corresponde (Markdown con viñetas).\n"+
-			"- No repitas las referencias dentro del cuerpo; colócalas únicamente en la sección de referencias.\n"+
-			"- Al final del contenido principal, agrega EXACTAMENTE esta línea de fuente: %s\n",
-		ctxVec, ctxPub, refsBlock, prompt, fuenteLine,
+			"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
+			"Estructúrala así:\n\n"+
+			"## Respuesta académica:\n"+
+			"[Contenido académico preciso y formal sin preámbulos]\n\n"+
+			"## Evidencia usada:\n"+
+			"[Descripción breve de la evidencia utilizada]\n\n"+
+			"## Fuentes:\n"+
+			"[Lista de fuentes con formato específico según origen]\n\n"+
+			"REGLAS ESTRICTAS:\n"+
+			"- Tono académico: preciso, formal y con profundidad\n"+
+			"- PRIORIZA SIEMPRE la biblioteca interna (vector store). Si hay conflicto con PubMed, prevalece la biblioteca\n"+
+			"- Para fuentes de biblioteca: '- NombreDocumento.pdf (pág. X–Y)' si tienes info de páginas\n"+
+			"- Para PubMed: '- Autor et al. Título. Revista Año;Vol(Issue):páginas. DOI/PMID'\n"+
+			"- NO inventes fuentes ni páginas. Si no tienes info específica, indica solo el nombre del documento\n"+
+			"- NO repitas referencias en el cuerpo de la respuesta\n"+
+			"- Sé específico y preciso en las citas\n",
+		ctxVec, ctxPub, refsBlock, prompt,
 	)
 
 	// Usar el asistente configurado y el vector store de libros para mantener grounding y el historial del hilo
@@ -318,8 +337,9 @@ func (h *Handler) Message(c *gin.Context) {
 		return
 	}
 	var req struct {
-		ThreadID string `json:"thread_id"`
-		Prompt   string `json:"prompt"`
+		ThreadID   string `json:"thread_id"`
+		Prompt     string `json:"prompt"`
+		FocusDocID string `json:"focus_doc_id,omitempty"` // ID del PDF específico para limitarse solo a ese documento
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") {
 		log.Printf("[conv][Message][json][error] bind_or_thread_invalid thread=%s err=%v", req.ThreadID, err)
@@ -352,7 +372,7 @@ Reglas estrictas:
 		source = "doc_only"
 	} else {
 		// Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
-		stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt)
+		stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID)
 	}
 	if err != nil {
 		code := classifyErr(err)
@@ -400,6 +420,7 @@ Reglas estrictas:
 func (h *Handler) handleMultipart(c *gin.Context) {
 	prompt := c.PostForm("prompt")
 	threadID := c.PostForm("thread_id")
+	focusDocID := c.PostForm("focus_doc_id") // Nuevo parámetro para limitar a un documento específico
 	if !strings.HasPrefix(threadID, "thread_") {
 		log.Printf("[conv][Message][multipart][error] invalid_thread=%s", threadID)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id inválido"})
@@ -448,7 +469,7 @@ Reglas estrictas:
 			stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 			source = "doc_only"
 		} else {
-			stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt)
+			stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt, focusDocID)
 		}
 		if err != nil {
 			code := classifyErr(err)
@@ -521,7 +542,7 @@ Reglas estrictas:
 			}
 			log.Printf("[conv][Message][multipart][audio.transcribed] chars=%d", len(text))
 		}
-		stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
+		stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "")
 		if err != nil {
 			code := classifyErr(err)
 			log.Printf("[conv][Message][multipart][audio.error] thread=%s code=%s err=%v", threadID, code, err)
@@ -560,7 +581,7 @@ Reglas estrictas:
 		return
 	}
 	// Otros archivos: solo manda prompt (ignora archivo) - usar flujo inteligente
-	stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt)
+	stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "")
 	if err != nil {
 		code := classifyErr(err)
 		log.Printf("[conv][Message][multipart][other.error] thread=%s code=%s err=%v", threadID, code, err)

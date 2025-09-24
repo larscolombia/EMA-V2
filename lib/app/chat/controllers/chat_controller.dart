@@ -49,6 +49,10 @@ class ChatController extends GetxService {
   final isUploadingPdf = false.obs;
   final userScrolling = false.obs;
 
+  // Control para modo focus en PDF específico
+  final focusOnPdfMode = false.obs;
+  String? focusedPdfId;
+
   final userManuallyScrolled = false.obs;
   final autoScrollEnabled = true.obs;
 
@@ -205,6 +209,18 @@ class ChatController extends GetxService {
 
   void attachPdf(PdfAttachment pdf) {
     pendingPdf.value = pdf;
+    // Cuando se adjunta un PDF, activar automáticamente el modo focus
+    focusOnPdfMode.value = true;
+    focusedPdfId = pdf.uid;
+  }
+
+  void toggleFocusOnPdf() {
+    focusOnPdfMode.value = !focusOnPdfMode.value;
+    if (!focusOnPdfMode.value) {
+      focusedPdfId = null;
+    } else if (pendingPdf.value != null) {
+      focusedPdfId = pendingPdf.value!.uid;
+    }
   }
 
   /// Retry the last failed send without duplicating the user bubble.
@@ -445,6 +461,7 @@ class ChatController extends GetxService {
               attach: userMessage.attach,
             ),
             file: currentPdf,
+            focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
             onStream: (token) {
               if (token.startsWith('__STAGE__:')) {
                 final stage = token.split(':').last.trim();
@@ -643,6 +660,7 @@ class ChatController extends GetxService {
             attach: userMessage.attach,
           ),
           file: currentPdf,
+          focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
           onStream: (token) {
             if (token.startsWith('__STAGE__:')) {
               final stage = token.split(':').last.trim();

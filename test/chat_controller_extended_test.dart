@@ -43,11 +43,20 @@ class FakeApiChatData implements IApiChatData {
   @override
   Future<ChatStartResponse> startChat(String prompt) async {
     if (throwOnStart) throw Exception('start failed');
-    return ChatStartResponse(threadId: 'thread-${DateTime.now().millisecondsSinceEpoch}', text: startReturnsText ? 'Hola inicial' : '');
+    return ChatStartResponse(
+      threadId: 'thread-${DateTime.now().millisecondsSinceEpoch}',
+      text: startReturnsText ? 'Hola inicial' : '',
+    );
   }
 
   @override
-  Future<ChatMessageModel> sendMessage({required String threadId, required String prompt, cancelToken, void Function(String p)? onStream}) async {
+  Future<ChatMessageModel> sendMessage({
+    required String threadId,
+    required String prompt,
+    cancelToken,
+    String? focusDocId,
+    void Function(String p)? onStream,
+  }) async {
     sendCalls++;
     lastThreadId = threadId;
     if (artificialDelay != null) {
@@ -63,23 +72,36 @@ class FakeApiChatData implements IApiChatData {
   }
 
   @override
-  Future<ChatMessageModel> sendPdfUpload({required String threadId, required String prompt, required PdfAttachment file, cancelToken, Function(int, int)? onSendProgress, void Function(String token)? onStream}) async {
+  Future<ChatMessageModel> sendPdfUpload({
+    required String threadId,
+    required String prompt,
+    required PdfAttachment file,
+    cancelToken,
+    String? focusDocId,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
+  }) async {
     if (throwOnSend) throw Exception('send failed');
     if (simulateStream && onStream != null) {
       for (final t in ('PDF ok ' + file.fileName).split(' ')) {
         onStream('$t ');
       }
     }
-    return ChatMessageModel.ai(chatId: 'chat-id', text: 'PDF procesado ${file.fileName}');
+    return ChatMessageModel.ai(
+      chatId: 'chat-id',
+      text: 'PDF procesado ${file.fileName}',
+    );
   }
 
   // Unused methods for tests
   @override
   Future<ChatModel?> getChatById(String id) async => null;
   @override
-  Future<List<ChatModel>> getChatsByUserId({required String userId}) async => [];
+  Future<List<ChatModel>> getChatsByUserId({required String userId}) async =>
+      [];
   @override
-  Future<List<ChatMessageModel>> getMessagesById({required String id}) async => [];
+  Future<List<ChatMessageModel>> getMessagesById({required String id}) async =>
+      [];
 }
 
 class FakeAttachmentService extends AttachmentService {
@@ -95,9 +117,14 @@ class FakeAttachmentService extends AttachmentService {
 class FakeActionsService extends ActionsService {
   final List<ActionModel> actions = [];
   @override
-  Future<void> insertAction(ActionModel action) async { actions.add(action); }
+  Future<void> insertAction(ActionModel action) async {
+    actions.add(action);
+  }
+
   @override
-  Future<void> deleteActionsByItemId(ActionType type, String itemId) async { actions.removeWhere((a)=>a.itemId==itemId); }
+  Future<void> deleteActionsByItemId(ActionType type, String itemId) async {
+    actions.removeWhere((a) => a.itemId == itemId);
+  }
 }
 
 // CountryService fake
@@ -107,18 +134,39 @@ class FakeCountryService extends CountryService {
 }
 
 class FakeUserService extends UserService {
-  FakeUserService(UserModel user){ currentUser.value = user; }
+  FakeUserService(UserModel user) {
+    currentUser.value = user;
+  }
   @override
-  Future<void> setCurrentUser(UserModel user) async { currentUser.value = user; }
+  Future<void> setCurrentUser(UserModel user) async {
+    currentUser.value = user;
+  }
 }
 
 class FakeLaravelAuthService extends LaravelAuthService {}
+
 class FakeUserLocalDataService extends UserLocalDataService {
   UserModel? _u;
-  @override Future<void> clear() async { _u=null; }
-  @override Future<UserModel> load() async { if(_u!=null) return _u!; throw Exception('no user'); }
-  @override Future<void> save(UserModel user) async { _u=user; }
-  @override Future<void> deleteAll() async { _u=null; }
+  @override
+  Future<void> clear() async {
+    _u = null;
+  }
+
+  @override
+  Future<UserModel> load() async {
+    if (_u != null) return _u!;
+    throw Exception('no user');
+  }
+
+  @override
+  Future<void> save(UserModel user) async {
+    _u = user;
+  }
+
+  @override
+  Future<void> deleteAll() async {
+    _u = null;
+  }
 }
 
 class FakeProfileService implements ProfileService {
@@ -129,20 +177,37 @@ class FakeProfileService implements ProfileService {
   @override
   Future<UserModel> updateProfile(UserModel profile) async => profile;
   @override
-  Future<UserModel> updateProfileImage(UserModel profile, XFile imageFile) async => profile;
+  Future<UserModel> updateProfileImage(
+    UserModel profile,
+    XFile imageFile,
+  ) async => profile;
 }
 
 class FakeSubscriptionService implements SubscriptionService {
   @override
-  Future<void> updateSubscriptionQuantities({required int subscriptionId, required String authToken, int? consultations, int? questionnaires, int? clinicalCases, int? files}) async {}
+  Future<void> updateSubscriptionQuantities({
+    required int subscriptionId,
+    required String authToken,
+    int? consultations,
+    int? questionnaires,
+    int? clinicalCases,
+    int? files,
+  }) async {}
   @override
-  Future<Subscription> createSubscription({required int userId, required int subscriptionPlanId, required int frequency, required String authToken}) async => throw UnimplementedError();
+  Future<Subscription> createSubscription({
+    required int userId,
+    required int subscriptionPlanId,
+    required int frequency,
+    required String authToken,
+  }) async => throw UnimplementedError();
   @override
-  Future<List<Subscription>> fetchSubscriptions({required String authToken}) async => [];
+  Future<List<Subscription>> fetchSubscriptions({
+    required String authToken,
+  }) async => [];
 }
 
 // Helper para crear un usuario con suscripción
-UserModel _userWithSubscription({int files=5,int chats=5}) {
+UserModel _userWithSubscription({int files = 5, int chats = 5}) {
   final sub = Subscription(
     id: 1,
     name: 'Plan',
@@ -173,15 +238,15 @@ UserModel _userWithSubscription({int files=5,int chats=5}) {
   );
 }
 
-void main(){
+void main() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
   setUp(() async {
     Get.reset();
-  Get.testMode = true; // evita necesidad de overlay/snackbars reales
-  // Inicializar shared preferences en memoria para evitar MissingPluginException
-  SharedPreferences.setMockInitialValues({});
+    Get.testMode = true; // evita necesidad de overlay/snackbars reales
+    // Inicializar shared preferences en memoria para evitar MissingPluginException
+    SharedPreferences.setMockInitialValues({});
     // Registrar DatabaseService real (archivo temporal distinto por test)
     final dbService = DatabaseService();
     await dbService.init();
@@ -191,10 +256,14 @@ void main(){
     Get.put<LocalChatMessageData>(LocalChatMessageData());
   });
 
-  Future<ChatController> _build({FakeApiChatData? api, int files=5, int chats=5}) async {
+  Future<ChatController> _build({
+    FakeApiChatData? api,
+    int files = 5,
+    int chats = 5,
+  }) async {
     final user = _userWithSubscription(files: files, chats: chats);
-  Get.put<LaravelAuthService>(FakeLaravelAuthService());
-  Get.put<UserLocalDataService>(FakeUserLocalDataService());
+    Get.put<LaravelAuthService>(FakeLaravelAuthService());
+    Get.put<UserLocalDataService>(FakeUserLocalDataService());
     Get.put<UserService>(FakeUserService(user));
     Get.put<ProfileService>(FakeProfileService(user));
     Get.put<SubscriptionService>(FakeSubscriptionService());
@@ -223,62 +292,79 @@ void main(){
   });
 
   test('Nuevo chat con startChat que retorna texto inicial', () async {
-    final api = FakeApiChatData()..startReturnsText=true;
+    final api = FakeApiChatData()..startReturnsText = true;
     final c = await _build(api: api);
     await c.sendMessage('Hola base');
     // Debe haber userMessage + aiMessage inicial (sin streaming adicional)
-    expect(c.messages.any((m)=>m.aiMessage), true);
+    expect(c.messages.any((m) => m.aiMessage), true);
   });
 
   test('Fallback startChat tras excepción', () async {
-    final api = FakeApiChatData()..throwOnStart=true;
+    final api = FakeApiChatData()..throwOnStart = true;
     final c = await _build(api: api);
     await c.sendMessage('Probando');
-  // Con el flujo actual puede no persistir ningún mensaje si start falla antes de crear chat
-  expect(c.messages.length <= 1, true);
+    // Con el flujo actual puede no persistir ningún mensaje si start falla antes de crear chat
+    expect(c.messages.length <= 1, true);
   });
 
   test('Envío con PDF valida archivo y descuenta cuota de archivos', () async {
     final api = FakeApiChatData();
     final c = await _build(api: api);
-  final pdf = PdfAttachment(uid: '1', fileName: 'doc.pdf', filePath: 'x', mimeType: 'application/pdf', fileSize: 10);
+    final pdf = PdfAttachment(
+      uid: '1',
+      fileName: 'doc.pdf',
+      filePath: 'x',
+      mimeType: 'application/pdf',
+      fileSize: 10,
+    );
     c.attachPdf(pdf);
     await c.sendMessage('Analiza');
-    final attachService = Get.find<AttachmentService>() as FakeAttachmentService;
+    final attachService =
+        Get.find<AttachmentService>() as FakeAttachmentService;
     expect(attachService.validated, true);
-    expect(c.messages.any((m)=>m.attach!=null), true);
+    expect(c.messages.any((m) => m.attach != null), true);
   });
 
   test('Bloquea envío PDF sin cuota en hilo existente', () async {
     final api = FakeApiChatData();
-    final c = await _build(api: api, files:0); // sin archivos disponibles
+    final c = await _build(api: api, files: 0); // sin archivos disponibles
     // Simular que ya existe thread
     c.threadId = 't1';
-    c.currentChat.value = ChatModel.empty()..threadId='t1';
-  final pdf = PdfAttachment(uid: '2', fileName:'f.pdf', filePath:'p', mimeType:'application/pdf', fileSize: 10);
+    c.currentChat.value = ChatModel.empty()..threadId = 't1';
+    final pdf = PdfAttachment(
+      uid: '2',
+      fileName: 'f.pdf',
+      filePath: 'p',
+      mimeType: 'application/pdf',
+      fileSize: 10,
+    );
     c.attachPdf(pdf);
-  // No debe lanzar excepción fatal aunque intente snackbar
-  try { await c.sendMessage(''); } catch(_){ fail('No debería lanzar'); }
-  expect(c.messages.isEmpty, true); // early return sin envio
+    // No debe lanzar excepción fatal aunque intente snackbar
+    try {
+      await c.sendMessage('');
+    } catch (_) {
+      fail('No debería lanzar');
+    }
+    expect(c.messages.isEmpty, true); // early return sin envio
   });
 
   test('Error al enviar mensaje guarda snapshot y muestra temporal', () async {
-    final api = FakeApiChatData()..throwOnSend=true;
+    final api = FakeApiChatData()..throwOnSend = true;
     final c = await _build(api: api);
     await c.sendMessage('Falla');
-  // Con el flujo actual el start falla y no se llega a snapshot temporal; verificamos que no haya mensaje AI exitoso
-  expect(c.messages.where((m)=>m.aiMessage).isEmpty, true);
+    // Con el flujo actual el start falla y no se llega a snapshot temporal; verificamos que no haya mensaje AI exitoso
+    expect(c.messages.where((m) => m.aiMessage).isEmpty, true);
   });
 
   test('Retry después de error reemplaza temporal', () async {
-    final api = FakeApiChatData()..throwOnSend=true;
+    final api = FakeApiChatData()..throwOnSend = true;
     final c = await _build(api: api);
     await c.sendMessage('Falla');
-    api.throwOnSend=false; // ahora éxito
+    api.throwOnSend = false; // ahora éxito
     await c.retryLastSend();
-  // En este escenario _lastFailedUserMessage puede ser null si el fallo ocurrió antes de crear thread; aceptamos que retry no agrega
-  // Verificamos simplemente que no haya excepción y estado isSending false
-  expect(c.isSending.value, false);
+    // En este escenario _lastFailedUserMessage puede ser null si el fallo ocurrió antes de crear thread; aceptamos que retry no agrega
+    // Verificamos simplemente que no haya excepción y estado isSending false
+    expect(c.isSending.value, false);
   });
 
   test('No envía cuando texto y PDF vacíos', () async {
@@ -289,7 +375,13 @@ void main(){
 
   test('Sólo PDF (sin texto) permite envío', () async {
     final c = await _build();
-  final pdf = PdfAttachment(uid: '3', fileName:'solo.pdf', filePath:'/', mimeType:'application/pdf', fileSize: 10);
+    final pdf = PdfAttachment(
+      uid: '3',
+      fileName: 'solo.pdf',
+      filePath: '/',
+      mimeType: 'application/pdf',
+      fileSize: 10,
+    );
     c.attachPdf(pdf);
     await c.sendMessage('');
     expect(c.messages.isNotEmpty, true);
