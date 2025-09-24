@@ -11,6 +11,7 @@ package conversations_ia
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"mime/multipart"
@@ -1035,7 +1036,26 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 			log.Printf("[conv][buscarVector][simple.no_result] vector=%s response=\"%s\"", vectorID, trimmed)
 		} else {
 			log.Printf("[conv][buscarVector][simple.ok] vector=%s result_len=%d", vectorID, len(s))
-			out = append(out, Documento{Titulo: "Base de conocimiento médico", Contenido: trimmed, Fuente: "vector"})
+
+			// Intentar extraer source_book del JSON incluso en el fallback simple
+			titulo := "Base de conocimiento médico" // Default fallback
+			contenido := trimmed
+
+			// Si la respuesta parece ser JSON, intentar extraer source_book
+			if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "source_book") {
+				var jsonData map[string]interface{}
+				if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
+					if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
+						titulo = strings.TrimSpace(sourceBook)
+						log.Printf("[conv][buscarVector][simple.extracted_source] vector=%s source_book=\"%s\"", vectorID, titulo)
+					}
+					if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
+						contenido = strings.TrimSpace(snippet)
+					}
+				}
+			}
+
+			out = append(out, Documento{Titulo: titulo, Contenido: contenido, Fuente: "vector"})
 		}
 	} else if err != nil {
 		log.Printf("[conv][buscarVector][simple.error] vector=%s err=%v", vectorID, err)
