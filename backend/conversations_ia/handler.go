@@ -101,25 +101,9 @@ Instrucciones:
 		return stream, "focus_doc", nil
 	}
 
-	// Si el hilo tiene documentos adjuntos, forzar modo "doc-only":
-	// usar EXCLUSIVAMENTE el vector store del hilo y prohibir fuentes externas.
-	if hasDocs := h.threadHasDocuments(ctx, threadID); hasDocs {
-		vsID := h.AI.GetVectorStoreID(threadID)
-		// Prompt restrictivo: solo con documentos del hilo
-		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos adjuntos de este hilo.
-
-Pregunta del usuario: %s
-
-Instrucciones:
-- No utilices conocimiento externo ni otras fuentes.
-- Si los documentos no contienen información suficiente para responder, di claramente: "No hay suficiente información en los documentos adjuntos para responder".
-- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuentes: nombres de archivos y páginas si es posible]`, prompt)
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
-		if err != nil {
-			return nil, "doc_only", err
-		}
-		return stream, "doc_only", nil
-	}
+	// REMOVIDO: No forzar modo doc-only automáticamente por tener documentos
+	// Solo activar cuando se especifique focusDocID explícitamente
+	// Esto permite al usuario hacer preguntas generales incluso con PDFs en el thread
 
 	// Smalltalk/Saludo: responder cordialmente sin consultar fuentes
 	if isSmallTalk(prompt) {
@@ -349,31 +333,14 @@ func (h *Handler) Message(c *gin.Context) {
 	start := time.Now()
 	log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d prompt_preview=\"%s\"", req.ThreadID, len(req.Prompt), sanitizePreview(req.Prompt))
 
-	// Si el hilo tiene documentos, forzar respuesta solo con esos documentos; de lo contrario flujo inteligente
+	// Usar siempre el flujo inteligente SmartMessage que maneja focus_doc_id correctamente
 	var (
 		stream <-chan string
 		source string
 		err    error
 	)
-	if h.threadHasDocuments(c.Request.Context(), req.ThreadID) {
-		vsID := h.AI.GetVectorStoreID(req.ThreadID)
-		prompt := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
-
-Pregunta: %s
-
-Reglas estrictas:
-- No agregues conocimiento externo; no inventes.
-- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
-- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
-- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
-- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
-- Añade al final: "Fuente: documentos adjuntos del hilo".`, req.Prompt)
-		stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), req.ThreadID, prompt, vsID)
-		source = "doc_only"
-	} else {
-		// Usar el nuevo flujo inteligente que busca en RAG específico y luego PubMed
-		stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID)
-	}
+	// SmartMessage maneja internamente el focus_doc_id y documentos del thread
+	stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID)
 	if err != nil {
 		code := classifyErr(err)
 		log.Printf("[conv][Message][json][smart.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
@@ -453,24 +420,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			source string
 			err    error
 		)
-		if h.threadHasDocuments(c.Request.Context(), threadID) {
-			vsID := h.AI.GetVectorStoreID(threadID)
-			p := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
-
-Pregunta: %s
-
-Reglas estrictas:
-- No agregues conocimiento externo; no inventes.
-- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
-- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
-- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
-- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
-- Añade al final: "Fuente: documentos adjuntos del hilo".`, prompt)
-			stream, err = h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
-			source = "doc_only"
-		} else {
-			stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt, focusDocID)
-		}
+		// Usar SmartMessage consistentemente para manejar focus_doc_id y lógica de documentos
+		stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt, focusDocID)
 		if err != nil {
 			code := classifyErr(err)
 			log.Printf("[conv][Message][multipart][smart.error] thread=%s code=%s err=%v", threadID, code, err)

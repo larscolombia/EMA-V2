@@ -153,6 +153,9 @@ class ChatController extends GetxService {
     error.value = '';
     threadId = '';
     threadPref.setValue('');
+    // Limpiar estado del focus mode para nuevo chat
+    focusOnPdfMode.value = false;
+    focusedPdfId = null;
   }
 
   Future<void> _loadChatById(String chatId) async {
@@ -221,6 +224,15 @@ class ChatController extends GetxService {
     } else if (pendingPdf.value != null) {
       focusedPdfId = pendingPdf.value!.uid;
     }
+  }
+
+  /// Resetea completamente el estado del chat para conversación completamente nueva
+  void forceNewConversation() {
+    cleanChat();
+    // Forzar nuevo threadId
+    threadId = '';
+    threadPref.setValue('');
+    print('🆕 [ChatController] Forzando nueva conversación - thread limpiado');
   }
 
   /// Retry the last failed send without duplicating the user bubble.
@@ -299,6 +311,13 @@ class ChatController extends GetxService {
       // Check if we're stuck before rejecting
       _checkForStuckState();
       return;
+    }
+
+    // Si no hay PDF actual, desactivar focus mode automáticamente
+    if (currentPdf == null && focusOnPdfMode.value) {
+      print('🔄 [ChatController] Desactivando focus mode - sin PDF');
+      focusOnPdfMode.value = false;
+      focusedPdfId = null;
     }
 
     // Separar texto para UI vs backend desde el inicio
