@@ -233,9 +233,11 @@ INSTRUCCIONES CRÍTICAS:
 			"REGLAS ESTRICTAS:\n"+
 			"- Tono académico: preciso, formal y con profundidad\n"+
 			"- PRIORIZA SIEMPRE la biblioteca interna (vector store). Si hay conflicto con PubMed, prevalece la biblioteca\n"+
-			"- Para fuentes de biblioteca: '- NombreDocumento.pdf (pág. X–Y)' si tienes info de páginas\n"+
+			"- ⚠️ CRÍTICO: En la sección '## Fuentes:', usa EXACTAMENTE el nombre del documento que aparece después de '- ' en el contexto recuperado\n"+
+			"- ❌ PROHIBIDO: NO uses términos genéricos como 'Base de conocimiento médico' - siempre usa el nombre real del archivo/libro\n"+
+			"- ✅ OBLIGATORIO: Extrae y copia el nombre exacto del documento del contexto proporcionado (ej: 'Harrison Principios.pdf', 'Braunwald Tratado.pdf', etc.)\n"+
 			"- Para PubMed: '- Autor et al. Título. Revista Año;Vol(Issue):páginas. DOI/PMID'\n"+
-			"- NO inventes fuentes ni páginas. Si no tienes info específica, indica solo el nombre del documento\n"+
+			"- NO inventes fuentes ni páginas. Si no tienes info específica, indica solo el nombre exacto del documento\n"+
 			"- NO repitas referencias en el cuerpo de la respuesta\n"+
 			"- Sé específico y preciso en las citas\n",
 		ctxVec, ctxPub, refsBlock, prompt,

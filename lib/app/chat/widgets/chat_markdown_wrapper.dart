@@ -65,15 +65,15 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     );
 
     // 3.2. Fix any numbered lists that are still stuck together
-    processed = processed.replaceAll(
+    processed = processed.replaceAllMapped(
       RegExp(r'(\w+\.\s*)(\d+\.\s+)', multiLine: true),
-      r'$1' + '\n\n' + r'$2',
+      (match) => '${match.group(1)}\n\n${match.group(2)}',
     );
 
     // 4. Handle source indicators - clean format
-    processed = processed.replaceAll(
+    processed = processed.replaceAllMapped(
       RegExp(r'\*\(Fuente:\s*([^)]+)\)\*'),
-      '\n\n*Fuente: \$1*\n',
+      (match) => '\n\n*Fuente: ${match.group(1)}*\n',
     );
 
     // 5. Legacy cleanup (for any old content still in cache)
@@ -83,21 +83,41 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAll(RegExp(r'\$2ururo'), 'eururo');
 
     // 6. Clean up any remaining malformed placeholders (legacy support)
-    processed = processed.replaceAll(RegExp(r'\$1[^a-zA-Z]'), ' ');
-    processed = processed.replaceAll(RegExp(r'\$2[^a-zA-Z]'), ' ');
-    processed = processed.replaceAll(RegExp(r'\$1$'), '');
-    processed = processed.replaceAll(RegExp(r'\$2$'), '');
+    // Remove isolated $1 $2 patterns (most common case)
+    processed = processed.replaceAll(RegExp(r'\$1\s+\$2\s*'), '');
+
+    // Remove $1 or $2 at the end of lines or text
+    processed = processed.replaceAll(
+      RegExp(r'\s*\$[12]\s*$', multiLine: true),
+      '',
+    );
+
+    // Remove $1 or $2 followed by non-alphabetic characters (but preserve if part of word)
+    processed = processed.replaceAll(RegExp(r'\$1(?![a-zA-Z])'), '');
+    processed = processed.replaceAll(RegExp(r'\$2(?![a-zA-Z])'), '');
+
+    // Clean up any resulting double spaces
+    processed = processed.replaceAll(RegExp(r'\s{2,}'), ' ');
 
     // 7. Handle malformed PMID references
-    processed = processed.replaceAll(RegExp(r'【PMID:\s*(\d+)】'), '[PMID: \$1]');
+    processed = processed.replaceAllMapped(
+      RegExp(r'【PMID:\s*(\d+)】'),
+      (match) => '[PMID: ${match.group(1)}]',
+    );
     processed = processed.replaceAll(RegExp(r'【PMID:\s*\$1】'), '');
     processed = processed.replaceAll(RegExp(r'\[PMID:\s*\$1\]'), '');
     processed = processed.replaceAll(RegExp(r'PMID:\s*\$1'), '');
 
-    // 8. Ensure proper spacing around headers
-    processed = processed.replaceAll(
+    // 8. Fix missing spaces after ## in headers
+    processed = processed.replaceAll(RegExp(r'##([^\s#])'), '## \$1');
+
+    // 8.1. Also ensure proper line breaks before headers
+    processed = processed.replaceAll(RegExp(r'([^\n])(\n## )'), '\$1\n\n\$2');
+
+    // 8.1. Ensure proper spacing around all headers
+    processed = processed.replaceAllMapped(
       RegExp(r'^(#{1,6})\s*(.+)$', multiLine: true),
-      r'$1 $2',
+      (match) => '${match.group(1)} ${match.group(2)}',
     );
 
     // 9. Clean up excessive whitespace but preserve intentional breaks
@@ -288,54 +308,48 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Custom theme for medical content with purple headers
+    // Custom theme for medical content with white/light colors for dark chat background
     final customTheme = theme.copyWith(
       textTheme: theme.textTheme.copyWith(
         // H1 - Main titles
-        displayLarge: theme.textTheme.displayLarge?.copyWith(
-          color: const Color(0xFF6B46C1), // Purple-600
-          fontSize: 28,
+        displayLarge: widget.style.copyWith(
+          fontSize: 18,
           fontWeight: FontWeight.bold,
           height: 1.3,
         ),
-        // H2 - Section titles (Referencias, etc.)
-        displayMedium: theme.textTheme.displayMedium?.copyWith(
-          color: const Color(0xFF7C3AED), // Purple-500
-          fontSize: 24,
+        // H2 - Section titles (Evidencia usada, Fuentes, etc.)
+        displayMedium: widget.style.copyWith(
+          fontSize: 16,
           fontWeight: FontWeight.bold,
           height: 1.4,
         ),
         // H3 - Subsection titles
-        displaySmall: theme.textTheme.displaySmall?.copyWith(
-          color: const Color(0xFF8B5CF6), // Purple-400
-          fontSize: 20,
+        displaySmall: widget.style.copyWith(
+          fontSize: 15,
           fontWeight: FontWeight.w600,
           height: 1.4,
         ),
         // H4 - Minor titles
-        headlineLarge: theme.textTheme.headlineLarge?.copyWith(
-          color: const Color(0xFFA855F7), // Purple-300
-          fontSize: 18,
+        headlineLarge: widget.style.copyWith(
+          fontSize: 15,
           fontWeight: FontWeight.w600,
           height: 1.4,
         ),
         // H5 - Small titles
-        headlineMedium: theme.textTheme.headlineMedium?.copyWith(
-          color: const Color(0xFFB794F6), // Purple-300 lighter
-          fontSize: 16,
-          fontWeight: FontWeight.w500,
-          height: 1.4,
-        ),
-        // H6 - Minimal titles
-        headlineSmall: theme.textTheme.headlineSmall?.copyWith(
-          color: const Color(0xFFC4B5FD), // Purple-200
+        headlineMedium: widget.style.copyWith(
           fontSize: 14,
           fontWeight: FontWeight.w500,
           height: 1.4,
         ),
-        // Body text
-        bodyLarge: widget.style.copyWith(height: 1.6, fontSize: 16),
-        bodyMedium: widget.style.copyWith(height: 1.6, fontSize: 14),
+        // H6 - Minimal titles
+        headlineSmall: widget.style.copyWith(
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
+          height: 1.4,
+        ),
+        // Body text - use the same style passed from ChatMessageAi
+        bodyLarge: widget.style.copyWith(height: 1.5),
+        bodyMedium: widget.style.copyWith(height: 1.5),
       ),
     );
 
@@ -343,7 +357,7 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     Widget content = Theme(
       data: customTheme,
       child: DefaultTextStyle.merge(
-        style: widget.style.copyWith(height: 1.6),
+        style: widget.style.copyWith(height: 1.5),
         textAlign: TextAlign.justify,
         child: GptMarkdown(_processedText),
       ),

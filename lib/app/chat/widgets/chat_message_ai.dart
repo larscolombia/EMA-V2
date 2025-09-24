@@ -73,9 +73,15 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   }
 
   String _getMainContent(String text) {
+    if (text.trim().isEmpty) return text;
+
+    String content = text;
+
+    // El ChatMarkdownWrapper ya maneja la limpieza de placeholders
+
     // Remover las secciones de fuentes para mostrar solo el contenido principal
     final sourcesRegex = RegExp(r'\n## Fuentes:\s*\n.*', dotAll: true);
-    String content = text.replaceAll(sourcesRegex, '');
+    content = content.replaceAll(sourcesRegex, '');
 
     // También remover patrones de fuente simples al final
     final altSourceRegex = RegExp(
