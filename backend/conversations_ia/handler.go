@@ -142,8 +142,20 @@ Instrucciones:
 	// Flujo híbrido: consultar vector y PubMed, fusionar, y pasar contexto al modelo
 	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s reason=general_question", threadID, targetVectorID)
 
-	vdocs := h.buscarVector(ctx, targetVectorID, prompt)
-	pdocs := h.buscarPubMed(ctx, prompt)
+	// Crear timeout específico para las búsquedas para evitar que toda la request se cuelgue
+	searchCtx, cancel := context.WithTimeout(ctx, 45*time.Second) // Dejar 15s para el streaming
+	defer cancel()
+
+	searchStart := time.Now()
+	vdocs := h.buscarVector(searchCtx, targetVectorID, prompt)
+	vectorTime := time.Since(searchStart)
+
+	pubmedStart := time.Now()
+	pdocs := h.buscarPubMed(searchCtx, prompt)
+	pubmedTime := time.Since(pubmedStart)
+
+	log.Printf("[conv][SmartMessage][search.timing] thread=%s vector_ms=%d pubmed_ms=%d total_ms=%d",
+		threadID, vectorTime.Milliseconds(), pubmedTime.Milliseconds(), time.Since(searchStart).Milliseconds())
 
 	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
@@ -166,13 +178,30 @@ Instrucciones:
 	pubHas := strings.TrimSpace(ctxPub) != ""
 
 	if !vecHas && !pubHas {
-		// Fallback claro cuando no hay contexto de ninguna fuente
-		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s", threadID)
-		fallback := "No se encontró información relevante para responder."
-		ch := make(chan string, 1)
-		ch <- fallback + "\n\n*(Fuente: Búsqueda sin resultados)*"
-		close(ch)
-		return ch, "none", nil
+		// Si las búsquedas fallaron (por timeout u otro error), dar respuesta con conocimiento básico del asistente
+		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s - using basic assistant knowledge", threadID)
+
+		// En lugar de decir "no se encontró información", usar el asistente con conocimiento básico
+		basicPrompt := fmt.Sprintf(`Responde esta pregunta médica usando tu conocimiento base:
+
+%s
+
+Instrucciones:
+- Proporciona una respuesta académica y profesional
+- Incluye información básica y fundamental sobre el tema
+- Si es apropiado, menciona que se puede consultar literatura médica especializada para más detalles
+- Estructura: [Respuesta académica] + [Nota sobre fuentes adicionales]`, prompt)
+
+		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, basicPrompt)
+		if err != nil {
+			// Solo si todo falla, entonces dar el mensaje de error
+			fallback := "No se pudo obtener información en este momento. Por favor, intenta nuevamente."
+			ch := make(chan string, 1)
+			ch <- fallback + "\n\n*(Error temporal en el servicio)*"
+			close(ch)
+			return ch, "none", nil
+		}
+		return stream, "basic", nil
 	}
 
 	// Preparar input con bloques de contexto estructurados
@@ -199,6 +228,16 @@ Instrucciones:
 			"- Sé específico y preciso en las citas\n",
 		ctxVec, ctxPub, refsBlock, prompt,
 	)
+
+	// Verificar si el contexto fue cancelado antes de hacer la llamada final
+	if err := ctx.Err(); err != nil {
+		log.Printf("[conv][SmartMessage][context.cancelled] thread=%s err=%v", threadID, err)
+		fallback := "La consulta tardó demasiado tiempo. Por favor, intenta con una pregunta más específica."
+		ch := make(chan string, 1)
+		ch <- fallback + "\n\n*(Tiempo de espera agotado)*"
+		close(ch)
+		return ch, "timeout", nil
+	}
 
 	// Usar el asistente configurado y el vector store de libros para mantener grounding y el historial del hilo
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, input, targetVectorID)
@@ -910,16 +949,27 @@ func sanitizePreview(s string) string {
 // buscarVector consulta el vector store canónico y devuelve documentos relevantes
 func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Documento {
 	out := []Documento{}
+
+	// Primero intentar con metadatos (más lento pero mejor info)
 	if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
 		if res, err := clientWithMeta.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult && strings.TrimSpace(res.Content) != "" {
+			log.Printf("[conv][buscarVector][metadata.ok] vector=%s query_len=%d result_len=%d", vectorID, len(query), len(res.Content))
 			out = append(out, Documento{Titulo: res.Source, Contenido: strings.TrimSpace(res.Content), Fuente: "vector"})
 			return out
+		} else if err != nil {
+			log.Printf("[conv][buscarVector][metadata.error] vector=%s err=%v", vectorID, err)
+			// Si falla por timeout o error, continuar con búsqueda simple
 		}
 	}
+
+	// Fallback a búsqueda simple (más rápido)
 	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
-		// Título legacy esperado por tests cuando no hay metadatos
+		log.Printf("[conv][buscarVector][simple.ok] vector=%s result_len=%d", vectorID, len(s))
 		out = append(out, Documento{Titulo: "Base de conocimiento médico", Contenido: strings.TrimSpace(s), Fuente: "vector"})
+	} else if err != nil {
+		log.Printf("[conv][buscarVector][simple.error] vector=%s err=%v", vectorID, err)
 	}
+
 	return out
 }
 
@@ -928,6 +978,7 @@ func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 	out := []Documento{}
 	raw, err := h.AI.SearchPubMed(ctx, query)
 	if err != nil {
+		log.Printf("[conv][buscarPubMed][error] query_len=%d err=%v", len(query), err)
 		return out
 	}
 	raw = strings.TrimSpace(raw)
