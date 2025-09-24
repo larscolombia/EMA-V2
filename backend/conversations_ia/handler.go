@@ -159,6 +159,23 @@ Instrucciones:
 
 	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
+	// DEBUG: Verificar qué está pasando con los contextos
+	log.Printf("[conv][SmartMessage][debug] thread=%s vdocs_len=%d pdocs_len=%d ctxVec_len=%d ctxPub_len=%d",
+		threadID, len(vdocs), len(pdocs), len(ctxVec), len(ctxPub))
+	if len(vdocs) > 0 {
+		for i, d := range vdocs {
+			log.Printf("[conv][SmartMessage][debug.vdoc.%d] titulo=\"%s\" contenido_len=%d fuente=%s",
+				i, d.Titulo, len(d.Contenido), d.Fuente)
+		}
+	}
+	if ctxVec != "" {
+		preview := ctxVec
+		if len(ctxVec) > 200 {
+			preview = ctxVec[:200]
+		}
+		log.Printf("[conv][SmartMessage][debug.ctxVec] first_200_chars=\"%s\"", preview)
+	}
+
 	// Reunir referencias de PubMed ya extraídas y filtradas (>=2020)
 	var pubRefs []string
 	seenRef := map[string]bool{}
@@ -177,7 +194,19 @@ Instrucciones:
 	vecHas := strings.TrimSpace(ctxVec) != ""
 	pubHas := strings.TrimSpace(ctxPub) != ""
 
-	if !vecHas && !pubHas {
+	// Verificar si tenemos documentos con source_book válido (incluso sin snippet completo)
+	hasValidSourceBook := false
+	for _, d := range vdocs {
+		if strings.TrimSpace(d.Titulo) != "" {
+			hasValidSourceBook = true
+			break
+		}
+	}
+
+	log.Printf("[conv][SmartMessage][decision] thread=%s vecHas=%v pubHas=%v hasValidSourceBook=%v",
+		threadID, vecHas, pubHas, hasValidSourceBook)
+
+	if !vecHas && !pubHas && !hasValidSourceBook {
 		// Si las búsquedas fallaron (por timeout u otro error), dar respuesta con conocimiento básico del asistente
 		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s - using basic assistant knowledge", threadID)
 
@@ -216,7 +245,22 @@ INSTRUCCIONES CRÍTICAS:
 			return ch, "none", nil
 		}
 		return stream, "basic", nil
-	} // Preparar input con bloques de contexto estructurados
+	}
+
+	// Si tenemos documentos con source_book pero ctxVec está vacío, crear contexto básico
+	if !vecHas && hasValidSourceBook {
+		var b strings.Builder
+		for _, d := range vdocs {
+			if strings.TrimSpace(d.Titulo) != "" {
+				fmt.Fprintf(&b, "- %s:\nDocumento médico disponible\n\n", d.Titulo)
+			}
+		}
+		ctxVec = strings.TrimSpace(b.String())
+		vecHas = true
+		log.Printf("[conv][SmartMessage][force_context] thread=%s generated_ctxVec_len=%d", threadID, len(ctxVec))
+	}
+
+	// Preparar input con bloques de contexto estructurados
 	input := fmt.Sprintf(
 		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
 			"Contexto complementario (PubMed):\n%s\n\n"+
