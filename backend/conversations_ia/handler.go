@@ -181,16 +181,30 @@ Instrucciones:
 		// Si las búsquedas fallaron (por timeout u otro error), dar respuesta con conocimiento básico del asistente
 		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s - using basic assistant knowledge", threadID)
 
-		// En lugar de decir "no se encontró información", usar el asistente con conocimiento básico
+		// En lugar de decir "no se encontró información", usar el asistente con conocimiento básico PERO con formato de fuentes
 		basicPrompt := fmt.Sprintf(`Responde esta pregunta médica usando tu conocimiento base:
 
 %s
 
-Instrucciones:
-- Proporciona una respuesta académica y profesional
-- Incluye información básica y fundamental sobre el tema
-- Si es apropiado, menciona que se puede consultar literatura médica especializada para más detalles
-- Estructura: [Respuesta académica] + [Nota sobre fuentes adicionales]`, prompt)
+FORMATO DE RESPUESTA OBLIGATORIO (CUMPLIR EXACTAMENTE):
+Estructúrala así:
+
+## Respuesta académica:
+[Contenido académico preciso y formal sobre el tema]
+
+## Evidencia usada:
+Conocimiento médico base integrado - fuentes externas temporalmente no disponibles
+
+## Fuentes:
+- Conocimiento médico general integrado
+- Bases de datos médicas estándar
+- Para información más específica, se recomienda consultar literatura médica especializada
+
+INSTRUCCIONES CRÍTICAS:
+- SIEMPRE incluir las tres secciones exactamente como se muestra
+- La sección "## Fuentes:" debe aparecer al final
+- Proporciona información médica académica precisa
+- No omitas ninguna de las secciones requeridas`, prompt)
 
 		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, basicPrompt)
 		if err != nil {
@@ -202,9 +216,7 @@ Instrucciones:
 			return ch, "none", nil
 		}
 		return stream, "basic", nil
-	}
-
-	// Preparar input con bloques de contexto estructurados
+	} // Preparar input con bloques de contexto estructurados
 	input := fmt.Sprintf(
 		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
 			"Contexto complementario (PubMed):\n%s\n\n"+
@@ -953,9 +965,16 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 	// Primero intentar con metadatos (más lento pero mejor info)
 	if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
 		if res, err := clientWithMeta.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult && strings.TrimSpace(res.Content) != "" {
-			log.Printf("[conv][buscarVector][metadata.ok] vector=%s query_len=%d result_len=%d", vectorID, len(query), len(res.Content))
-			out = append(out, Documento{Titulo: res.Source, Contenido: strings.TrimSpace(res.Content), Fuente: "vector"})
-			return out
+			// Filtrar respuestas que indican "no encontrado"
+			content := strings.TrimSpace(res.Content)
+			if content == "NO_FOUND" || content == "NOT_FOUND" || strings.Contains(strings.ToLower(content), "no se encontró") {
+				log.Printf("[conv][buscarVector][metadata.no_result] vector=%s response=\"%s\"", vectorID, content)
+				// Continuar con búsqueda simple
+			} else {
+				log.Printf("[conv][buscarVector][metadata.ok] vector=%s query_len=%d result_len=%d", vectorID, len(query), len(res.Content))
+				out = append(out, Documento{Titulo: res.Source, Contenido: content, Fuente: "vector"})
+				return out
+			}
 		} else if err != nil {
 			log.Printf("[conv][buscarVector][metadata.error] vector=%s err=%v", vectorID, err)
 			// Si falla por timeout o error, continuar con búsqueda simple
@@ -964,8 +983,14 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 
 	// Fallback a búsqueda simple (más rápido)
 	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
-		log.Printf("[conv][buscarVector][simple.ok] vector=%s result_len=%d", vectorID, len(s))
-		out = append(out, Documento{Titulo: "Base de conocimiento médico", Contenido: strings.TrimSpace(s), Fuente: "vector"})
+		// Filtrar respuestas que indican "no encontrado"
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "NO_FOUND" || trimmed == "NOT_FOUND" || strings.Contains(strings.ToLower(trimmed), "no se encontró") {
+			log.Printf("[conv][buscarVector][simple.no_result] vector=%s response=\"%s\"", vectorID, trimmed)
+		} else {
+			log.Printf("[conv][buscarVector][simple.ok] vector=%s result_len=%d", vectorID, len(s))
+			out = append(out, Documento{Titulo: "Base de conocimiento médico", Contenido: trimmed, Fuente: "vector"})
+		}
 	} else if err != nil {
 		log.Printf("[conv][buscarVector][simple.error] vector=%s err=%v", vectorID, err)
 	}

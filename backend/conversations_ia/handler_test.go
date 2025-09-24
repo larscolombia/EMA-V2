@@ -23,7 +23,23 @@ func (m *MockAIClient) GetAssistantID() string                           { retur
 func (m *MockAIClient) CreateThread(ctx context.Context) (string, error) { return "thread_test", nil }
 func (m *MockAIClient) StreamAssistantMessage(ctx context.Context, threadID, prompt string) (<-chan string, error) {
 	ch := make(chan string, 1)
-	ch <- "test response"
+
+	// Si el prompt es para modo básico (contiene "FORMATO DE RESPUESTA OBLIGATORIO"), devolver formato estructurado
+	if strings.Contains(prompt, "FORMATO DE RESPUESTA OBLIGATORIO") {
+		response := `## Respuesta académica:
+Información médica básica sobre el tema consultado.
+
+## Evidencia usada:
+Conocimiento médico base integrado - fuentes externas temporalmente no disponibles
+
+## Fuentes:
+- Conocimiento médico general integrado
+- Bases de datos médicas estándar`
+		ch <- response
+	} else {
+		ch <- "test response"
+	}
+
 	close(ch)
 	return ch, nil
 }
@@ -129,10 +145,10 @@ func TestSmartMessage_RAGResults(t *testing.T) {
 		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
 	}
 
-	// Verificar que el stream contiene la información esperada
+	// Verificar que el stream contiene la información esperada con formato estructurado
 	response := <-stream
-	if !strings.Contains(response, "Referencias:") {
-		t.Errorf("La respuesta debe incluir sección de Referencias")
+	if !strings.Contains(response, "## Fuentes:") {
+		t.Errorf("La respuesta debe incluir sección '## Fuentes:'")
 	}
 }
 
@@ -179,14 +195,15 @@ func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	if source != "none" {
-		t.Errorf("Se esperaba source 'none', se obtuvo: %s", source)
+	// Ahora usa modo 'basic' en lugar de 'none' cuando no hay resultados
+	if source != "basic" {
+		t.Errorf("Se esperaba source 'basic', se obtuvo: %s", source)
 	}
 
-	// Verificar que el stream contiene mensaje de no encontrado
+	// Verificar que el stream contiene formato estructurado del modo básico
 	response := <-stream
-	if !strings.Contains(response, "No se encontró información relevante") {
-		t.Errorf("La respuesta debe indicar que no se encontró información")
+	if !strings.Contains(response, "## Respuesta académica:") {
+		t.Errorf("La respuesta debe contener formato estructurado del modo básico")
 	}
 }
 
@@ -277,5 +294,42 @@ func TestSmartMessage_ThreadWithDocsDocumentQuestion(t *testing.T) {
 	response := <-stream
 	if !strings.Contains(response, "documento") {
 		t.Errorf("La respuesta debe mencionar los documentos")
+	}
+}
+
+func TestSmartMessage_BasicModeWithSources(t *testing.T) {
+	// Test: modo básico debe incluir sección de fuentes
+	mockClient := &MockAIClient{
+		AssistantID:      "asst_test",
+		ShouldFailRAG:    true, // Falla búsqueda en vector
+		ShouldFailPubMed: true, // Falla búsqueda en PubMed
+	}
+
+	handler := &Handler{AI: mockClient}
+
+	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "Que es un tumor de frantz?", "")
+
+	if err != nil {
+		t.Errorf("No se esperaba error: %v", err)
+	}
+
+	// DEBE usar modo basic cuando ambas búsquedas fallan
+	if source != "basic" {
+		t.Errorf("Se esperaba source 'basic' cuando fallan las búsquedas, se obtuvo: %s", source)
+	}
+
+	response := <-stream
+
+	// Verificar que incluye las secciones estructuradas esperadas
+	if !strings.Contains(response, "## Respuesta académica:") {
+		t.Errorf("La respuesta debe incluir sección '## Respuesta académica:'")
+	}
+
+	if !strings.Contains(response, "## Evidencia usada:") {
+		t.Errorf("La respuesta debe incluir sección '## Evidencia usada:'")
+	}
+
+	if !strings.Contains(response, "## Fuentes:") {
+		t.Errorf("La respuesta debe incluir sección '## Fuentes:'")
 	}
 }
