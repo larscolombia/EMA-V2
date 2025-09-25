@@ -26,11 +26,7 @@ func (m *MockAIClient) StreamAssistantMessage(ctx context.Context, threadID, pro
 
 	// Si el prompt es para modo básico (contiene "FORMATO DE RESPUESTA OBLIGATORIO"), devolver formato estructurado
 	if strings.Contains(prompt, "FORMATO DE RESPUESTA OBLIGATORIO") {
-		response := `## Respuesta académica:
-Información médica básica sobre el tema consultado.
-
-## Evidencia usada:
-Conocimiento médico base integrado - fuentes externas temporalmente no disponibles
+		response := `Información médica básica sobre el tema consultado.
 
 ## Fuentes:
 - Conocimiento médico general integrado
@@ -202,8 +198,8 @@ func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
 
 	// Verificar que el stream contiene formato estructurado del modo básico
 	response := <-stream
-	if !strings.Contains(response, "## Respuesta académica:") {
-		t.Errorf("La respuesta debe contener formato estructurado del modo básico")
+	if !strings.Contains(response, "## Fuentes:") {
+		t.Errorf("La respuesta debe contener formato estructurado del modo básico con sección de fuentes")
 	}
 }
 
@@ -321,12 +317,13 @@ func TestSmartMessage_BasicModeWithSources(t *testing.T) {
 	response := <-stream
 
 	// Verificar que incluye las secciones estructuradas esperadas
-	if !strings.Contains(response, "## Respuesta académica:") {
-		t.Errorf("La respuesta debe incluir sección '## Respuesta académica:'")
+	// Verificar que NO contiene las secciones eliminadas
+	if strings.Contains(response, "## Respuesta académica:") {
+		t.Errorf("La respuesta NO debe incluir sección '## Respuesta académica:' - debe comenzar directamente con contenido")
 	}
 
-	if !strings.Contains(response, "## Evidencia usada:") {
-		t.Errorf("La respuesta debe incluir sección '## Evidencia usada:'")
+	if strings.Contains(response, "## Evidencia usada:") {
+		t.Errorf("La respuesta NO debe incluir sección '## Evidencia usada:' - esta sección fue eliminada")
 	}
 
 	if !strings.Contains(response, "## Fuentes:") {

@@ -217,13 +217,9 @@ Instrucciones:
 %s
 
 FORMATO DE RESPUESTA OBLIGATORIO (CUMPLIR EXACTAMENTE):
-Estructúrala así:
+Estructura la respuesta así:
 
-## Respuesta académica:
-[Contenido académico preciso y formal sobre el tema]
-
-## Evidencia usada:
-Conocimiento médico base integrado - fuentes externas temporalmente no disponibles
+[Contenido académico preciso y formal sobre el tema - SIN encabezado inicial]
 
 ## Fuentes:
 - Conocimiento médico general integrado
@@ -231,10 +227,11 @@ Conocimiento médico base integrado - fuentes externas temporalmente no disponib
 - Para información más específica, se recomienda consultar literatura médica especializada
 
 INSTRUCCIONES CRÍTICAS:
-- SIEMPRE incluir las tres secciones exactamente como se muestra
+- NO incluir "## Respuesta académica:" al inicio
+- NO incluir sección "## Evidencia usada:"
 - La sección "## Fuentes:" debe aparecer al final
-- Proporciona información médica académica precisa
-- No omitas ninguna de las secciones requeridas`, prompt)
+- Proporciona información médica académica precisa directamente
+- Comenzar directamente con el contenido médico`, prompt)
 
 		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, basicPrompt)
 		if err != nil {
@@ -268,20 +265,20 @@ INSTRUCCIONES CRÍTICAS:
 			"Referencias (PubMed ≥2020, procesadas):\n%s\n\n"+
 			"Pregunta del usuario:\n%s\n\n"+
 			"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
-			"Estructúrala así:\n\n"+
-			"## Respuesta académica:\n"+
-			"[Contenido académico preciso y formal sin preámbulos]\n\n"+
-			"## Evidencia usada:\n"+
-			"[Descripción breve de la evidencia utilizada]\n\n"+
+			"Estructura la respuesta así:\n\n"+
+			"[Contenido académico preciso y formal SIN encabezado inicial - responder directamente]\n\n"+
 			"## Fuentes:\n"+
-			"[Lista de fuentes con formato específico según origen]\n\n"+
+			"[Lista de fuentes específicas según origen de la información]\n\n"+
 			"REGLAS ESTRICTAS:\n"+
+			"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
+			"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
 			"- Tono académico: preciso, formal y con profundidad\n"+
 			"- PRIORIZA SIEMPRE la biblioteca interna (vector store). Si hay conflicto con PubMed, prevalece la biblioteca\n"+
 			"- ⚠️ CRÍTICO: En la sección '## Fuentes:', usa EXACTAMENTE el nombre del documento que aparece después de '- ' en el contexto recuperado\n"+
 			"- ❌ PROHIBIDO: NO uses términos genéricos como 'Base de conocimiento médico' - siempre usa el nombre real del archivo/libro\n"+
 			"- ✅ OBLIGATORIO: Extrae y copia el nombre exacto del documento del contexto proporcionado (ej: 'Harrison Principios.pdf', 'Braunwald Tratado.pdf', etc.)\n"+
-			"- Para PubMed: '- Autor et al. Título. Revista Año;Vol(Issue):páginas. DOI/PMID'\n"+
+			"- Para información de PubMed: indica claramente '- [Información de PubMed - literatura médica reciente]'\n"+
+			"- Si combinas ambas fuentes: lista específicamente cada documento y luego PubMed por separado\n"+
 			"- NO inventes fuentes ni páginas. Si no tienes info específica, indica solo el nombre exacto del documento\n"+
 			"- NO repitas referencias en el cuerpo de la respuesta\n"+
 			"- Sé específico y preciso en las citas\n",
@@ -1049,24 +1046,37 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 			log.Printf("[conv][buscarVector][simple.debug] vector=%s trimmed_preview=\"%s\" starts_with_brace=%v contains_source_book=%v",
 				vectorID, preview, strings.HasPrefix(trimmed, "{"), strings.Contains(trimmed, "source_book"))
 
-			// Si la respuesta parece ser JSON, intentar extraer source_book
-			if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, "source_book") {
+			// Si la respuesta contiene source_book, intentar extraer información estructurada
+			if strings.Contains(trimmed, "source_book") {
 				log.Printf("[conv][buscarVector][simple.attempting_json] vector=%s", vectorID)
+
+				// Intentar como objeto JSON directo
 				var jsonData map[string]interface{}
 				if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
 					log.Printf("[conv][buscarVector][simple.json_parsed] vector=%s json_len=%d", vectorID, len(jsonData))
 					if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
 						titulo = strings.TrimSpace(sourceBook)
 						log.Printf("[conv][buscarVector][simple.extracted_source] vector=%s source_book=\"%s\"", vectorID, titulo)
-					} else {
-						log.Printf("[conv][buscarVector][simple.source_book_missing] vector=%s source_book_exists=%v source_book_type=%T",
-							vectorID, ok, jsonData["source_book"])
 					}
 					if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
 						contenido = strings.TrimSpace(snippet)
 					}
 				} else {
-					log.Printf("[conv][buscarVector][simple.json_parse_error] vector=%s err=%v", vectorID, err)
+					// Intentar como array JSON (primer elemento)
+					var jsonArray []map[string]interface{}
+					if err := json.Unmarshal([]byte(trimmed), &jsonArray); err == nil && len(jsonArray) > 0 {
+						firstObj := jsonArray[0]
+						log.Printf("[conv][buscarVector][simple.json_array_parsed] vector=%s array_len=%d", vectorID, len(jsonArray))
+						if sourceBook, ok := firstObj["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
+							titulo = strings.TrimSpace(sourceBook)
+							log.Printf("[conv][buscarVector][simple.extracted_source_array] vector=%s source_book=\"%s\"", vectorID, titulo)
+						}
+						if snippet, ok := firstObj["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
+							contenido = strings.TrimSpace(snippet)
+						}
+					} else {
+						log.Printf("[conv][buscarVector][simple.json_parse_error] vector=%s err=%v", vectorID, err)
+					}
 				}
 			}
 
