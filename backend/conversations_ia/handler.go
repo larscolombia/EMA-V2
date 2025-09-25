@@ -211,27 +211,33 @@ Instrucciones:
 		// Si las búsquedas fallaron (por timeout u otro error), dar respuesta con conocimiento básico del asistente
 		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s - using basic assistant knowledge", threadID)
 
-		// En lugar de decir "no se encontró información", usar el asistente con conocimiento básico PERO con formato de fuentes
-		basicPrompt := fmt.Sprintf(`Responde esta pregunta médica usando tu conocimiento base:
+		// Mejorar preguntas vagas o conversacionales
+		prompt = improveConversationalPrompt(prompt) // En lugar de decir "no se encontró información", usar el asistente con conocimiento básico PERO con formato de fuentes
+		basicPrompt := fmt.Sprintf(`Responde esta pregunta médica usando tu conocimiento base médico especializado:
 
 %s
 
-FORMATO DE RESPUESTA OBLIGATORIO (CUMPLIR EXACTAMENTE):
+CONTEXTO DE LA CONVERSACIÓN:
+Si la pregunta hace referencia a temas anteriores o es vaga ('eso', 'profundizar', 'más sobre'), interpreta según el contexto médico más relevante y proporciona información valiosa sobre el tema médico más probable.
+
+FORMATO DE RESPUESTA OBLIGATORIO:
 Estructura la respuesta así:
 
-[Contenido académico preciso y formal sobre el tema - SIN encabezado inicial]
+[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados con información médica sustancial]
 
 ## Fuentes:
-- Conocimiento médico general integrado
-- Bases de datos médicas estándar
-- Para información más específica, se recomienda consultar literatura médica especializada
+- Conocimiento médico especializado integrado
+- Literatura médica estándar en medicina interna y especialidades
+- Para información más específica, se recomienda consultar fuentes primarias especializadas
 
 INSTRUCCIONES CRÍTICAS:
-- NO incluir "## Respuesta académica:" al inicio
-- NO incluir sección "## Evidencia usada:"
-- La sección "## Fuentes:" debe aparecer al final
-- Proporciona información médica académica precisa directamente
-- Comenzar directamente con el contenido médico`, prompt)
+- NO incluir "## Respuesta académica:" al inicio - comenzar directamente con contenido médico
+- NO incluir sección "## Evidencia usada:" 
+- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento
+- MÍNIMO 200-300 palabras de contenido académico sustancial
+- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos cuando sea relevante
+- Tono académico: preciso, formal y con profundidad científica
+- Mantén continuidad conversacional cuando sea apropiado`, prompt)
 
 		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, basicPrompt)
 		if err != nil {
@@ -258,30 +264,45 @@ INSTRUCCIONES CRÍTICAS:
 		log.Printf("[conv][SmartMessage][force_context] thread=%s generated_ctxVec_len=%d", threadID, len(ctxVec))
 	}
 
-	// Preparar input con bloques de contexto estructurados
+	// Preparar input con bloques de contexto estructurados y conversacional
 	input := fmt.Sprintf(
-		"Contexto recuperado (priorizar vector store):\n%s\n\n"+
+		"CONTEXTO DE LA CONVERSACIÓN:\n"+
+			"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica. "+
+			"Si la pregunta hace referencia a temas anteriores ('eso', 'profundizar', 'más sobre', etc.), usa el contexto médico relevante disponible.\n\n"+
+
+			"Contexto recuperado (priorizar vector store):\n%s\n\n"+
 			"Contexto complementario (PubMed):\n%s\n\n"+
 			"Referencias (PubMed ≥2020, procesadas):\n%s\n\n"+
 			"Pregunta del usuario:\n%s\n\n"+
+
 			"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
 			"Estructura la respuesta así:\n\n"+
-			"[Contenido académico preciso y formal SIN encabezado inicial - responder directamente]\n\n"+
+			"[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados]\n\n"+
 			"## Fuentes:\n"+
-			"[Lista de fuentes específicas según origen de la información]\n\n"+
-			"REGLAS ESTRICTAS:\n"+
+			"[Fuentes en formato APA según origen]\n\n"+
+
+			"REGLAS ESTRICTAS DE CONTENIDO:\n"+
 			"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
 			"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
-			"- Tono académico: preciso, formal y con profundidad\n"+
+			"- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento cuando sea relevante\n"+
+			"- MÍNIMO 200-300 palabras de contenido académico sustancial\n"+
+			"- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos\n"+
+			"- Tono académico: preciso, formal y con profundidad científica\n\n"+
+
+			"REGLAS ESTRICTAS DE FUENTES:\n"+
 			"- PRIORIZA SIEMPRE la biblioteca interna (vector store). Si hay conflicto con PubMed, prevalece la biblioteca\n"+
 			"- ⚠️ CRÍTICO: En la sección '## Fuentes:', usa EXACTAMENTE el nombre del documento que aparece después de '- ' en el contexto recuperado\n"+
 			"- ❌ PROHIBIDO: NO uses términos genéricos como 'Base de conocimiento médico' - siempre usa el nombre real del archivo/libro\n"+
-			"- ✅ OBLIGATORIO: Extrae y copia el nombre exacto del documento del contexto proporcionado (ej: 'Harrison Principios.pdf', 'Braunwald Tratado.pdf', etc.)\n"+
-			"- Para información de PubMed: indica claramente '- [Información de PubMed - literatura médica reciente]'\n"+
+			"- ✅ OBLIGATORIO: Extrae y copia el nombre exacto del documento del contexto proporcionado\n"+
+			"- FORMATO APA para libros médicos: 'Autor. (Año). Título del libro. Editorial.' Si no tienes todos los datos, usa: 'Título del documento médico'\n"+
+			"- Para PubMed: 'Información de literatura médica reciente (PubMed)'\n"+
 			"- Si combinas ambas fuentes: lista específicamente cada documento y luego PubMed por separado\n"+
-			"- NO inventes fuentes ni páginas. Si no tienes info específica, indica solo el nombre exacto del documento\n"+
-			"- NO repitas referencias en el cuerpo de la respuesta\n"+
-			"- Sé específico y preciso en las citas\n",
+			"- NO inventes autores, años o datos que no tengas\n\n"+
+
+			"REGLAS DE CONVERSACIÓN:\n"+
+			"- Si la pregunta es vaga o hace referencia a conceptos anteriores ('eso', 'profundizar'), interpreta según el contexto médico disponible\n"+
+			"- Mantén continuidad temática cuando sea apropiado\n"+
+			"- Siempre proporciona información médica valiosa incluso si la pregunta es ambigua\n",
 		ctxVec, ctxPub, refsBlock, prompt,
 	)
 
@@ -1043,26 +1064,19 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 			if len(trimmed) > 100 {
 				preview = trimmed[:100]
 			}
-			log.Printf("[conv][buscarVector][simple.debug] vector=%s trimmed_preview=\"%s\" starts_with_brace=%v contains_source_book=%v",
-				vectorID, preview, strings.HasPrefix(trimmed, "{"), strings.Contains(trimmed, "source_book"))
+			startsWithArray := strings.HasPrefix(trimmed, "[")
+			startsWithObject := strings.HasPrefix(trimmed, "{")
+			containsSourceBook := strings.Contains(trimmed, "source_book")
+
+			log.Printf("[conv][buscarVector][simple.debug] vector=%s trimmed_preview=\"%s\" starts_with_array=%v starts_with_object=%v contains_source_book=%v",
+				vectorID, preview, startsWithArray, startsWithObject, containsSourceBook)
 
 			// Si la respuesta contiene source_book, intentar extraer información estructurada
-			if strings.Contains(trimmed, "source_book") {
+			if containsSourceBook && (startsWithArray || startsWithObject || strings.Contains(trimmed, "\"source_book\"")) {
 				log.Printf("[conv][buscarVector][simple.attempting_json] vector=%s", vectorID)
 
-				// Intentar como objeto JSON directo
-				var jsonData map[string]interface{}
-				if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
-					log.Printf("[conv][buscarVector][simple.json_parsed] vector=%s json_len=%d", vectorID, len(jsonData))
-					if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
-						titulo = strings.TrimSpace(sourceBook)
-						log.Printf("[conv][buscarVector][simple.extracted_source] vector=%s source_book=\"%s\"", vectorID, titulo)
-					}
-					if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
-						contenido = strings.TrimSpace(snippet)
-					}
-				} else {
-					// Intentar como array JSON (primer elemento)
+				// Intentar como array JSON primero (más común en los logs)
+				if startsWithArray {
 					var jsonArray []map[string]interface{}
 					if err := json.Unmarshal([]byte(trimmed), &jsonArray); err == nil && len(jsonArray) > 0 {
 						firstObj := jsonArray[0]
@@ -1075,7 +1089,22 @@ func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Do
 							contenido = strings.TrimSpace(snippet)
 						}
 					} else {
-						log.Printf("[conv][buscarVector][simple.json_parse_error] vector=%s err=%v", vectorID, err)
+						log.Printf("[conv][buscarVector][simple.json_array_parse_error] vector=%s err=%v", vectorID, err)
+					}
+				} else {
+					// Intentar como objeto JSON directo
+					var jsonData map[string]interface{}
+					if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
+						log.Printf("[conv][buscarVector][simple.json_object_parsed] vector=%s json_len=%d", vectorID, len(jsonData))
+						if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
+							titulo = strings.TrimSpace(sourceBook)
+							log.Printf("[conv][buscarVector][simple.extracted_source_object] vector=%s source_book=\"%s\"", vectorID, titulo)
+						}
+						if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
+							contenido = strings.TrimSpace(snippet)
+						}
+					} else {
+						log.Printf("[conv][buscarVector][simple.json_object_parse_error] vector=%s err=%v", vectorID, err)
 					}
 				}
 			}
@@ -1536,4 +1565,27 @@ func filterRefsByYear(refs []string, minYear int) []string {
 		}
 	}
 	return out
+}
+
+// improveConversationalPrompt mejora preguntas vagas o conversacionales
+func improveConversationalPrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	lowerPrompt := strings.ToLower(prompt)
+
+	// Manejar preguntas conversacionales comunes
+	if strings.Contains(lowerPrompt, "profundizar") || strings.Contains(lowerPrompt, "más sobre") ||
+		strings.Contains(lowerPrompt, "ampliar") || strings.Contains(lowerPrompt, "explicar más") {
+		// Si es muy vago, asumir que quiere profundizar en el último tema médico contextual
+		if len(prompt) < 50 && (strings.Contains(lowerPrompt, "eso") || strings.Contains(lowerPrompt, "esto")) {
+			return "Proporciona información médica académica detallada y profunda sobre el último tema mencionado, incluyendo fisiopatología, manifestaciones clínicas, diagnóstico y tratamiento"
+		}
+	}
+
+	// Si es muy corto y vago, expandir
+	if len(prompt) < 20 && (strings.Contains(lowerPrompt, "eso") || strings.Contains(lowerPrompt, "esto") ||
+		strings.Contains(lowerPrompt, "más") || strings.Contains(lowerPrompt, "continúa")) {
+		return "Proporciona información médica académica detallada sobre el tema médico en contexto, con enfoque clínico y científico"
+	}
+
+	return prompt
 }

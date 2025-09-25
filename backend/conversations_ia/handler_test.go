@@ -26,11 +26,13 @@ func (m *MockAIClient) StreamAssistantMessage(ctx context.Context, threadID, pro
 
 	// Si el prompt es para modo básico (contiene "FORMATO DE RESPUESTA OBLIGATORIO"), devolver formato estructurado
 	if strings.Contains(prompt, "FORMATO DE RESPUESTA OBLIGATORIO") {
-		response := `Información médica básica sobre el tema consultado.
+		response := `Las bradiarritmias constituyen un grupo heterogéneo de trastornos del ritmo cardíaco caracterizados por una frecuencia cardíaca inferior a 60 latidos por minuto. Estos trastornos pueden originarse por alteraciones en la formación del impulso eléctrico en el nodo sinusal, defectos en la conducción auriculoventricular, o una combinación de ambos mecanismos fisiopatológicos.
+
+La fisiopatología de las bradiarritmias involucra disfunción del sistema de conducción eléctrica cardíaca, que puede ser congénita o adquirida. Las manifestaciones clínicas varían desde pacientes completamente asintomáticos hasta presentaciones con fatiga, mareos, síncope, e incluso insuficiencia cardíaca en casos severos. El diagnóstico se basa principalmente en el electrocardiograma y la correlación clínica, mientras que el tratamiento puede requerir desde observación hasta implante de marcapasos permanente según la severidad y repercusión hemodinámica.
 
 ## Fuentes:
-- Conocimiento médico general integrado
-- Bases de datos médicas estándar`
+- Conocimiento médico especializado integrado
+- Literatura médica estándar en medicina interna y especialidades`
 		ch <- response
 	} else {
 		ch <- "test response"
