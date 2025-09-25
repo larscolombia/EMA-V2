@@ -11,7 +11,6 @@ package conversations_ia
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"mime/multipart"
@@ -290,16 +289,17 @@ INSTRUCCIONES CRÍTICAS:
 			"- Tono académico: preciso, formal y con profundidad científica\n\n"+
 
 			"REGLAS ESTRICTAS DE FUENTES:\n"+
-			"- PRIORIZA SIEMPRE la biblioteca interna (vector store). Si hay conflicto con PubMed, prevalece la biblioteca\n"+
-			"- ⚠️ CRÍTICO: Antes de responder, BUSCA y EXTRAE los nombres específicos de los documentos de tu knowledge base\n"+
-			"- ❌ PROHIBIDO: NO uses términos genéricos como 'Base de conocimiento médico'\n"+
-			"- ✅ OBLIGATORIO: Usa los nombres reales de archivos/libros que consultaste (ej: 'Medical Management of the Pregnant Patient', 'Harrison's Principles', etc.)\n"+
-			"- BUSCA ACTIVAMENTE: Cuando consultes información, identifica qué documento específico contiene esa información\n"+
-			"- FORMATO APA: Si tienes el nombre del libro/archivo, úsalo. Si no tienes autor/año completos: 'Nombre del Documento Médico'\n"+
-			"- Para PubMed: 'Información de literatura médica reciente (PubMed)'\n"+
-			"- Si combinas ambas fuentes: lista específicamente cada documento y luego PubMed por separado\n"+
-			"- EJEMPLO CORRECTO: 'Medical Management of the Pregnant Patient' NO 'Base de conocimiento médico'\n"+
-			"- NO inventes autores, años o datos que no tengas\n\n"+
+			"- ⚠️ CRÍTICO: Al consultar tu vector store, recibes JSON con 'source_book' - USA ESE NOMBRE EXACTO en las fuentes\n"+
+			"- ✅ OBLIGATORIO: Si el JSON interno contiene 'Medical_Management_of_the_Pregnant_Patie.pdf', usa 'Medical Management of the Pregnant Patient'\n"+
+			"- ❌ PROHIBIDO ABSOLUTO: NO uses 'Base de conocimiento médico' - SIEMPRE usa el nombre específico del archivo\n"+
+			"- PROCESO: 1) Consulta vector store → 2) Extrae nombre de 'source_book' del JSON → 3) Incluye ese nombre en ## Fuentes\n"+
+			"- EJEMPLOS DE CONVERSIÓN:\n"+
+			"  • 'Medical_Management_of_the_Pregnant_Patie.pdf' → 'Medical Management of the Pregnant Patient'\n"+
+			"  • 'Harrisons_Principles_Internal_Medicine.pdf' → 'Harrison's Principles of Internal Medicine'\n"+
+			"  • 'Williams_Obstetrics.pdf' → 'Williams Obstetrics'\n"+
+			"- Para PubMed: 'Literatura médica reciente (PubMed)'\n"+
+			"- FORMATO: Si tienes nombre completo del libro, úsalo sin inventar autor/año\n"+
+			"- Si no encuentras nombre específico del documento, entonces y solo entonces usa 'Fuentes médicas especializadas'\n\n"+
 
 			"REGLAS DE CONVERSACIÓN:\n"+
 			"- Si la pregunta es vaga o hace referencia a conceptos anteriores ('eso', 'profundizar'), interpreta según el contexto médico disponible\n"+
@@ -1067,117 +1067,45 @@ func extractSourcesFromAssistantResponse(response string) *SourceExtracted {
 	return result
 }
 
-// buscarVector consulta el vector store canónico y devuelve documentos relevantes
-func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Documento {
+// buscarVectorConFuentes usa fallback directo por ahora - el problema de fuentes se resolverá a nivel de respuesta
+func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query string) []Documento {
+	log.Printf("[conv][buscarVectorConFuentes][using_fallback_method] vector=%s", vectorID)
+	return h.buscarVectorFallback(ctx, vectorID, query)
+}
+
+// buscarVectorFallback usa el método original cuando falla la búsqueda con fuentes
+func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query string) []Documento {
+	log.Printf("[conv][buscarVectorFallback][start] vector=%s", vectorID)
+
 	out := []Documento{}
-
-	// Primero intentar con metadatos (más lento pero mejor info)
-	if clientWithMeta, ok := h.AI.(AIClientWithMetadata); ok {
-		if res, err := clientWithMeta.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult && strings.TrimSpace(res.Content) != "" {
-			// Filtrar respuestas que indican "no encontrado"
-			content := strings.TrimSpace(res.Content)
-			if content == "NO_FOUND" || content == "NOT_FOUND" || strings.Contains(strings.ToLower(content), "no se encontró") {
-				log.Printf("[conv][buscarVector][metadata.no_result] vector=%s response=\"%s\"", vectorID, content)
-				// Continuar con búsqueda simple
-			} else {
-				log.Printf("[conv][buscarVector][metadata.ok] vector=%s query_len=%d result_len=%d", vectorID, len(query), len(res.Content))
-
-				// Intentar extraer fuentes de la respuesta de metadatos también
-				sources := extractSourcesFromAssistantResponse(content)
-				titulo := res.Source
-				if sources.HasSources && len(sources.SourceBooks) > 0 {
-					titulo = sources.SourceBooks[0] // Usar la primera fuente encontrada
-				}
-
-				out = append(out, Documento{Titulo: titulo, Contenido: content, Fuente: "vector"})
-				return out
-			}
-		} else if err != nil {
-			log.Printf("[conv][buscarVector][metadata.error] vector=%s err=%v", vectorID, err)
-			// Si falla por timeout o error, continuar con búsqueda simple
-		}
-	}
-
-	// Fallback a búsqueda simple (más rápido)
 	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
-		// Filtrar respuestas que indican "no encontrado"
 		trimmed := strings.TrimSpace(s)
-		if trimmed == "NO_FOUND" || trimmed == "NOT_FOUND" || strings.Contains(strings.ToLower(trimmed), "no se encontró") {
-			log.Printf("[conv][buscarVector][simple.no_result] vector=%s response=\"%s\"", vectorID, trimmed)
-		} else {
-			log.Printf("[conv][buscarVector][simple.ok] vector=%s result_len=%d", vectorID, len(s))
-
-			// Intentar extraer source_book del JSON incluso en el fallback simple
-			titulo := "Base de conocimiento médico" // Default fallback
-			contenido := trimmed
-
-			// DEBUG: Analizar el contenido de la respuesta
-			preview := trimmed
-			if len(trimmed) > 100 {
-				preview = trimmed[:100]
-			}
-			startsWithArray := strings.HasPrefix(trimmed, "[")
-			startsWithObject := strings.HasPrefix(trimmed, "{")
-			containsSourceBook := strings.Contains(trimmed, "source_book")
-
-			log.Printf("[conv][buscarVector][simple.debug] vector=%s trimmed_preview=\"%s\" starts_with_array=%v starts_with_object=%v contains_source_book=%v",
-				vectorID, preview, startsWithArray, startsWithObject, containsSourceBook)
-
-			// Usar la nueva función de extracción de fuentes
-			sources := extractSourcesFromAssistantResponse(trimmed)
-			if sources.HasSources && len(sources.SourceBooks) > 0 {
-				titulo = sources.SourceBooks[0]
-				log.Printf("[conv][buscarVector][simple.extracted_source_new] vector=%s source_book=\"%s\"", vectorID, titulo)
-			} else {
-				// Fallback al método anterior si no se encuentra con regex
-				if containsSourceBook && (startsWithArray || startsWithObject || strings.Contains(trimmed, "\"source_book\"")) {
-					log.Printf("[conv][buscarVector][simple.attempting_json] vector=%s", vectorID)
-
-					// Intentar como array JSON primero (más común en los logs)
-					if startsWithArray {
-						var jsonArray []map[string]interface{}
-						if err := json.Unmarshal([]byte(trimmed), &jsonArray); err == nil && len(jsonArray) > 0 {
-							firstObj := jsonArray[0]
-							log.Printf("[conv][buscarVector][simple.json_array_parsed] vector=%s array_len=%d", vectorID, len(jsonArray))
-							if sourceBook, ok := firstObj["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
-								titulo = strings.TrimSpace(sourceBook)
-								log.Printf("[conv][buscarVector][simple.extracted_source_array] vector=%s source_book=\"%s\"", vectorID, titulo)
-							}
-							if snippet, ok := firstObj["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
-								contenido = strings.TrimSpace(snippet)
-							}
-						} else {
-							log.Printf("[conv][buscarVector][simple.json_array_parse_error] vector=%s err=%v", vectorID, err)
-						}
-					} else {
-						// Intentar como objeto JSON directo
-						var jsonData map[string]interface{}
-						if err := json.Unmarshal([]byte(trimmed), &jsonData); err == nil {
-							log.Printf("[conv][buscarVector][simple.json_object_parsed] vector=%s json_len=%d", vectorID, len(jsonData))
-							if sourceBook, ok := jsonData["source_book"].(string); ok && strings.TrimSpace(sourceBook) != "" {
-								titulo = strings.TrimSpace(sourceBook)
-								log.Printf("[conv][buscarVector][simple.extracted_source_object] vector=%s source_book=\"%s\"", vectorID, titulo)
-							}
-							if snippet, ok := jsonData["snippet"].(string); ok && strings.TrimSpace(snippet) != "" {
-								contenido = strings.TrimSpace(snippet)
-							}
-						} else {
-							log.Printf("[conv][buscarVector][simple.json_object_parse_error] vector=%s err=%v", vectorID, err)
-						}
-					}
-				}
-			}
-
-			out = append(out, Documento{Titulo: titulo, Contenido: contenido, Fuente: "vector"})
+		if trimmed != "NO_FOUND" && trimmed != "NOT_FOUND" && !strings.Contains(strings.ToLower(trimmed), "no se encontró") {
+			log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d", vectorID, len(s))
+			out = append(out, Documento{
+				Titulo:    "Base de conocimiento médico",
+				Contenido: trimmed,
+				Fuente:    "vector",
+			})
 		}
 	} else if err != nil {
-		log.Printf("[conv][buscarVector][simple.error] vector=%s err=%v", vectorID, err)
+		log.Printf("[conv][buscarVectorFallback][error] vector=%s err=%v", vectorID, err)
 	}
-
 	return out
 }
 
-// buscarPubMed consulta PubMed y normaliza el contenido para evitar ruido en el prompt
+// buscarVector mantiene compatibilidad - ahora usa buscarVectorConFuentes
+func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Documento {
+	return h.buscarVectorConFuentes(ctx, vectorID, query)
+}
+
+// truncatePreview helper para logs
+func truncatePreview(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
+} // buscarPubMed consulta PubMed y normaliza el contenido para evitar ruido en el prompt
 func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 	out := []Documento{}
 	raw, err := h.AI.SearchPubMed(ctx, query)
