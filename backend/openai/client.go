@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -1192,6 +1193,183 @@ type VectorSearchResult struct {
 	Section   string `json:"section,omitempty"` // Sección/capítulo si es posible
 }
 
+// quickVectorSearch intenta recuperar fragmentos usando el endpoint directo de vector stores (más liviano que crear runs).
+func (c *Client) quickVectorSearch(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
+	if c.key == "" || strings.TrimSpace(vectorStoreID) == "" {
+		return nil, errors.New("vector store search not configured")
+	}
+	payload := map[string]any{"query": query}
+	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("vector search failed: %s", string(b))
+	}
+	var data struct {
+		Data []struct {
+			FileID   string          `json:"file_id"`
+			Metadata map[string]any  `json:"metadata"`
+			Content  json.RawMessage `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	if len(data.Data) == 0 {
+		return &VectorSearchResult{VectorID: vectorStoreID, HasResult: false}, nil
+	}
+	entry := data.Data[0]
+	snippet := extractSnippetFromContent(entry.Content)
+	if isLikelyNoDataResponse(snippet) {
+		snippet = ""
+	}
+	result := &VectorSearchResult{VectorID: vectorStoreID, Content: snippet}
+	if entry.FileID != "" {
+		if name, err := c.getFileName(ctx, entry.FileID); err == nil {
+			result.Source = friendlyDocName(name)
+		}
+	}
+	if result.Source == "" && len(entry.Metadata) > 0 {
+		if raw, ok := entry.Metadata["source"].(string); ok {
+			result.Source = friendlyDocName(raw)
+		}
+		if section, ok := entry.Metadata["section"].(string); ok {
+			result.Section = strings.TrimSpace(section)
+		}
+		if result.Section == "" {
+			if page, ok := entry.Metadata["page_label"].(string); ok {
+				result.Section = strings.TrimSpace(page)
+			}
+		}
+		if result.Section == "" {
+			if pageNum, ok := entry.Metadata["page"].(float64); ok {
+				result.Section = fmt.Sprintf("Página %d", int(pageNum))
+			}
+		}
+	}
+	if result.Source != "" || result.Content != "" || strings.TrimSpace(result.Section) != "" {
+		result.HasResult = true
+	}
+	return result, nil
+}
+
+func extractSnippetFromContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var items []any
+	if err := json.Unmarshal(raw, &items); err == nil {
+		for _, item := range items {
+			switch v := item.(type) {
+			case map[string]any:
+				if txt := grabStringField(v, "text"); txt != "" {
+					return txt
+				}
+				if txt := grabStringField(v, "value"); txt != "" {
+					return txt
+				}
+			case string:
+				if s := strings.TrimSpace(v); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return strings.TrimSpace(single)
+	}
+	return ""
+}
+
+func grabStringField(m map[string]any, key string) string {
+	if raw, ok := m[key]; ok {
+		switch val := raw.(type) {
+		case string:
+			return strings.TrimSpace(val)
+		case map[string]any:
+			if inner, ok := val["value"].(string); ok {
+				return strings.TrimSpace(inner)
+			}
+			if inner, ok := val["text"].(string); ok {
+				return strings.TrimSpace(inner)
+			}
+		}
+	}
+	return ""
+}
+
+var docTitleSmallWords = map[string]struct{}{
+	"de": {}, "del": {}, "la": {}, "el": {}, "los": {}, "las": {}, "y": {}, "en": {}, "of": {}, "the": {}, "a": {}, "an": {}, "para": {}, "con": {}, "sobre": {}, "por": {}, "un": {}, "una": {}, "al": {}, "da": {}, "dos": {}, "vs": {}, "vs.": {},
+}
+
+var docNameOverrides = map[string]string{
+	"medical_management_of_the_pregnant_patie":   "Medical Management of the Pregnant Patient",
+	"medical_management_of_the_pregnant_patient": "Medical Management of the Pregnant Patient",
+}
+
+func canonicalDocKey(raw string) string {
+	base := strings.TrimSpace(strings.ToLower(raw))
+	if base == "" {
+		return ""
+	}
+	for _, ext := range []string{".pdf", ".docx", ".doc", ".txt"} {
+		if strings.HasSuffix(base, ext) {
+			base = strings.TrimSuffix(base, ext)
+		}
+	}
+	base = strings.ReplaceAll(base, "-", "_")
+	base = strings.ReplaceAll(base, " ", "_")
+	for strings.Contains(base, "__") {
+		base = strings.ReplaceAll(base, "__", "_")
+	}
+	return base
+}
+
+func friendlyDocName(raw string) string {
+	clean := strings.TrimSpace(raw)
+	if clean == "" {
+		return "Documento médico"
+	}
+	key := canonicalDocKey(clean)
+	if name, ok := docNameOverrides[key]; ok {
+		return name
+	}
+	name := clean
+	if idx := strings.LastIndex(name, "."); idx > -1 {
+		name = name[:idx]
+	}
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "Documento médico"
+	}
+	words := strings.Fields(name)
+	if len(words) == 0 {
+		return "Documento médico"
+	}
+	for i, w := range words {
+		lw := strings.ToLower(w)
+		if i > 0 {
+			if _, ok := docTitleSmallWords[lw]; ok {
+				words[i] = lw
+				continue
+			}
+		}
+		runes := []rune(lw)
+		if len(runes) == 0 {
+			continue
+		}
+		runes[0] = unicode.ToUpper(runes[0])
+		words[i] = string(runes)
+	}
+	return strings.Join(words, " ")
+}
+
 // SearchInVectorStore busca información específica en un vector store dado y devuelve metadatos
 func (c *Client) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {
 	result, err := c.SearchInVectorStoreWithMetadata(ctx, vectorStoreID, query)
@@ -1210,11 +1388,27 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 		return nil, errors.New("assistants not configured")
 	}
 
+	// Intento rápido: usar el endpoint directo para evitar runs lentos.
+	if quick, err := c.quickVectorSearch(ctx, vectorStoreID, query); err == nil {
+		if quick.HasResult {
+			return quick, nil
+		}
+		// Si el endpoint respondió pero sin resultados, devolvemos eso sin escalar a instrucciones caras.
+		if !quick.HasResult {
+			return quick, nil
+		}
+	} else {
+		log.Printf("[vector][quick_search][error] %v", err)
+	}
+
 	// Crear un thread temporal para la búsqueda
 	threadID, err := c.CreateThread(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary thread: %v", err)
 	}
+	defer func() {
+		_ = c.DeleteThreadArtifacts(ctx, threadID)
+	}()
 
 	// Obtener información de los archivos en el vector store para generar metadatos
 	files, err := c.listVectorStoreFilesWithNames(ctx, vectorStoreID)
@@ -1243,13 +1437,10 @@ Documentos disponibles: %s
 		return nil, fmt.Errorf("vector store search failed: %v", err)
 	}
 
-	// Limpiar el thread temporal
-	_ = c.DeleteThreadArtifacts(ctx, threadID)
-
 	result := &VectorSearchResult{VectorID: vectorStoreID, HasResult: false}
 
-	up := strings.ToUpper(strings.TrimSpace(text))
-	if up == "" || strings.Contains(up, "NO_FOUND") {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.Contains(strings.ToUpper(trimmed), "NO_FOUND") || isLikelyNoDataResponse(trimmed) {
 		return result, nil
 	}
 
@@ -1259,27 +1450,33 @@ Documentos disponibles: %s
 		Section    string `json:"section"`
 		Snippet    string `json:"snippet"`
 	}
-	js := strings.TrimSpace(text)
+	js := trimmed
 	if strings.HasPrefix(js, "{") && strings.HasSuffix(js, "}") && json.Unmarshal([]byte(js), &tmp) == nil {
 		// Rellenar con lo recibido
-		result.Source = strings.TrimSpace(tmp.SourceBook)
+		rawSource := strings.TrimSpace(tmp.SourceBook)
+		if rawSource != "" {
+			result.Source = friendlyDocName(rawSource)
+		}
 		result.Section = strings.TrimSpace(tmp.Section)
 		result.Content = strings.TrimSpace(tmp.Snippet)
 		result.HasResult = result.Source != "" || result.Content != ""
 		// Fallback de título si viene vacío: usar primer filename
 		if result.Source == "" && len(files) > 0 {
-			result.Source = files[0]
+			result.Source = friendlyDocName(files[0])
 		}
 		return result, nil
 	}
 
 	// Fallback: usar texto libre como snippet y primer filename como fuente
-	fallbackSource := "Base de conocimiento médico"
+	fallbackSource := "Documento médico"
 	if len(files) > 0 {
-		fallbackSource = files[0]
+		fallbackSource = friendlyDocName(files[0])
 	}
 	result.Source = fallbackSource
-	result.Content = strings.TrimSpace(text)
+	if isLikelyNoDataResponse(trimmed) {
+		return result, nil
+	}
+	result.Content = trimmed
 	result.HasResult = result.Content != ""
 	return result, nil
 }
@@ -1309,10 +1506,16 @@ func (c *Client) listVectorStoreFilesWithNames(ctx context.Context, vectorStoreI
 	}
 
 	names := make([]string, 0)
+	seen := map[string]struct{}{}
 	for _, file := range data.Data {
 		// Obtener detalles del archivo para el nombre
 		if fileName, err := c.getFileName(ctx, file.ID); err == nil && fileName != "" {
-			names = append(names, fileName)
+			friendly := friendlyDocName(fileName)
+			if _, ok := seen[friendly]; ok {
+				continue
+			}
+			seen[friendly] = struct{}{}
+			names = append(names, friendly)
 		}
 	}
 
@@ -1358,15 +1561,30 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 		return "", fmt.Errorf("failed to create temporary thread: %v", err)
 	}
 
-	pubmedPrompt := fmt.Sprintf(`Busca información médica sobre: "%s" en PubMed (https://pubmed.ncbi.nlm.nih.gov/)
+	pubmedPrompt := fmt.Sprintf(`Realiza una búsqueda en PubMed (https://pubmed.ncbi.nlm.nih.gov/) sobre: "%s".
 
-IMPORTANTE:
-- Busca SOLO en PubMed oficial
-- Incluye PMIDs cuando estén disponibles
-- Prioriza estudios recientes y de alta calidad
-- Si no encuentras información relevante, responde: "NO_PUBMED_FOUND"
-- Incluye citas bibliográficas específicas
-- Mantén rigor científico
+FORMATO DE RESPUESTA OBLIGATORIO:
+{
+  "summary": "Síntesis clínica en 2-3 frases (máximo 80 palabras)",
+  "studies": [
+    {
+      "title": "Título exacto del estudio",
+      "pmid": "PMID numérico",
+      "year": 2024,
+      "journal": "Nombre de la revista",
+      "key_points": ["Hallazgo clave 1", "Hallazgo clave 2"]
+    }
+  ]
+}
+
+REGLAS:
+- Usa SOLO resultados reales de PubMed.
+- Incluye máximo 4 estudios, priorizando publicaciones desde 2018 (ideal ≥2020).
+- key_points debe contener frases breves (≤25 palabras) con hallazgos clínicos concretos.
+- year debe ser numérico; si no está disponible, usa el mejor estimado.
+- journal es opcional pero útil cuando esté presente.
+- Si no hay evidencia relevante, responde exactamente: NO_PUBMED_FOUND
+- No agregues texto fuera del JSON válido.
 `, query)
 
 	text, err := c.runAndWait(ctx, threadID, pubmedPrompt, "")
@@ -1423,4 +1641,30 @@ func sanitizeBody(s string) string {
 		return s[:400] + "..."
 	}
 	return s
+}
+
+func isLikelyNoDataResponse(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return true
+	}
+	keywords := []string{
+		"no encontré información",
+		"no encontre informacion",
+		"no se encontró información",
+		"no se encontro informacion",
+		"no hay información relevante",
+		"no hay informacion relevante",
+		"no se encontraron coincidencias",
+		"no se encontraron resultados",
+		"sin información disponible",
+		"sin informacion disponible",
+		"no hay contenido disponible",
+	}
+	for _, k := range keywords {
+		if strings.Contains(t, k) {
+			return true
+		}
+	}
+	return false
 }

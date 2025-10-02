@@ -11,6 +11,7 @@ package conversations_ia
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"mime/multipart"
@@ -55,6 +56,7 @@ type VectorSearchResult struct {
 	Source    string `json:"source"`     // Título del documento o nombre del archivo
 	VectorID  string `json:"vector_id"`  // ID del vector store
 	HasResult bool   `json:"has_result"` // Indica si se encontró información relevante
+	Section   string `json:"section,omitempty"`
 }
 
 // AIClientWithMetadata extiende AIClient con capacidades de metadatos
@@ -94,7 +96,11 @@ Instrucciones:
 - Cita el nombre del archivo específico si está disponible.
 - Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuente: Nombre del documento]`, focusDocID, prompt)
 
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, h.AI.GetVectorStoreID(threadID))
+		vsID, err := h.ensureVectorStoreID(ctx, threadID)
+		if err != nil {
+			return nil, "focus_doc", err
+		}
+		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
 			return nil, "focus_doc", err
 		}
@@ -108,7 +114,10 @@ Instrucciones:
 	log.Printf("[conv][SmartMessage][routing] thread=%s has_docs=%v refers_to_doc=%v prompt_preview=\"%s\"", threadID, hasDocs, refersToDoc, sanitizePreview(prompt))
 
 	if hasDocs && refersToDoc {
-		vsID := h.AI.GetVectorStoreID(threadID)
+		vsID, err := h.ensureVectorStoreID(ctx, threadID)
+		if err != nil {
+			return nil, "doc_only", err
+		}
 		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=question_refers_to_doc", threadID, vsID)
 
 		// Prompt restrictivo: solo con documentos del hilo
@@ -297,7 +306,8 @@ INSTRUCCIONES CRÍTICAS:
 			"  • 'Medical_Management_of_the_Pregnant_Patie.pdf' → 'Medical Management of the Pregnant Patient'\n"+
 			"  • 'Harrisons_Principles_Internal_Medicine.pdf' → 'Harrison's Principles of Internal Medicine'\n"+
 			"  • 'Williams_Obstetrics.pdf' → 'Williams Obstetrics'\n"+
-			"- Para PubMed: 'Literatura médica reciente (PubMed)'\n"+
+			"- Para estudios de PubMed usa el formato: '<Título del estudio> (PMID: #######, Año)' tomando los datos del bloque 'Referencias'\n"+
+			"- Si el año no está disponible, omítelo pero mantén el PMID\n"+
 			"- FORMATO: Si tienes nombre completo del libro, úsalo sin inventar autor/año\n"+
 			"- Si no encuentras nombre específico del documento, entonces y solo entonces usa 'Fuentes médicas especializadas'\n\n"+
 
@@ -896,6 +906,16 @@ func sanitizeFilename(name string) string {
 	return cleaned
 }
 
+func (h *Handler) ensureVectorStoreID(ctx context.Context, threadID string) (string, error) {
+	if strings.TrimSpace(threadID) == "" {
+		return "", fmt.Errorf("thread_id vacío")
+	}
+	if vsID := strings.TrimSpace(h.AI.GetVectorStoreID(threadID)); vsID != "" {
+		return vsID, nil
+	}
+	return h.AI.EnsureVectorStore(ctx, threadID)
+}
+
 // threadHasDocuments determina si el hilo tiene archivos en su vector store (para activar modo doc-only)
 func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool {
 	if strings.TrimSpace(threadID) == "" {
@@ -1069,7 +1089,28 @@ func extractSourcesFromAssistantResponse(response string) *SourceExtracted {
 
 // buscarVectorConFuentes usa fallback directo por ahora - el problema de fuentes se resolverá a nivel de respuesta
 func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query string) []Documento {
-	log.Printf("[conv][buscarVectorConFuentes][using_fallback_method] vector=%s", vectorID)
+	if metaClient, ok := h.AI.(AIClientWithMetadata); ok && strings.TrimSpace(vectorID) != "" {
+		res, err := metaClient.SearchInVectorStoreWithMetadata(ctx, vectorID, query)
+		if err != nil {
+			log.Printf("[conv][buscarVectorConFuentes][metadata_error] vector=%s err=%v", vectorID, err)
+		} else if res != nil && res.HasResult {
+			title := strings.TrimSpace(res.Source)
+			if title == "" {
+				title = "Documento médico"
+			}
+			content := strings.TrimSpace(res.Content)
+			if content == "" && strings.TrimSpace(res.Section) != "" {
+				content = fmt.Sprintf("Sección relevante: %s", strings.TrimSpace(res.Section))
+			}
+			return []Documento{{
+				Titulo:    title,
+				Contenido: content,
+				Fuente:    "vector",
+			}}
+		}
+		log.Printf("[conv][buscarVectorConFuentes][metadata_empty] vector=%s", vectorID)
+	}
+	log.Printf("[conv][buscarVectorConFuentes][fallback] vector=%s", vectorID)
 	return h.buscarVectorFallback(ctx, vectorID, query)
 }
 
@@ -1080,14 +1121,16 @@ func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query stri
 	out := []Documento{}
 	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
 		trimmed := strings.TrimSpace(s)
-		if trimmed != "NO_FOUND" && trimmed != "NOT_FOUND" && !strings.Contains(strings.ToLower(trimmed), "no se encontró") {
-			log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d", vectorID, len(s))
-			out = append(out, Documento{
-				Titulo:    "Base de conocimiento médico",
-				Contenido: trimmed,
-				Fuente:    "vector",
-			})
+		if isLikelyNoDataResponse(trimmed) {
+			log.Printf("[conv][buscarVectorFallback][skip_no_data] vector=%s msg=%s", vectorID, sanitizePreview(trimmed))
+			return out
 		}
+		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d", vectorID, len(s))
+		out = append(out, Documento{
+			Titulo:    "",
+			Contenido: trimmed,
+			Fuente:    "vector",
+		})
 	} else if err != nil {
 		log.Printf("[conv][buscarVectorFallback][error] vector=%s err=%v", vectorID, err)
 	}
@@ -1117,7 +1160,93 @@ func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 	if raw == "" {
 		return out
 	}
+	if isLikelyNoDataResponse(raw) {
+		log.Printf("[conv][buscarPubMed][skip_error] message=%s", sanitizePreview(raw))
+		return out
+	}
+
+	// Intentar parsear respuesta estructurada en JSON
+	type pubmedStudy struct {
+		Title     string   `json:"title"`
+		PMID      string   `json:"pmid"`
+		Year      int      `json:"year"`
+		Journal   string   `json:"journal"`
+		KeyPoints []string `json:"key_points"`
+		Summary   string   `json:"summary"`
+	}
+	type pubmedPayload struct {
+		Summary string        `json:"summary"`
+		Studies []pubmedStudy `json:"studies"`
+	}
+	var payload pubmedPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err == nil && len(payload.Studies) > 0 {
+		refs := make([]string, 0, len(payload.Studies))
+		bodyParts := make([]string, 0, len(payload.Studies)+1)
+		if summary := strings.TrimSpace(payload.Summary); summary != "" {
+			bodyParts = append(bodyParts, summary)
+		}
+		for _, st := range payload.Studies {
+			title := strings.TrimSpace(st.Title)
+			pmid := strings.TrimSpace(st.PMID)
+			if title == "" || pmid == "" {
+				continue
+			}
+			year := st.Year
+			if year > 0 && year < 2018 {
+				continue
+			}
+			keyPoints := make([]string, 0, len(st.KeyPoints))
+			for _, kp := range st.KeyPoints {
+				if trimmed := strings.TrimSpace(kp); trimmed != "" {
+					keyPoints = append(keyPoints, trimmed)
+				}
+			}
+			if len(keyPoints) == 0 {
+				if s := strings.TrimSpace(st.Summary); s != "" {
+					keyPoints = append(keyPoints, s)
+				}
+			}
+			info := strings.Join(keyPoints, "; ")
+			if info != "" {
+				if year > 0 {
+					bodyParts = append(bodyParts, fmt.Sprintf("- %s (%d, PMID %s): %s", title, year, pmid, info))
+				} else {
+					bodyParts = append(bodyParts, fmt.Sprintf("- %s (PMID %s): %s", title, pmid, info))
+				}
+			} else {
+				if year > 0 {
+					bodyParts = append(bodyParts, fmt.Sprintf("- %s (%d, PMID %s)", title, year, pmid))
+				} else {
+					bodyParts = append(bodyParts, fmt.Sprintf("- %s (PMID %s)", title, pmid))
+				}
+			}
+			refLabel := title
+			if journal := strings.TrimSpace(st.Journal); journal != "" {
+				refLabel = fmt.Sprintf("%s — %s", refLabel, journal)
+			}
+			if year > 0 {
+				refs = append(refs, fmt.Sprintf("%s (PMID: %s, %d)", refLabel, pmid, year))
+			} else {
+				refs = append(refs, fmt.Sprintf("%s (PMID: %s)", refLabel, pmid))
+			}
+			if len(refs) >= 4 {
+				break
+			}
+		}
+		if len(refs) > 0 {
+			body := strings.TrimSpace(strings.Join(bodyParts, "\n\n"))
+			if len(body) > 2500 {
+				body = body[:2500] + "..."
+			}
+			out = append(out, Documento{Titulo: "PubMed", Contenido: body, Fuente: "pubmed", Referencias: refs})
+			return out
+		}
+	}
 	clean := stripModelPreambles(raw)
+	if isLikelyNoDataResponse(clean) {
+		log.Printf("[conv][buscarPubMed][skip_error_clean] message=%s", sanitizePreview(clean))
+		return out
+	}
 	// Extraer referencias crudas y filtrarlas por año >= 2020
 	refsAll := extractReferenceLines(clean)
 	refs := filterRefsByYear(refsAll, 2020)
@@ -1487,6 +1616,67 @@ func joinRefsForPrompt(refs []string) string {
 		fmt.Fprintf(b, "- %s\n", r)
 	}
 	return b.String()
+}
+
+func isLikelyErrorMessage(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return false
+	}
+	keywords := []string{
+		"hubo un error",
+		"ocurrió un error",
+		"ocurrio un error",
+		"error al procesar",
+		"error al ejecutar",
+		"intentaré de nuevo",
+		"intentare de nuevo",
+		"intentalo de nuevo",
+		"inténtalo de nuevo",
+		"por favor, espera",
+		"por favor espera",
+		"please wait",
+		"please try again",
+		"no encontré información",
+		"no encontre informacion",
+		"no se encontró información",
+		"no se encontro informacion",
+		"sin información disponible",
+		"sin informacion disponible",
+	}
+	for _, k := range keywords {
+		if strings.Contains(t, k) {
+			return true
+		}
+	}
+	if len(t) <= 180 && strings.Contains(t, "error") && (strings.Contains(t, "intenta") || strings.Contains(t, "espera") || strings.Contains(t, "proces")) {
+		return true
+	}
+	return false
+}
+
+func isLikelyNoDataResponse(s string) bool {
+	if isLikelyErrorMessage(s) {
+		return true
+	}
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return true
+	}
+	phrases := []string{
+		"no se encontraron resultados",
+		"no se encontraron coincidencias",
+		"no hay información relevante",
+		"no hay informacion relevante",
+		"no se dispone de información",
+		"no se dispone de informacion",
+	}
+	for _, p := range phrases {
+		if strings.Contains(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractReferenceLines intenta extraer líneas que parecen citas/DOI/PMID o URLs.

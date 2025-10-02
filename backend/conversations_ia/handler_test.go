@@ -125,10 +125,12 @@ func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.C
 
 func TestSmartMessage_RAGResults(t *testing.T) {
 	// Test con resultados del RAG (vector store)
-	mockClient := &MockAIClient{
-		AssistantID:     "asst_test",
-		MockRAGResponse: "La diabetes mellitus es una enfermedad metabólica caracterizada por...",
-		MockSource:      "Harrison's Principles of Internal Medicine",
+	mockClient := &MockAIClientWithMetadata{
+		MockAIClient: &MockAIClient{
+			AssistantID:     "asst_test",
+			MockRAGResponse: "La diabetes mellitus es una enfermedad metabólica caracterizada por...",
+			MockSource:      "Harrison's Principles of Internal Medicine",
+		},
 	}
 
 	handler := &Handler{AI: mockClient}
@@ -148,13 +150,19 @@ func TestSmartMessage_RAGResults(t *testing.T) {
 	if !strings.Contains(response, "## Fuentes:") {
 		t.Errorf("La respuesta debe incluir sección '## Fuentes:'")
 	}
+	if strings.Contains(response, "- Base de conocimiento médico") {
+		t.Errorf("No debe usarse 'Base de conocimiento médico' como fuente genérica en el contexto recuperado")
+	}
+	if !strings.Contains(response, "Harrison's Principles of Internal Medicine") {
+		t.Errorf("El contexto debe incluir el título real del documento")
+	}
 }
 
 func TestSmartMessage_NoRAGResultsPubMedFallback(t *testing.T) {
 	// Test sin resultados del RAG, con fallback a PubMed
 	mockClient := &MockAIClient{
 		AssistantID:        "asst_test",
-		MockPubMedResponse: "Estudio de PubMed sobre diabetes...",
+		MockPubMedResponse: `{"summary":"Hallazgos recientes sobre diabetes tipo 2","studies":[{"title":"Management of type 2 diabetes","pmid":"12345678","year":2022,"journal":"Cardiology Review","key_points":["Optimización del control glucémico reduce eventos cardiovasculares","Enfoques combinados de farmacoterapia mejoran resultados"]}]}`,
 		ShouldFailRAG:      true,
 	}
 
