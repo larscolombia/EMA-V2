@@ -133,20 +133,19 @@ func TestSmartMessage_RAGResults(t *testing.T) {
 		},
 	}
 
-	handler := &Handler{AI: mockClient}
-
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	if source != "rag" {
-		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
+	if resp.Source != "rag" {
+		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", resp.Source)
 	}
 
-	// Verificar que el stream contiene la información esperada con formato estructurado
-	response := <-stream
+	response := <-resp.Stream
 	if !strings.Contains(response, "## Fuentes:") {
 		t.Errorf("La respuesta debe incluir sección '## Fuentes:'")
 	}
@@ -155,6 +154,9 @@ func TestSmartMessage_RAGResults(t *testing.T) {
 	}
 	if !strings.Contains(response, "Harrison's Principles of Internal Medicine") {
 		t.Errorf("El contexto debe incluir el título real del documento")
+	}
+	if len(resp.AllowedSources) == 0 {
+		t.Errorf("Se esperaban fuentes permitidas para validación")
 	}
 }
 
@@ -166,22 +168,24 @@ func TestSmartMessage_NoRAGResultsPubMedFallback(t *testing.T) {
 		ShouldFailRAG:      true,
 	}
 
-	handler := &Handler{AI: mockClient}
-
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué es la diabetes?", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	if source != "pubmed" {
-		t.Errorf("Se esperaba source 'pubmed', se obtuvo: %s", source)
+	if resp.Source != "pubmed" {
+		t.Errorf("Se esperaba source 'pubmed', se obtuvo: %s", resp.Source)
 	}
 
-	// Verificar que el stream contiene la información de PubMed
-	response := <-stream
+	response := <-resp.Stream
 	if !strings.Contains(response, "PubMed") {
 		t.Errorf("La respuesta debe indicar que proviene de PubMed")
+	}
+	if len(resp.PubMedReferences) == 0 {
+		t.Errorf("Se esperaban referencias de PubMed en la respuesta")
 	}
 }
 
@@ -193,23 +197,24 @@ func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
 		ShouldFailPubMed: true,
 	}
 
-	handler := &Handler{AI: mockClient}
-
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "término inexistente xyz123", "")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "término inexistente xyz123", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	// Ahora usa modo 'basic' en lugar de 'none' cuando no hay resultados
-	if source != "basic" {
-		t.Errorf("Se esperaba source 'basic', se obtuvo: %s", source)
+	if resp.Source != "no_source" {
+		t.Errorf("Se esperaba source 'no_source', se obtuvo: %s", resp.Source)
 	}
 
-	// Verificar que el stream contiene formato estructurado del modo básico
-	response := <-stream
-	if !strings.Contains(response, "## Fuentes:") {
-		t.Errorf("La respuesta debe contener formato estructurado del modo básico con sección de fuentes")
+	response := <-resp.Stream
+	if !strings.Contains(response, "No encontré una referencia") {
+		t.Errorf("El mensaje debe informar la ausencia de referencias, got: %s", response)
+	}
+	if resp.FallbackReason != "no_results" {
+		t.Errorf("Se esperaba fallback_reason 'no_results', got=%s", resp.FallbackReason)
 	}
 }
 
@@ -220,20 +225,19 @@ func TestSmartMessage_BackwardCompatibility(t *testing.T) {
 		MockRAGResponse: "Información médica encontrada...",
 	}
 
-	handler := &Handler{AI: mockClient}
-
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "pregunta médica", "")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "pregunta médica", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	if source != "rag" {
-		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", source)
+	if resp.Source != "rag" {
+		t.Errorf("Se esperaba source 'rag', se obtuvo: %s", resp.Source)
 	}
 
-	// Verificar que el stream contiene información
-	response := <-stream
+	response := <-resp.Stream
 	if len(response) == 0 {
 		t.Errorf("La respuesta no debe estar vacía")
 	}
@@ -249,26 +253,26 @@ func TestSmartMessage_ThreadWithDocsGeneralQuestion(t *testing.T) {
 		VectorStoreFiles: []string{"file_abc123"}, // Simula archivo existente
 	}
 
-	handler := &Handler{AI: mockClient}
+	handler := NewHandler(mockClient)
 
 	// Pregunta general que NO menciona documentos - debe usar flujo híbrido, no doc-only
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "Que es la gastritis?", "")
+	snap := handler.snapshotTopic("thread_uVISzHAqHBpSDuR8L79OeuDr")
+	resp, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "Que es la gastritis?", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
 	// DEBE usar flujo híbrido (rag/pubmed), NO doc_only
-	if source == "doc_only" {
-		t.Errorf("No debería usar doc_only para pregunta general, se obtuvo: %s", source)
+	if resp.Source == "doc_only" {
+		t.Errorf("No debería usar doc_only para pregunta general, se obtuvo: %s", resp.Source)
 	}
 
-	if source != "rag" && source != "pubmed" {
-		t.Errorf("Se esperaba source 'rag' o 'pubmed' para pregunta general, se obtuvo: %s", source)
+	if resp.Source != "rag" && resp.Source != "pubmed" {
+		t.Errorf("Se esperaba source 'rag' o 'pubmed' para pregunta general, se obtuvo: %s", resp.Source)
 	}
 
-	// Verificar que el stream contiene información del conocimiento general
-	response := <-stream
+	response := <-resp.Stream
 	if !strings.Contains(response, "gastritis") {
 		t.Errorf("La respuesta debe contener información sobre gastritis")
 	}
@@ -283,21 +287,22 @@ func TestSmartMessage_ThreadWithDocsDocumentQuestion(t *testing.T) {
 		VectorStoreFiles: []string{"file_abc123"},
 	}
 
-	handler := &Handler{AI: mockClient}
+	handler := NewHandler(mockClient)
 
 	// Pregunta que SÍ menciona documentos - debe usar doc-only
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "que dice el documento sobre gastritis?", "")
+	snap := handler.snapshotTopic("thread_uVISzHAqHBpSDuR8L79OeuDr")
+	resp, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "que dice el documento sobre gastritis?", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
 	// DEBE usar doc_only cuando se menciona explícitamente el documento
-	if source != "doc_only" {
-		t.Errorf("Se esperaba source 'doc_only' cuando se pregunta sobre documento, se obtuvo: %s", source)
+	if resp.Source != "doc_only" {
+		t.Errorf("Se esperaba source 'doc_only' cuando se pregunta sobre documento, se obtuvo: %s", resp.Source)
 	}
 
-	response := <-stream
+	response := <-resp.Stream
 	if !strings.Contains(response, "documento") {
 		t.Errorf("La respuesta debe mencionar los documentos")
 	}
@@ -311,32 +316,72 @@ func TestSmartMessage_BasicModeWithSources(t *testing.T) {
 		ShouldFailPubMed: true, // Falla búsqueda en PubMed
 	}
 
-	handler := &Handler{AI: mockClient}
-
-	stream, source, err := handler.SmartMessage(context.Background(), "thread_test", "Que es un tumor de frantz?", "")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "Que es un tumor de frantz?", "", snap)
 
 	if err != nil {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	// DEBE usar modo basic cuando ambas búsquedas fallan
-	if source != "basic" {
-		t.Errorf("Se esperaba source 'basic' cuando fallan las búsquedas, se obtuvo: %s", source)
+	if resp.Source != "no_source" {
+		t.Errorf("Se esperaba source 'no_source' cuando fallan las búsquedas, se obtuvo: %s", resp.Source)
 	}
 
-	response := <-stream
+	response := <-resp.Stream
+	if !strings.Contains(response, "No encontré una referencia") {
+		t.Errorf("La respuesta debe comunicar falta de referencias, got=%s", response)
+	}
+}
 
-	// Verificar que incluye las secciones estructuradas esperadas
-	// Verificar que NO contiene las secciones eliminadas
-	if strings.Contains(response, "## Respuesta académica:") {
-		t.Errorf("La respuesta NO debe incluir sección '## Respuesta académica:' - debe comenzar directamente con contenido")
+func TestSmartMessage_HybridMode(t *testing.T) {
+	// Test: modo híbrido cuando hay resultados de vector Y PubMed
+	mockClient := &MockAIClientWithMetadata{
+		MockAIClient: &MockAIClient{
+			AssistantID:        "asst_test",
+			MockRAGResponse:    "La insuficiencia cardíaca con fracción de eyección reducida (IC-FEr) se caracteriza por...",
+			MockSource:         "Braunwald's Heart Disease",
+			MockPubMedResponse: `{"summary":"Nuevas terapias para IC-FEr han mostrado beneficio clínico significativo","studies":[{"title":"SGLT2 inhibitors in heart failure","pmid":"34567890","year":2022,"journal":"NEJM","key_points":["Reducción del 25% en hospitalizaciones cardiovasculares","Mejora en clase funcional NYHA"]}]}`,
+		},
 	}
 
-	if strings.Contains(response, "## Evidencia usada:") {
-		t.Errorf("La respuesta NO debe incluir sección '## Evidencia usada:' - esta sección fue eliminada")
+	handler := NewHandler(mockClient)
+	snap := handler.snapshotTopic("thread_test")
+	resp, err := handler.SmartMessage(context.Background(), "thread_test", "¿Qué tratamientos existen para insuficiencia cardíaca?", "", snap)
+
+	if err != nil {
+		t.Errorf("No se esperaba error: %v", err)
 	}
 
+	// En modo híbrido, debe tener source="hybrid"
+	if resp.Source != "hybrid" {
+		t.Errorf("Se esperaba source 'hybrid' cuando hay vector Y PubMed, se obtuvo: %s", resp.Source)
+	}
+
+	if !resp.HasVectorContext {
+		t.Errorf("En modo híbrido debe tener HasVectorContext=true")
+	}
+
+	if !resp.HasPubMedContext {
+		t.Errorf("En modo híbrido debe tener HasPubMedContext=true")
+	}
+
+	if len(resp.AllowedSources) == 0 {
+		t.Errorf("Se esperaban fuentes permitidas del vector store")
+	}
+
+	if len(resp.PubMedReferences) == 0 {
+		t.Errorf("Se esperaban referencias de PubMed")
+	}
+
+	response := <-resp.Stream
 	if !strings.Contains(response, "## Fuentes:") {
 		t.Errorf("La respuesta debe incluir sección '## Fuentes:'")
+	}
+
+	// Verificar que menciona integración híbrida en el prompt
+	// (esto lo verificamos indirectamente viendo que tiene ambos contextos)
+	if len(response) < 100 {
+		t.Errorf("La respuesta híbrida debe ser sustancial, got=%d chars", len(response))
 	}
 }

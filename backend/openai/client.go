@@ -1198,6 +1198,7 @@ func (c *Client) quickVectorSearch(ctx context.Context, vectorStoreID, query str
 	if c.key == "" || strings.TrimSpace(vectorStoreID) == "" {
 		return nil, errors.New("vector store search not configured")
 	}
+
 	payload := map[string]any{"query": query}
 	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
 	if err != nil {
@@ -1552,53 +1553,152 @@ func (c *Client) getFileName(ctx context.Context, fileID string) (string, error)
 // SearchPubMed busca información en PubMed usando el assistant con acceso web
 func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error) {
 	if c.key == "" || c.AssistantID == "" {
+		log.Printf("[openai][SearchPubMed][error] assistants_not_configured")
 		return "", errors.New("assistants not configured")
 	}
 
+	log.Printf("[openai][SearchPubMed][start] query_len=%d query_preview=%s", len(query), sanitizePreview(query))
+	start := time.Now()
+
+	// Contexto con timeout específico para PubMed (más generoso que el vector store)
+	pubmedCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+
 	// Crear un thread temporal para la búsqueda en PubMed
-	threadID, err := c.CreateThread(ctx)
+	threadID, err := c.CreateThread(pubmedCtx)
 	if err != nil {
+		log.Printf("[openai][SearchPubMed][error] create_thread_failed err=%v", err)
 		return "", fmt.Errorf("failed to create temporary thread: %v", err)
 	}
+	log.Printf("[openai][SearchPubMed][thread_created] thread=%s elapsed_ms=%d", threadID, time.Since(start).Milliseconds())
 
-	pubmedPrompt := fmt.Sprintf(`Realiza una búsqueda en PubMed (https://pubmed.ncbi.nlm.nih.gov/) sobre: "%s".
+	// Intento 1: Query completa con formato estructurado
+	pubmedPrompt := fmt.Sprintf(`INSTRUCCIÓN CRÍTICA: Debes buscar en PubMed (https://pubmed.ncbi.nlm.nih.gov/) usando tus herramientas de búsqueda web.
 
-FORMATO DE RESPUESTA OBLIGATORIO:
+Tema de búsqueda: "%s"
+
+SI TIENES ACCESO A BÚSQUEDA WEB:
+- Busca artículos reales en PubMed sobre el tema
+- Devuelve el resultado en el formato JSON especificado abajo
+- Prioriza estudios recientes (≥2020)
+
+SI NO TIENES ACCESO A BÚSQUEDA WEB:
+- Responde EXACTAMENTE: NO_PUBMED_FOUND
+- NO inventes estudios ni datos
+- NO digas "voy a intentar" o "hubo un error"
+- SOLO responde: NO_PUBMED_FOUND
+
+FORMATO DE RESPUESTA OBLIGATORIO (solo si encontraste resultados reales):
 {
-  "summary": "Síntesis clínica en 2-3 frases (máximo 80 palabras)",
+	"summary": "Síntesis clínica en 2-3 frases (máximo 80 palabras)",
   "studies": [
     {
-      "title": "Título exacto del estudio",
-      "pmid": "PMID numérico",
+      "title": "Título exacto del estudio de PubMed",
+      "pmid": "PMID numérico real",
+			"authors": ["Apellido Inicial", "Apellido Inicial"],
       "year": 2024,
       "journal": "Nombre de la revista",
-      "key_points": ["Hallazgo clave 1", "Hallazgo clave 2"]
+			"doi": "doi:10.xxxx/xxxxx",
+			"key_points": ["Hallazgo clave 1", "Hallazgo clave 2"]
     }
   ]
 }
 
-REGLAS:
-- Usa SOLO resultados reales de PubMed.
-- Incluye máximo 4 estudios, priorizando publicaciones desde 2018 (ideal ≥2020).
-- key_points debe contener frases breves (≤25 palabras) con hallazgos clínicos concretos.
-- year debe ser numérico; si no está disponible, usa el mejor estimado.
-- journal es opcional pero útil cuando esté presente.
-- Si no hay evidencia relevante, responde exactamente: NO_PUBMED_FOUND
-- No agregues texto fuera del JSON válido.
+REGLAS CRÍTICAS:
+- ❌ PROHIBIDO inventar PMIDs, títulos o datos que no sean de PubMed real
+- ❌ PROHIBIDO responder con mensajes de error como "parece que hubo un error"
+- ❌ PROHIBIDO decir "voy a intentar" o "ajustaré la consulta"
+- ✅ OBLIGATORIO: Si no puedes acceder a PubMed web, responde: NO_PUBMED_FOUND
+- ✅ OBLIGATORIO: Usa SOLO resultados reales de PubMed que puedas verificar
+- Incluye máximo 4 estudios, priorizando publicaciones desde 2018 (ideal ≥2020)
+- key_points debe contener frases breves (≤25 palabras) con hallazgos clínicos concretos y verificables
+- year debe ser numérico exacto del artículo; si no está disponible, omítelo
+- journal es el nombre exacto de la revista donde se publicó
+- authors debe listar de 1 a 6 autores en orden, usando "Apellido Inicial" del artículo real
+- doi es opcional, inclúyelo solo si está disponible en PubMed
+- title debe ser el título exacto del artículo en PubMed
+- PMID debe ser el identificador numérico real y verificable
+- No agregues texto fuera del JSON válido
 `, query)
 
-	text, err := c.runAndWait(ctx, threadID, pubmedPrompt, "")
+	text, err := c.runAndWait(pubmedCtx, threadID, pubmedPrompt, "")
+
+	// Manejo de timeout: intentar query simplificada
 	if err != nil {
-		return "", fmt.Errorf("pubmed search failed: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "context deadline exceeded") {
+			log.Printf("[openai][SearchPubMed][timeout] first_attempt thread=%s elapsed_ms=%d, trying_simplified_query", threadID, time.Since(start).Milliseconds())
+
+			// Crear nuevo contexto para reintento
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer retryCancel()
+
+			// Query simplificada: solo conceptos clave
+			simplifiedQuery := simplifyMedicalQuery(query)
+			log.Printf("[openai][SearchPubMed][retry] simplified_query=%s", sanitizePreview(simplifiedQuery))
+
+			simplifiedPrompt := fmt.Sprintf(`Busca en PubMed: "%s". Devuelve JSON con máximo 3 estudios recientes (≥2020) con: title, pmid, year, key_points. Si no encuentras nada, responde: NO_PUBMED_FOUND`, simplifiedQuery)
+
+			text, err = c.runAndWait(retryCtx, threadID, simplifiedPrompt, "")
+			if err != nil {
+				log.Printf("[openai][SearchPubMed][error] retry_also_failed err=%v total_elapsed_ms=%d", err, time.Since(start).Milliseconds())
+				_ = c.DeleteThreadArtifacts(context.Background(), threadID)
+				return "", fmt.Errorf("pubmed search timed out after retry: %v", err)
+			}
+			log.Printf("[openai][SearchPubMed][retry.success] text_len=%d total_elapsed_ms=%d", len(text), time.Since(start).Milliseconds())
+		} else {
+			log.Printf("[openai][SearchPubMed][error] runAndWait_failed err=%v elapsed_ms=%d", err, time.Since(start).Milliseconds())
+			_ = c.DeleteThreadArtifacts(context.Background(), threadID)
+			return "", fmt.Errorf("pubmed search failed: %v", err)
+		}
+	} else {
+		log.Printf("[openai][SearchPubMed][success] first_attempt text_len=%d elapsed_ms=%d", len(text), time.Since(start).Milliseconds())
 	}
 
 	// Limpiar el thread temporal
-	_ = c.DeleteThreadArtifacts(ctx, threadID)
+	_ = c.DeleteThreadArtifacts(context.Background(), threadID)
 
+	// Verificar si no se encontró información
 	if strings.Contains(strings.ToUpper(text), "NO_PUBMED_FOUND") {
+		log.Printf("[openai][SearchPubMed][no_results] total_elapsed_ms=%d", time.Since(start).Milliseconds())
 		return "", nil // No se encontró información en PubMed
 	}
 
+	// Detectar mensajes de error del asistente (cuando no tiene acceso a web search)
+	lowerText := strings.ToLower(text)
+	errorPhrases := []string{
+		"parece que se produjo un error",
+		"parece que hubo un error",
+		"error al procesar",
+		"error al realizar",
+		"formato de la consulta no fue aceptado",
+		"ajustaré la consulta",
+		"intentaré de nuevo",
+		"intentaré nuevamente",
+		"voy a intentar",
+		"por favor, espera",
+		"actualizando consulta",
+	}
+
+	for _, phrase := range errorPhrases {
+		if strings.Contains(lowerText, phrase) {
+			log.Printf("[openai][SearchPubMed][assistant_error_detected] phrase=\"%s\" text_preview=%s total_elapsed_ms=%d", phrase, sanitizePreview(text), time.Since(start).Milliseconds())
+			return "", nil // El asistente no puede acceder a PubMed, tratar como sin resultados
+		}
+	}
+
+	// Verificar que la respuesta tenga contenido mínimo
+	if len(strings.TrimSpace(text)) < 50 {
+		log.Printf("[openai][SearchPubMed][insufficient_content] text_len=%d total_elapsed_ms=%d", len(text), time.Since(start).Milliseconds())
+		return "", nil
+	}
+
+	// Validar que realmente sea JSON con estructura de estudios
+	if !strings.Contains(text, "{") || !strings.Contains(text, "\"studies\"") {
+		log.Printf("[openai][SearchPubMed][invalid_json_structure] text_len=%d total_elapsed_ms=%d", len(text), time.Since(start).Milliseconds())
+		return "", nil
+	}
+
+	log.Printf("[openai][SearchPubMed][complete] text_len=%d total_elapsed_ms=%d", len(text), time.Since(start).Milliseconds())
 	return text, nil
 }
 
@@ -1641,6 +1741,30 @@ func sanitizeBody(s string) string {
 		return s[:400] + "..."
 	}
 	return s
+}
+
+// sanitizePreview helper para logs (más corto que sanitizeBody)
+func sanitizePreview(s string) string {
+	if len(s) > 80 {
+		s = s[:80] + "..."
+	}
+	return strings.TrimSpace(s)
+}
+
+// simplifyMedicalQuery extrae conceptos clave médicos de una query compleja
+func simplifyMedicalQuery(query string) string {
+	// Eliminar palabras de pregunta comunes
+	q := strings.ToLower(query)
+	stopWords := []string{"qué es", "que es", "cuál es", "cual es", "cómo se", "como se", "explica", "define", "dime sobre", "información sobre", "¿", "?"}
+	for _, sw := range stopWords {
+		q = strings.ReplaceAll(q, sw, "")
+	}
+	// Limpiar y limitar a primeros 60 caracteres de términos clave
+	q = strings.TrimSpace(q)
+	if len(q) > 60 {
+		q = q[:60]
+	}
+	return q
 }
 
 func isLikelyNoDataResponse(s string) bool {

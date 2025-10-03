@@ -19,8 +19,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +61,19 @@ type VectorSearchResult struct {
 	Section   string `json:"section,omitempty"`
 }
 
+// SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
+type SmartResponse struct {
+	Stream           <-chan string
+	Source           string
+	AllowedSources   []string
+	PubMedReferences []string
+	Topic            TopicSnapshot
+	Prompt           string
+	HasVectorContext bool
+	HasPubMedContext bool
+	FallbackReason   string
+}
+
 // AIClientWithMetadata extiende AIClient con capacidades de metadatos
 type AIClientWithMetadata interface {
 	AIClient
@@ -68,6 +83,107 @@ type AIClientWithMetadata interface {
 type Handler struct {
 	AI             AIClient
 	quotaValidator func(ctx context.Context, c *gin.Context, flow string) error
+	topicMu        sync.RWMutex
+	threadTopics   map[string]*topicState
+}
+
+// topicState persiste la información temática por hilo para mantener coherencia entre preguntas y respuestas.
+type topicState struct {
+	Keywords     []string
+	LastPrompt   string
+	MessageCount int
+	LastUpdated  time.Time
+}
+
+// TopicSnapshot representa una lectura inmutable del estado temático de un hilo en el momento de la petición.
+type TopicSnapshot struct {
+	ThreadID       string
+	Keywords       []string
+	IsFirstMessage bool
+	MessageCount   int
+}
+
+var keywordCleaner = strings.NewReplacer(
+	",", " ", ".", " ", ";", " ", ":", " ", "!", " ", "?", " ", "¿", " ", "¡", " ", "(", " ", ")", " ",
+	"[", " ", "]", " ", "{", " ", "}", " ", "\n", " ", "\t", " ", "\r", " ", "\"", " ", "'", " ",
+	"-", " ", "_", " ", "/", " ", "\\", " ",
+)
+
+var topicStopwords = map[string]struct{}{
+	"el": {}, "la": {}, "los": {}, "las": {}, "un": {}, "una": {}, "unos": {}, "unas": {},
+	"de": {}, "del": {}, "al": {}, "a": {}, "en": {}, "por": {}, "para": {}, "con": {}, "sin": {},
+	"que": {}, "qué": {}, "cual": {}, "cuál": {}, "cuales": {}, "cuáles": {}, "como": {}, "cómo": {},
+	"es": {}, "son": {}, "ser": {}, "estar": {}, "hay": {}, "sobre": {}, "segun": {}, "según": {},
+	"the": {}, "and": {}, "for": {}, "from": {}, "into": {}, "about": {}, "what": {}, "when": {},
+	"which": {}, "that": {}, "this": {}, "these": {}, "those": {}, "can": {}, "could": {}, "would": {},
+}
+
+func (h *Handler) snapshotTopic(threadID string) TopicSnapshot {
+	h.topicMu.RLock()
+	defer h.topicMu.RUnlock()
+	st, ok := h.threadTopics[threadID]
+	if !ok || st == nil {
+		return TopicSnapshot{ThreadID: threadID, IsFirstMessage: true}
+	}
+	snap := TopicSnapshot{
+		ThreadID:       threadID,
+		Keywords:       append([]string{}, st.Keywords...),
+		MessageCount:   st.MessageCount,
+		IsFirstMessage: st.MessageCount == 0,
+	}
+	return snap
+}
+
+func (h *Handler) recordTopicInteraction(threadID, prompt string, resp *SmartResponse) {
+	if resp == nil {
+		return
+	}
+	keywords := extractTopicKeywords(prompt, resp.Topic.Keywords)
+	h.topicMu.Lock()
+	defer h.topicMu.Unlock()
+	st, ok := h.threadTopics[threadID]
+	if !ok || st == nil {
+		st = &topicState{}
+		h.threadTopics[threadID] = st
+	}
+	st.LastPrompt = prompt
+	st.MessageCount++
+	st.LastUpdated = time.Now()
+	if len(keywords) > 0 {
+		st.Keywords = keywords
+	}
+}
+
+func extractTopicKeywords(prompt string, fallback []string) []string {
+	lowered := strings.ToLower(prompt)
+	cleaned := keywordCleaner.Replace(lowered)
+	tokens := strings.Fields(cleaned)
+	if len(tokens) == 0 {
+		return append([]string{}, fallback...)
+	}
+	seen := make(map[string]struct{}, len(tokens))
+	var out []string
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		if len(tok) < 4 {
+			continue
+		}
+		if _, skip := topicStopwords[tok]; skip {
+			continue
+		}
+		if _, done := seen[tok]; done {
+			continue
+		}
+		seen[tok] = struct{}{}
+		out = append(out, tok)
+		if len(out) >= 6 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return append([]string{}, fallback...)
+	}
+	return out
 }
 
 // Documento representa una pieza de contexto recuperado
@@ -80,12 +196,14 @@ type Documento struct {
 }
 
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
-func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt, focusDocID string) (<-chan string, string, error) {
+func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt, focusDocID string, snap TopicSnapshot) (*SmartResponse, error) {
+	resp := &SmartResponse{
+		Topic:  snap,
+		Prompt: prompt,
+	}
 	targetVectorID := booksVectorID()
 
-	// Si focusDocID está especificado, usar EXCLUSIVAMENTE ese documento
 	if focusDocID != "" {
-		// Prompt restrictivo: solo con el documento específico
 		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en el documento con ID: %s
 
 Pregunta del usuario: %s
@@ -98,17 +216,26 @@ Instrucciones:
 
 		vsID, err := h.ensureVectorStoreID(ctx, threadID)
 		if err != nil {
-			return nil, "focus_doc", err
+			return nil, err
 		}
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
-			return nil, "focus_doc", err
+			return nil, err
 		}
-		return stream, "focus_doc", nil
+		resp.Stream = stream
+		resp.Source = "focus_doc"
+		trimmed := strings.TrimSpace(focusDocID)
+		if trimmed != "" {
+			resp.AllowedSources = append(resp.AllowedSources, trimmed)
+		}
+		resp.AllowedSources = append(resp.AllowedSources, "documentos adjuntos del hilo")
+		if len(resp.AllowedSources) > 1 {
+			sort.Strings(resp.AllowedSources)
+		}
+		resp.HasVectorContext = true
+		return resp, nil
 	}
 
-	// Si el hilo tiene documentos adjuntos Y la pregunta parece referirse a ellos, usar modo doc-only
-	// Solo activar doc-only automático si la pregunta menciona explícitamente el documento/PDF
 	hasDocs := h.threadHasDocuments(ctx, threadID)
 	refersToDoc := h.questionRefersToDocument(prompt)
 	log.Printf("[conv][SmartMessage][routing] thread=%s has_docs=%v refers_to_doc=%v prompt_preview=\"%s\"", threadID, hasDocs, refersToDoc, sanitizePreview(prompt))
@@ -116,11 +243,10 @@ Instrucciones:
 	if hasDocs && refersToDoc {
 		vsID, err := h.ensureVectorStoreID(ctx, threadID)
 		if err != nil {
-			return nil, "doc_only", err
+			return nil, err
 		}
 		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=question_refers_to_doc", threadID, vsID)
 
-		// Prompt restrictivo: solo con documentos del hilo
 		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos PDF adjuntos de este hilo.
 
 Pregunta del usuario: %s
@@ -130,29 +256,31 @@ Instrucciones:
 - Si los documentos no contienen información suficiente para responder, di claramente: "Los documentos no contienen información para responder esta pregunta".
 - Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuentes: nombres de archivos y páginas si es posible]`, prompt)
 
-		log.Printf("[conv][SmartMessage][doc_only.prompt] thread=%s prompt_len=%d", threadID, len(docOnlyPrompt))
-
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
-			return nil, "doc_only", err
+			return nil, err
 		}
-		return stream, "doc_only", nil
+		resp.Stream = stream
+		resp.Source = "doc_only"
+		resp.AllowedSources = []string{"documentos adjuntos del hilo"}
+		resp.HasVectorContext = true
+		return resp, nil
 	}
 
-	// Smalltalk/Saludo: responder cordialmente sin consultar fuentes
 	if isSmallTalk(prompt) {
 		reply := smallTalkReply(prompt)
 		ch := make(chan string, 1)
 		ch <- reply
 		close(ch)
-		return ch, "smalltalk", nil
+		resp.Stream = ch
+		resp.Source = "smalltalk"
+		resp.AllowedSources = nil
+		return resp, nil
 	}
 
-	// Flujo híbrido: consultar vector y PubMed, fusionar, y pasar contexto al modelo
 	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s reason=general_question", threadID, targetVectorID)
 
-	// Crear timeout específico para las búsquedas para evitar que toda la request se cuelgue
-	searchCtx, cancel := context.WithTimeout(ctx, 45*time.Second) // Dejar 15s para el streaming
+	searchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	searchStart := time.Now()
@@ -168,7 +296,6 @@ Instrucciones:
 
 	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
-	// DEBUG: Verificar qué está pasando con los contextos
 	log.Printf("[conv][SmartMessage][debug] thread=%s vdocs_len=%d pdocs_len=%d ctxVec_len=%d ctxPub_len=%d",
 		threadID, len(vdocs), len(pdocs), len(ctxVec), len(ctxPub))
 	if len(vdocs) > 0 {
@@ -185,7 +312,15 @@ Instrucciones:
 		log.Printf("[conv][SmartMessage][debug.ctxVec] first_200_chars=\"%s\"", preview)
 	}
 
-	// Reunir referencias de PubMed ya extraídas y filtradas (>=2020)
+	allowedSourcesSet := map[string]string{}
+	for _, d := range vdocs {
+		name := strings.TrimSpace(d.Titulo)
+		if name == "" {
+			continue
+		}
+		allowedSourcesSet[strings.ToLower(name)] = name
+	}
+
 	var pubRefs []string
 	seenRef := map[string]bool{}
 	for _, d := range pdocs {
@@ -198,12 +333,14 @@ Instrucciones:
 			pubRefs = append(pubRefs, r)
 		}
 	}
+	resp.PubMedReferences = pubRefs
 	refsBlock := joinRefsForPrompt(pubRefs)
 
 	vecHas := strings.TrimSpace(ctxVec) != ""
 	pubHas := strings.TrimSpace(ctxPub) != ""
+	resp.HasVectorContext = vecHas
+	resp.HasPubMedContext = pubHas
 
-	// Verificar si tenemos documentos con source_book válido (incluso sin snippet completo)
 	hasValidSourceBook := false
 	for _, d := range vdocs {
 		if strings.TrimSpace(d.Titulo) != "" {
@@ -216,50 +353,16 @@ Instrucciones:
 		threadID, vecHas, pubHas, hasValidSourceBook)
 
 	if !vecHas && !pubHas && !hasValidSourceBook {
-		// Si las búsquedas fallaron (por timeout u otro error), dar respuesta con conocimiento básico del asistente
-		log.Printf("[conv][SmartMessage][hybrid.empty] thread=%s - using basic assistant knowledge", threadID)
-
-		// Mejorar preguntas vagas o conversacionales
-		prompt = improveConversationalPrompt(prompt) // En lugar de decir "no se encontró información", usar el asistente con conocimiento básico PERO con formato de fuentes
-		basicPrompt := fmt.Sprintf(`Responde esta pregunta médica usando tu conocimiento base médico especializado:
-
-%s
-
-CONTEXTO DE LA CONVERSACIÓN:
-Si la pregunta hace referencia a temas anteriores o es vaga ('eso', 'profundizar', 'más sobre'), interpreta según el contexto médico más relevante y proporciona información valiosa sobre el tema médico más probable.
-
-FORMATO DE RESPUESTA OBLIGATORIO:
-Estructura la respuesta así:
-
-[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados con información médica sustancial]
-
-## Fuentes:
-- Conocimiento médico especializado integrado
-- Literatura médica estándar en medicina interna y especialidades
-- Para información más específica, se recomienda consultar fuentes primarias especializadas
-
-INSTRUCCIONES CRÍTICAS:
-- NO incluir "## Respuesta académica:" al inicio - comenzar directamente con contenido médico
-- NO incluir sección "## Evidencia usada:" 
-- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento
-- MÍNIMO 200-300 palabras de contenido académico sustancial
-- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos cuando sea relevante
-- Tono académico: preciso, formal y con profundidad científica
-- Mantén continuidad conversacional cuando sea apropiado`, prompt)
-
-		stream, err := h.AI.StreamAssistantMessage(ctx, threadID, basicPrompt)
-		if err != nil {
-			// Solo si todo falla, entonces dar el mensaje de error
-			fallback := "No se pudo obtener información en este momento. Por favor, intenta nuevamente."
-			ch := make(chan string, 1)
-			ch <- fallback + "\n\n*(Error temporal en el servicio)*"
-			close(ch)
-			return ch, "none", nil
-		}
-		return stream, "basic", nil
+		msg := "No encontré una referencia en los documentos disponibles ni en PubMed."
+		ch := make(chan string, 1)
+		ch <- msg
+		close(ch)
+		resp.Stream = ch
+		resp.Source = "no_source"
+		resp.FallbackReason = "no_results"
+		return resp, nil
 	}
 
-	// Si tenemos documentos con source_book pero ctxVec está vacío, crear contexto básico
 	if !vecHas && hasValidSourceBook {
 		var b strings.Builder
 		for _, d := range vdocs {
@@ -269,72 +372,180 @@ INSTRUCCIONES CRÍTICAS:
 		}
 		ctxVec = strings.TrimSpace(b.String())
 		vecHas = true
+		resp.HasVectorContext = true
 		log.Printf("[conv][SmartMessage][force_context] thread=%s generated_ctxVec_len=%d", threadID, len(ctxVec))
 	}
 
-	// Preparar input con bloques de contexto estructurados y conversacional
-	input := fmt.Sprintf(
-		"CONTEXTO DE LA CONVERSACIÓN:\n"+
-			"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica. "+
-			"Si la pregunta hace referencia a temas anteriores ('eso', 'profundizar', 'más sobre', etc.), usa el contexto médico relevante disponible.\n\n"+
+	// Determinar modo de integración: solo vector, solo PubMed, o híbrido
+	var integrationMode string
+	if vecHas && pubHas {
+		integrationMode = "hybrid" // Integrar ambas fuentes
+		resp.Source = "hybrid"
+	} else if vecHas {
+		integrationMode = "vector_only"
+		resp.Source = "rag"
+	} else {
+		integrationMode = "pubmed_only"
+		resp.Source = "pubmed"
+	}
+	log.Printf("[conv][SmartMessage][integration] thread=%s mode=%s vecHas=%v pubHas=%v", threadID, integrationMode, vecHas, pubHas)
 
-			"Contexto recuperado (priorizar vector store):\n%s\n\n"+
-			"Contexto complementario (PubMed):\n%s\n\n"+
-			"Referencias (PubMed ≥2020, procesadas):\n%s\n\n"+
-			"Pregunta del usuario:\n%s\n\n"+
+	// Construir prompt adaptado al modo de integración
+	var input string
+	if integrationMode == "hybrid" {
+		// MODO HÍBRIDO: Integrar vector store y PubMed
+		input = fmt.Sprintf(
+			"CONTEXTO DE LA CONVERSACIÓN:\n"+
+				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
 
-			"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
-			"Estructura la respuesta así:\n\n"+
-			"[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados]\n\n"+
-			"## Fuentes:\n"+
-			"[Fuentes en formato APA según origen]\n\n"+
+				"CONTEXTO PRINCIPAL (Libros y Manuales Médicos):\n%s\n\n"+
+				"CONTEXTO COMPLEMENTARIO (Artículos Recientes de PubMed):\n%s\n\n"+
+				"Referencias de PubMed (≥2020):\n%s\n\n"+
+				"Pregunta del usuario:\n%s\n\n"+
 
-			"REGLAS ESTRICTAS DE CONTENIDO:\n"+
-			"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
-			"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
-			"- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento cuando sea relevante\n"+
-			"- MÍNIMO 200-300 palabras de contenido académico sustancial\n"+
-			"- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos\n"+
-			"- Tono académico: preciso, formal y con profundidad científica\n\n"+
+				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
+				"Estructura la respuesta así:\n\n"+
+				"[Respuesta académica integrando ambas fuentes - mínimo 2-3 párrafos desarrollados]\n\n"+
+				"## Fuentes:\n"+
+				"[Fuentes en formato APA, separando libros y artículos de PubMed]\n\n"+
 
-			"REGLAS ESTRICTAS DE FUENTES:\n"+
-			"- ⚠️ CRÍTICO: Al consultar tu vector store, recibes JSON con 'source_book' - USA ESE NOMBRE EXACTO en las fuentes\n"+
-			"- ✅ OBLIGATORIO: Si el JSON interno contiene 'Medical_Management_of_the_Pregnant_Patie.pdf', usa 'Medical Management of the Pregnant Patient'\n"+
-			"- ❌ PROHIBIDO ABSOLUTO: NO uses 'Base de conocimiento médico' - SIEMPRE usa el nombre específico del archivo\n"+
-			"- PROCESO: 1) Consulta vector store → 2) Extrae nombre de 'source_book' del JSON → 3) Incluye ese nombre en ## Fuentes\n"+
-			"- EJEMPLOS DE CONVERSIÓN:\n"+
-			"  • 'Medical_Management_of_the_Pregnant_Patie.pdf' → 'Medical Management of the Pregnant Patient'\n"+
-			"  • 'Harrisons_Principles_Internal_Medicine.pdf' → 'Harrison's Principles of Internal Medicine'\n"+
-			"  • 'Williams_Obstetrics.pdf' → 'Williams Obstetrics'\n"+
-			"- Para estudios de PubMed usa el formato: '<Título del estudio> (PMID: #######, Año)' tomando los datos del bloque 'Referencias'\n"+
-			"- Si el año no está disponible, omítelo pero mantén el PMID\n"+
-			"- FORMATO: Si tienes nombre completo del libro, úsalo sin inventar autor/año\n"+
-			"- Si no encuentras nombre específico del documento, entonces y solo entonces usa 'Fuentes médicas especializadas'\n\n"+
+				"REGLAS CRÍTICAS DE INTEGRACIÓN HÍBRIDA:\n"+
+				"- INTEGRA información de AMBAS fuentes cuando sea relevante\n"+
+				"- Estructura: Comienza con fundamentos de libros/manuales, complementa con hallazgos recientes de PubMed\n"+
+				"- Ejemplo de integración: 'Según el *Tratado de Cardiología de Braunwald*, la IC-FEr se caracteriza por... Estudios recientes en PubMed (Smith et al., 2023, PMID: 123456) han encontrado que...'\n"+
+				"- NO dupliques información que esté en ambas fuentes; sintetiza y complementa\n"+
+				"- Si hay contradicciones, menciónalo explícitamente citando ambas fuentes\n\n"+
 
-			"REGLAS DE CONVERSACIÓN:\n"+
-			"- Si la pregunta es vaga o hace referencia a conceptos anteriores ('eso', 'profundizar'), interpreta según el contexto médico disponible\n"+
-			"- Mantén continuidad temática cuando sea apropiado\n"+
-			"- Siempre proporciona información médica valiosa incluso si la pregunta es ambigua\n",
-		ctxVec, ctxPub, refsBlock, prompt,
-	)
+				"REGLAS DE CONTENIDO:\n"+
+				"- NO incluir '## Respuesta académica:' al inicio\n"+
+				"- NO incluir sección '## Evidencia usada:'\n"+
+				"- PROFUNDIDAD: fisiopatología, manifestaciones clínicas, diagnóstico, tratamiento\n"+
+				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
+				"  * Valores de laboratorio con rangos (ej: NT-proBNP >300 pg/mL, FE <40%%)\n"+
+				"  * Hallazgos de imagen con mediciones (ej: diámetro ventricular >55mm)\n"+
+				"  * Umbrales clínicos específicos (ej: clase funcional NYHA, escalas de riesgo)\n"+
+				"  * Criterios clasificatorios (ej: ESC 2021, AHA/ACC 2022)\n"+
+				"- MÍNIMO 250-350 palabras de contenido sustancial\n"+
+				"- Tono académico: preciso, formal, con profundidad científica\n\n"+
 
-	// Verificar si el contexto fue cancelado antes de hacer la llamada final
+				"REGLAS DE FUENTES:\n"+
+				"PARA LIBROS/MANUALES:\n"+
+				"- Usa el nombre exacto del documento (ej: 'Harrison's Principles of Internal Medicine')\n"+
+				"- NO uses 'Base de conocimiento médico' genérico\n"+
+				"- Formato: Autor/Título del libro (sin inventar datos que no tengas)\n\n"+
+				"PARA PUBMED:\n"+
+				"- Formato OBLIGATORIO: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
+				"- Usa SOLO información del bloque 'Referencias de PubMed' proporcionado\n"+
+				"- Si falta el año, omítelo pero mantén el PMID\n"+
+				"- NO inventes títulos, autores, PMIDs ni años\n\n"+
+				"SECCIÓN ## Fuentes: DEBE incluir:\n"+
+				"**Libros y Manuales:**\n"+
+				"- [Listar fuentes de libros con nombres exactos]\n\n"+
+				"**Artículos Científicos (PubMed):**\n"+
+				"- [Listar artículos con formato: Título (PMID: ####, Año)]\n",
+			ctxVec, ctxPub, refsBlock, prompt,
+		)
+	} else if integrationMode == "vector_only" {
+		input = fmt.Sprintf(
+			"CONTEXTO DE LA CONVERSACIÓN:\n"+
+				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
+
+				"Contexto recuperado (Libros y Manuales Médicos):\n%s\n\n"+
+				"Pregunta del usuario:\n%s\n\n"+
+
+				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
+				"Estructura la respuesta así:\n\n"+
+				"[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados]\n\n"+
+				"## Fuentes:\n"+
+				"[Fuentes en formato APA]\n\n"+
+
+				"REGLAS ESTRICTAS DE CONTENIDO:\n"+
+				"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
+				"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
+				"- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento cuando sea relevante\n"+
+				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
+				"  * Valores de laboratorio con rangos (ej: NT-proBNP >300 pg/mL, FE <40%%)\n"+
+				"  * Hallazgos de imagen con mediciones (ej: diámetro ventricular >55mm)\n"+
+				"  * Umbrales clínicos específicos (ej: clase funcional NYHA, escalas de riesgo)\n"+
+				"  * Criterios clasificatorios oficiales (ej: ESC 2021, AHA/ACC 2022)\n"+
+				"- MÍNIMO 200-300 palabras de contenido académico sustancial\n"+
+				"- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos\n"+
+				"- Tono académico: preciso, formal y con profundidad científica\n\n"+
+
+				"REGLAS ESTRICTAS DE FUENTES:\n"+
+				"- Usa el nombre exacto del documento proporcionado en el contexto\n"+
+				"- NO uses 'Base de conocimiento médico' genérico\n"+
+				"- Formato: Título del libro/manual (sin inventar autor/año si no los tienes)\n"+
+				"- Si no encuentras nombre específico del documento, usa 'Fuentes médicas especializadas'\n",
+			ctxVec, prompt,
+		)
+	} else {
+		// MODO PUBMED ONLY
+		input = fmt.Sprintf(
+			"CONTEXTO DE LA CONVERSACIÓN:\n"+
+				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
+
+				"Contexto recuperado (Artículos Científicos de PubMed):\n%s\n\n"+
+				"Referencias (PubMed ≥2020):\n%s\n\n"+
+				"Pregunta del usuario:\n%s\n\n"+
+
+				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
+				"Estructura la respuesta así:\n\n"+
+				"[Respuesta académica basada en evidencia reciente - mínimo 2-3 párrafos desarrollados]\n\n"+
+				"## Fuentes:\n"+
+				"[Referencias de PubMed en formato APA]\n\n"+
+
+				"REGLAS CRÍTICAS DE CONTENIDO:\n"+
+				"- NO incluir '## Respuesta académica:' al inicio\n"+
+				"- NO incluir sección '## Evidencia usada:'\n"+
+				"- Enfócate en evidencia basada en investigación reciente\n"+
+				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
+				"  * Valores de laboratorio con rangos de estudios (ej: NT-proBNP >300 pg/mL)\n"+
+				"  * Hallazgos de imagen con mediciones reportadas\n"+
+				"  * Umbrales clínicos de los estudios citados\n"+
+				"  * Criterios de inclusión/exclusión con valores específicos\n"+
+				"- MÍNIMO 200-250 palabras de contenido sustancial\n"+
+				"- Tono académico y científico\n\n"+
+
+				"REGLAS ESTRICTAS DE FUENTES:\n"+
+				"- Formato OBLIGATORIO para cada referencia: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
+				"- Usa EXCLUSIVAMENTE información del bloque 'Referencias' proporcionado arriba\n"+
+				"- NO inventes títulos, PMIDs, autores ni años que no estén en el bloque de referencias\n"+
+				"- Si el año no está disponible en las referencias, omítelo pero mantén el PMID\n"+
+				"- Cada referencia DEBE tener PMID verificable\n"+
+				"- Si no hay referencias válidas, indica claramente: 'Fuente: PubMed (búsqueda general)'\n",
+			ctxPub, refsBlock, prompt,
+		)
+	}
+
 	if err := ctx.Err(); err != nil {
 		log.Printf("[conv][SmartMessage][context.cancelled] thread=%s err=%v", threadID, err)
-		fallback := "La consulta tardó demasiado tiempo. Por favor, intenta con una pregunta más específica."
+		msg := "La consulta tardó demasiado tiempo. Por favor, intenta con una pregunta más específica."
 		ch := make(chan string, 1)
-		ch <- fallback + "\n\n*(Tiempo de espera agotado)*"
+		ch <- msg + "\n\n*(Tiempo de espera agotado)*"
 		close(ch)
-		return ch, "timeout", nil
+		resp.Stream = ch
+		resp.Source = "timeout"
+		resp.FallbackReason = "search_timeout"
+		return resp, nil
 	}
 
-	// Usar el asistente configurado y el vector store de libros para mantener grounding y el historial del hilo
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, input, targetVectorID)
-	source := "pubmed"
-	if vecHas {
-		source = "rag"
+	if err != nil {
+		return nil, err
 	}
-	return stream, source, err
+	resp.Stream = stream
+	// resp.Source ya fue asignado según integrationMode, no sobrescribir aquí
+
+	if len(allowedSourcesSet) > 0 {
+		for _, v := range allowedSourcesSet {
+			resp.AllowedSources = append(resp.AllowedSources, v)
+		}
+		if len(resp.AllowedSources) > 1 {
+			sort.Strings(resp.AllowedSources)
+		}
+	}
+	return resp, nil
 }
 
 // isSmallTalk detecta saludos breves y cortesía sin contenido médico
@@ -385,7 +596,9 @@ func smallTalkReply(s string) string {
 	return "¡Hola! Estoy bien, gracias. ¿En qué puedo ayudarte?"
 }
 
-func NewHandler(ai AIClient) *Handler { return &Handler{AI: ai} }
+func NewHandler(ai AIClient) *Handler {
+	return &Handler{AI: ai, threadTopics: make(map[string]*topicState)}
+}
 func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) {
 	h.quotaValidator = fn
 }
@@ -486,14 +699,8 @@ func (h *Handler) Message(c *gin.Context) {
 	start := time.Now()
 	log.Printf("[conv][Message][json][smart.begin] thread=%s prompt_len=%d prompt_preview=\"%s\"", req.ThreadID, len(req.Prompt), sanitizePreview(req.Prompt))
 
-	// Usar siempre el flujo inteligente SmartMessage que maneja focus_doc_id correctamente
-	var (
-		stream <-chan string
-		source string
-		err    error
-	)
-	// SmartMessage maneja internamente el focus_doc_id y documentos del thread
-	stream, source, err = h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID)
+	snap := h.snapshotTopic(req.ThreadID)
+	resp, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID, snap)
 	if err != nil {
 		code := classifyErr(err)
 		log.Printf("[conv][Message][json][smart.error] thread=%s code=%s err=%v", req.ThreadID, code, err)
@@ -504,6 +711,14 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(status, gin.H{"error": errMsg(err), "code": code})
 		return
 	}
+	if resp == nil || resp.Stream == nil {
+		log.Printf("[conv][Message][json][smart.error] thread=%s nil_response", req.ThreadID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
+		return
+	}
+	stream := resp.Stream
+	source := resp.Source
+	h.recordTopicInteraction(req.ThreadID, req.Prompt, resp)
 	if v, ok := c.Get("quota_remaining"); ok {
 		c.Header("X-Quota-Remaining", toString(v))
 	}
@@ -514,6 +729,24 @@ func (h *Handler) Message(c *gin.Context) {
 	if source == "rag" {
 		c.Header("X-Books-Vector-ID", "vs_680fc484cef081918b2b9588b701e2f4")
 	}
+	if len(resp.AllowedSources) > 0 {
+		c.Header("X-Allowed-Sources", strings.Join(resp.AllowedSources, ","))
+	}
+	if len(resp.PubMedReferences) > 0 {
+		c.Header("X-PubMed-References", strings.Join(resp.PubMedReferences, " | "))
+	}
+	if len(resp.Topic.Keywords) > 0 {
+		c.Header("X-Topic-Keywords", strings.Join(resp.Topic.Keywords, ","))
+	}
+	if resp.FallbackReason != "" {
+		c.Header("X-Fallback-Reason", resp.FallbackReason)
+	}
+	if resp.Topic.IsFirstMessage {
+		c.Header("X-Topic-Is-First", "1")
+	} else {
+		c.Header("X-Topic-Is-First", "0")
+	}
+	c.Header("X-Topic-Message-Count", strconv.Itoa(resp.Topic.MessageCount))
 	log.Printf("[conv][Message][json][smart.stream] thread=%s source=%s prep_elapsed_ms=%d total_elapsed_ms=%d", req.ThreadID, source, time.Since(start).Milliseconds(), time.Since(wall).Milliseconds())
 	// Emitir señales de etapa antes del contenido
 	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
@@ -568,13 +801,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 	log.Printf("[conv][Message][multipart][begin] thread=%s has_file=%v prompt_len=%d", threadID, upFile != nil, len(prompt))
 	if upFile == nil { // solo texto
 		// Si el hilo ya tiene documentos, usar doc-only; si no, flujo inteligente
-		var (
-			stream <-chan string
-			source string
-			err    error
-		)
-		// Usar SmartMessage consistentemente para manejar focus_doc_id y lógica de documentos
-		stream, source, err = h.SmartMessage(c.Request.Context(), threadID, prompt, focusDocID)
+		snap := h.snapshotTopic(threadID)
+		resp, err := h.SmartMessage(c.Request.Context(), threadID, prompt, focusDocID, snap)
 		if err != nil {
 			code := classifyErr(err)
 			log.Printf("[conv][Message][multipart][smart.error] thread=%s code=%s err=%v", threadID, code, err)
@@ -585,6 +813,14 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			c.JSON(status, gin.H{"error": errMsg(err), "code": code})
 			return
 		}
+		if resp == nil || resp.Stream == nil {
+			log.Printf("[conv][Message][multipart][smart.error] thread=%s nil_response", threadID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
+			return
+		}
+		h.recordTopicInteraction(threadID, prompt, resp)
+		stream := resp.Stream
+		source := resp.Source
 		if v, ok := c.Get("quota_remaining"); ok {
 			c.Header("X-Quota-Remaining", toString(v))
 		}
@@ -592,6 +828,24 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		c.Header("X-Thread-ID", threadID)
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+		if len(resp.AllowedSources) > 0 {
+			c.Header("X-Allowed-Sources", strings.Join(resp.AllowedSources, ","))
+		}
+		if len(resp.PubMedReferences) > 0 {
+			c.Header("X-PubMed-References", strings.Join(resp.PubMedReferences, " | "))
+		}
+		if len(resp.Topic.Keywords) > 0 {
+			c.Header("X-Topic-Keywords", strings.Join(resp.Topic.Keywords, ","))
+		}
+		if resp.FallbackReason != "" {
+			c.Header("X-Fallback-Reason", resp.FallbackReason)
+		}
+		if resp.Topic.IsFirstMessage {
+			c.Header("X-Topic-Is-First", "1")
+		} else {
+			c.Header("X-Topic-Is-First", "0")
+		}
+		c.Header("X-Topic-Message-Count", strconv.Itoa(resp.Topic.MessageCount))
 		log.Printf("[conv][Message][multipart][smart.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 		if source == "doc_only" {
@@ -646,7 +900,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			}
 			log.Printf("[conv][Message][multipart][audio.transcribed] chars=%d", len(text))
 		}
-		stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "")
+		snap := h.snapshotTopic(threadID)
+		resp, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "", snap)
 		if err != nil {
 			code := classifyErr(err)
 			log.Printf("[conv][Message][multipart][audio.error] thread=%s code=%s err=%v", threadID, code, err)
@@ -657,6 +912,14 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			c.JSON(status, gin.H{"error": errMsg(err), "code": code})
 			return
 		}
+		if resp == nil || resp.Stream == nil {
+			log.Printf("[conv][Message][multipart][audio.error] thread=%s nil_response", threadID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
+			return
+		}
+		h.recordTopicInteraction(threadID, prompt, resp)
+		stream := resp.Stream
+		source := resp.Source
 		if v, ok := c.Get("quota_remaining"); ok {
 			c.Header("X-Quota-Remaining", toString(v))
 		}
@@ -667,6 +930,24 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		if source == "rag" {
 			c.Header("X-Books-Vector-ID", "vs_680fc484cef081918b2b9588b701e2f4")
 		}
+		if len(resp.AllowedSources) > 0 {
+			c.Header("X-Allowed-Sources", strings.Join(resp.AllowedSources, ","))
+		}
+		if len(resp.PubMedReferences) > 0 {
+			c.Header("X-PubMed-References", strings.Join(resp.PubMedReferences, " | "))
+		}
+		if len(resp.Topic.Keywords) > 0 {
+			c.Header("X-Topic-Keywords", strings.Join(resp.Topic.Keywords, ","))
+		}
+		if resp.FallbackReason != "" {
+			c.Header("X-Fallback-Reason", resp.FallbackReason)
+		}
+		if resp.Topic.IsFirstMessage {
+			c.Header("X-Topic-Is-First", "1")
+		} else {
+			c.Header("X-Topic-Is-First", "0")
+		}
+		c.Header("X-Topic-Message-Count", strconv.Itoa(resp.Topic.MessageCount))
 		log.Printf("[conv][Message][multipart][audio.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 		switch source {
@@ -685,7 +966,8 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		return
 	}
 	// Otros archivos: solo manda prompt (ignora archivo) - usar flujo inteligente
-	stream, source, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "")
+	snap := h.snapshotTopic(threadID)
+	resp, err := h.SmartMessage(c.Request.Context(), threadID, prompt, "", snap)
 	if err != nil {
 		code := classifyErr(err)
 		log.Printf("[conv][Message][multipart][other.error] thread=%s code=%s err=%v", threadID, code, err)
@@ -696,6 +978,14 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		c.JSON(status, gin.H{"error": errMsg(err), "code": code})
 		return
 	}
+	if resp == nil || resp.Stream == nil {
+		log.Printf("[conv][Message][multipart][other.error] thread=%s nil_response", threadID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
+		return
+	}
+	h.recordTopicInteraction(threadID, prompt, resp)
+	stream := resp.Stream
+	source := resp.Source
 	if v, ok := c.Get("quota_remaining"); ok {
 		c.Header("X-Quota-Remaining", toString(v))
 	}
@@ -703,6 +993,24 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 	c.Header("X-Thread-ID", threadID)
 	c.Header("X-Strict-Threads", "1")
 	c.Header("X-Source-Used", source) // Indicar qué fuente se usó
+	if len(resp.AllowedSources) > 0 {
+		c.Header("X-Allowed-Sources", strings.Join(resp.AllowedSources, ","))
+	}
+	if len(resp.PubMedReferences) > 0 {
+		c.Header("X-PubMed-References", strings.Join(resp.PubMedReferences, " | "))
+	}
+	if len(resp.Topic.Keywords) > 0 {
+		c.Header("X-Topic-Keywords", strings.Join(resp.Topic.Keywords, ","))
+	}
+	if resp.FallbackReason != "" {
+		c.Header("X-Fallback-Reason", resp.FallbackReason)
+	}
+	if resp.Topic.IsFirstMessage {
+		c.Header("X-Topic-Is-First", "1")
+	} else {
+		c.Header("X-Topic-Is-First", "0")
+	}
+	c.Header("X-Topic-Message-Count", strconv.Itoa(resp.Topic.MessageCount))
 	log.Printf("[conv][Message][multipart][other.stream] thread=%s source=%s elapsed_ms=%d", threadID, source, time.Since(start).Milliseconds())
 	stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
 	switch source {

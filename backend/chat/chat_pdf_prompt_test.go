@@ -36,6 +36,9 @@ func (m *mockAIPrompt) StreamAssistantMessage(ctx context.Context, threadID, pro
 	m.lastPrompt = prompt
 	return ch, nil
 }
+func (m *mockAIPrompt) StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error) {
+	return m.StreamAssistantMessage(ctx, threadID, prompt)
+}
 func (m *mockAIPrompt) EnsureVectorStore(ctx context.Context, threadID string) (string, error) {
 	return "vs1", nil
 }

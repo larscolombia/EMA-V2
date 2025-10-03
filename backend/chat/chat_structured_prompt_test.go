@@ -26,6 +26,9 @@ func (m *mockAI) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	close(ch)
 	return ch, nil
 }
+func (m *mockAI) StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error) {
+	return m.StreamAssistantMessage(ctx, threadID, prompt)
+}
 func (m *mockAI) EnsureVectorStore(ctx context.Context, threadID string) (string, error) {
 	return "vs_mock", nil
 }
