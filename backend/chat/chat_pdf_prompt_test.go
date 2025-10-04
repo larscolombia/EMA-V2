@@ -51,6 +51,9 @@ func (m *mockAIPrompt) PollFileProcessed(ctx context.Context, fileID string, tim
 func (m *mockAIPrompt) AddFileToVectorStore(ctx context.Context, vsID, fileID string) error {
 	return nil
 }
+func (m *mockAIPrompt) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
+	return nil
+}
 func (m *mockAIPrompt) AddSessionBytes(threadID string, delta int64) {}
 func (m *mockAIPrompt) CountThreadFiles(threadID string) int         { return 0 }
 func (m *mockAIPrompt) GetSessionBytes(threadID string) int64        { return 0 }

@@ -18,6 +18,7 @@ type AIClient interface {
 	UploadAssistantFile(ctx context.Context, threadID, filePath string) (string, error)
 	PollFileProcessed(ctx context.Context, fileID string, timeout time.Duration) error
 	AddFileToVectorStore(ctx context.Context, vsID, fileID string) error
+	PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error
 	AddSessionBytes(threadID string, delta int64)
 	CountThreadFiles(threadID string) int
 	GetSessionBytes(threadID string) int64

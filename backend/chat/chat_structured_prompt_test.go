@@ -39,6 +39,9 @@ func (m *mockAI) PollFileProcessed(ctx context.Context, fileID string, timeout t
 	return nil
 }
 func (m *mockAI) AddFileToVectorStore(ctx context.Context, vsID, fileID string) error { return nil }
+func (m *mockAI) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
+	return nil
+}
 func (m *mockAI) AddSessionBytes(threadID string, delta int64)                        {}
 func (m *mockAI) CountThreadFiles(threadID string) int                                { return 0 }
 func (m *mockAI) GetSessionBytes(threadID string) int64                               { return 0 }

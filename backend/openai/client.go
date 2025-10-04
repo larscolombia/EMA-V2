@@ -444,6 +444,50 @@ func (c *Client) PollFileProcessed(ctx context.Context, fileID string, timeout t
 	return c.pollFileProcessed(ctx, fileID, timeout)
 }
 
+// pollVectorStoreFileIndexed waits until the file's indexing in the vector store is completed.
+// This is CRITICAL because adding a file to a vector store starts an async indexing process.
+// Status can be: in_progress, completed, failed, cancelled.
+func (c *Client) pollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	backoff := 500 * time.Millisecond
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("vector store file %s not indexed in time", fileID)
+		}
+		resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vsID+"/files/"+fileID, nil)
+		if err != nil {
+			return err
+		}
+		var data struct {
+			Status string `json:"status"`
+			ID     string `json:"id"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+
+		if data.Status == "completed" {
+			return nil
+		}
+		if data.Status == "failed" || data.Status == "cancelled" {
+			return fmt.Errorf("vector store file indexing failed: %s (status=%s)", fileID, data.Status)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+			if backoff < 3*time.Second {
+				backoff *= 2
+			}
+		}
+	}
+}
+
+// PollVectorStoreFileIndexed exported wrapper
+func (c *Client) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
+	return c.pollVectorStoreFileIndexed(ctx, vsID, fileID, timeout)
+}
+
 // UploadAssistantFile uploads a file with purpose=assistants; caches per-thread by sha256
 func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath string) (string, error) {
 	if c.key == "" {
@@ -627,6 +671,14 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 		// Assistants v2 messages expect content items like {type:"text", text:"..."}
 		"content": []map[string]any{{"type": "text", "text": prompt}},
 	}
+
+	// DEBUG: Log primeros 300 caracteres del mensaje para verificar contenido
+	preview := prompt
+	if len(preview) > 300 {
+		preview = preview[:300] + "..."
+	}
+	log.Printf("[addMessage][DEBUG] thread=%s msg_preview=%q", threadID, preview)
+
 	resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
 	if err != nil {
 		return err
@@ -648,19 +700,19 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	start := time.Now()
 	// create run
 	payload := map[string]any{"assistant_id": c.AssistantID}
-	// Endurecer instrucciones cuando hay vector store (archivos adjuntos) para exigir verificación y bibliografía
-	hardened := strings.TrimSpace(instructions)
-	if strings.TrimSpace(vectorStoreID) != "" {
-		extra := "\n\nREGLAS DE RIGOR (obligatorias cuando existan archivos adjuntos):\n- Usa EXCLUSIVAMENTE la información recuperada de los archivos del hilo.\n- Si la pregunta no puede responderse con el contenido disponible, responde exactamente: 'No encontré información en el archivo adjunto.'\n- Incluye fragmentos textuales breves cuando cites.\n- Al final agrega: 'Verificación: Alineado con el documento: Sí/No' y una sección 'Bibliografía' listando el/los archivo(s) y, si es posible, páginas o fragmentos.\n- No inventes fuentes ni datos."
-		if hardened == "" {
-			hardened = extra
-		} else {
-			hardened = hardened + extra
+
+	// Las instrucciones ahora vienen completas desde el handler, NO agregamos reglas adicionales
+	// para evitar confusión o dilución del mensaje principal
+	if strings.TrimSpace(instructions) != "" {
+		payload["instructions"] = strings.TrimSpace(instructions)
+		// DEBUG: Log instructions enviadas al run
+		instrPreview := instructions
+		if len(instrPreview) > 300 {
+			instrPreview = instrPreview[:300] + "..."
 		}
+		log.Printf("[runAndWait][DEBUG] thread=%s instructions_preview=%q", threadID, instrPreview)
 	}
-	if hardened != "" {
-		payload["instructions"] = hardened
-	}
+
 	// Always include file_search tool + vector store (even if empty) for consistent retrieval context
 	tools := []map[string]any{{"type": "file_search"}}
 	payload["tools"] = tools

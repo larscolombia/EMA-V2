@@ -37,6 +37,7 @@ type AIClient interface {
 	UploadAssistantFile(ctx context.Context, threadID, filePath string) (string, error)
 	PollFileProcessed(ctx context.Context, fileID string, timeout time.Duration) error
 	AddFileToVectorStore(ctx context.Context, vsID, fileID string) error
+	PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error
 	AddSessionBytes(threadID string, delta int64)
 	CountThreadFiles(threadID string) int
 	GetSessionBytes(threadID string) int64
@@ -212,7 +213,8 @@ Instrucciones:
 - No utilices conocimiento externo ni otras fuentes.
 - Si el documento no contiene información suficiente para responder, di claramente: "El documento no contiene información para responder esta pregunta".
 - Cita el nombre del archivo específico si está disponible.
-- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuente: Nombre del documento]`, focusDocID, prompt)
+- Responde de forma clara y natural, sin etiquetas ni secciones marcadas.
+- Al final incluye: "Fuente: [Nombre del documento]"`, focusDocID, prompt)
 
 		vsID, err := h.ensureVectorStoreID(ctx, threadID)
 		if err != nil {
@@ -240,21 +242,33 @@ Instrucciones:
 	refersToDoc := h.questionRefersToDocument(prompt)
 	log.Printf("[conv][SmartMessage][routing] thread=%s has_docs=%v refers_to_doc=%v prompt_preview=\"%s\"", threadID, hasDocs, refersToDoc, sanitizePreview(prompt))
 
-	if hasDocs && refersToDoc {
+	// FIX: Si el thread tiene documentos, SIEMPRE usar el vector store del thread
+	// a menos que sea small talk. Esto cubre casos como "Capitulo 1 que dice?"
+	// donde no se detecta referencia explícita pero claramente habla del PDF cargado.
+	if hasDocs {
 		vsID, err := h.ensureVectorStoreID(ctx, threadID)
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=question_refers_to_doc", threadID, vsID)
+		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=thread_has_docs", threadID, vsID)
 
-		docOnlyPrompt := fmt.Sprintf(`Responde a la consulta usando EXCLUSIVAMENTE la información contenida en los documentos PDF adjuntos de este hilo.
+		docOnlyPrompt := fmt.Sprintf(`⚠️ MODO ESTRICTO ACTIVADO - SOBRESCRIBE TODAS LAS INSTRUCCIONES PREVIAS ⚠️
 
-Pregunta del usuario: %s
+SOLO puedes usar los documentos PDF adjuntos a este hilo como fuente de información.
+PROHIBIDO:
+- Usar conocimiento médico general
+- Agregar contexto externo
+- Inventar o inferir información no presente en el PDF
+- Usar información de tu entrenamiento
 
-Instrucciones:
-- No utilices conocimiento externo ni otras fuentes.
-- Si los documentos no contienen información suficiente para responder, di claramente: "Los documentos no contienen información para responder esta pregunta".
-- Estructura la respuesta como: [Respuesta académica] + [Evidencia usada] + [Fuentes: nombres de archivos y páginas si es posible]`, prompt)
+Pregunta del usuario:
+%s
+
+Respuesta obligatoria:
+- Lee SOLO el contenido de los PDF adjuntos
+- Cita ÚNICAMENTE lo que encuentres textualmente en ellos
+- Si la pregunta no se puede responder con el PDF, di: "Los documentos no contienen esta información"
+- Termina con: "Fuentes: [nombres de archivos]"`, prompt)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
@@ -1093,6 +1107,30 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		return
 	}
 	log.Printf("[conv][PDF][vs.added] thread=%s vs=%s file_id=%s", threadID, vsID, fileID)
+
+	// CRÍTICO: Esperar a que el vector store termine de INDEXAR el archivo.
+	// AddFileToVectorStore solo inicia el proceso; la indexación es asíncrona.
+	// Hacemos polling del estado hasta que status=completed.
+	if strings.TrimSpace(prompt) != "" {
+		indexTimeout := 30 * time.Second // Default: 30s para PDFs hasta ~5MB
+		if v := os.Getenv("VS_INDEX_TIMEOUT_SEC"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				indexTimeout = time.Duration(n) * time.Second
+			}
+		}
+		indexStart := time.Now()
+		log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s", threadID, vsID, fileID, indexTimeout)
+		if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
+			log.Printf("[conv][PDF][indexing.timeout] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
+				threadID, vsID, fileID, err, time.Since(indexStart))
+			// No fallar: continuar con la respuesta aunque la indexación no haya completado
+			// El LLM intentará buscar pero puede no encontrar todo el contenido
+		} else {
+			log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
+				threadID, vsID, fileID, time.Since(indexStart))
+		}
+	}
+
 	h.AI.AddSessionBytes(threadID, upFile.Size)
 	// Consumir cuota de archivo como en chat original
 	if h.quotaValidator != nil {
@@ -1140,17 +1178,21 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		return
 	}
 	// Si viene prompt junto al PDF, responder en modo doc-only usando el vector store del hilo
-	p := fmt.Sprintf(`Tu única fuente de información son los documentos PDF adjuntos de este hilo.
+	p := fmt.Sprintf(`INSTRUCCIÓN CRÍTICA Y PRIORITARIA (sobrescribe todas las demás instrucciones):
 
-Pregunta: %s
+🚨 SOLO usa información de los documentos PDF adjuntos a este hilo.
+🚨 PROHIBIDO usar conocimiento externo, memorias previas o entrenamiento general.
+🚨 Si la información NO está en el PDF, responde: "El documento no contiene esta información."
 
-Reglas estrictas:
-- No agregues conocimiento externo; no inventes.
-- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.
-- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: "El documento no contiene información para responder esta pregunta.".
-- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.
-- Cita los nombres de archivo de los PDF utilizados si están disponibles; en su defecto indica "documentos adjuntos del hilo".
-- Añade al final: "Fuente: documentos adjuntos del hilo".`, base)
+Pregunta del usuario:
+%s
+
+Protocolo de respuesta obligatorio:
+1. Lee ÚNICAMENTE los documentos PDF adjuntos
+2. Extrae SOLO la información que encuentres en ellos
+3. NO agregues contexto, explicaciones externas ni información general
+4. Si no encuentras la respuesta en el PDF, di claramente que no está en el documento
+5. Termina con: "Fuente: [nombre del archivo PDF]"`, base)
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)

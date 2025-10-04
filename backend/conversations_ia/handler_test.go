@@ -53,6 +53,9 @@ func (m *MockAIClient) PollFileProcessed(ctx context.Context, fileID string, tim
 func (m *MockAIClient) AddFileToVectorStore(ctx context.Context, vsID, fileID string) error {
 	return nil
 }
+func (m *MockAIClient) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
+	return nil
+}
 func (m *MockAIClient) AddSessionBytes(threadID string, delta int64) {}
 func (m *MockAIClient) CountThreadFiles(threadID string) int         { return 0 }
 func (m *MockAIClient) GetSessionBytes(threadID string) int64        { return 0 }
@@ -255,7 +258,8 @@ func TestSmartMessage_ThreadWithDocsGeneralQuestion(t *testing.T) {
 
 	handler := NewHandler(mockClient)
 
-	// Pregunta general que NO menciona documentos - debe usar flujo híbrido, no doc-only
+	// FIX: Si el thread tiene documentos, SIEMPRE debe usar doc_only
+	// Esto corrige el bug donde "Capitulo 1 que dice?" usaba el vector global
 	snap := handler.snapshotTopic("thread_uVISzHAqHBpSDuR8L79OeuDr")
 	resp, err := handler.SmartMessage(context.Background(), "thread_uVISzHAqHBpSDuR8L79OeuDr", "Que es la gastritis?", "", snap)
 
@@ -263,13 +267,9 @@ func TestSmartMessage_ThreadWithDocsGeneralQuestion(t *testing.T) {
 		t.Errorf("No se esperaba error: %v", err)
 	}
 
-	// DEBE usar flujo híbrido (rag/pubmed), NO doc_only
-	if resp.Source == "doc_only" {
-		t.Errorf("No debería usar doc_only para pregunta general, se obtuvo: %s", resp.Source)
-	}
-
-	if resp.Source != "rag" && resp.Source != "pubmed" {
-		t.Errorf("Se esperaba source 'rag' o 'pubmed' para pregunta general, se obtuvo: %s", resp.Source)
+	// DEBE usar doc_only porque el thread tiene documentos cargados
+	if resp.Source != "doc_only" {
+		t.Errorf("Debe usar doc_only cuando thread tiene documentos, se obtuvo: %s", resp.Source)
 	}
 
 	response := <-resp.Stream
