@@ -442,11 +442,11 @@ Respuesta obligatoria:
 				"- MÍNIMO 250-350 palabras de contenido sustancial\n"+
 				"- Tono académico: preciso, formal, con profundidad científica\n\n"+
 
-				"REGLAS DE FUENTES:\n"+
+				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
 				"PARA LIBROS/MANUALES:\n"+
-				"- Usa el nombre exacto del documento (ej: 'Harrison's Principles of Internal Medicine')\n"+
-				"- NO uses 'Base de conocimiento médico' genérico\n"+
-				"- Formato: Autor/Título del libro (sin inventar datos que no tengas)\n\n"+
+				"- Busca en 'CONTEXTO PRINCIPAL' arriba el nombre EXACTO del libro usado\n"+
+				"- DEBES citarlo textualmente (ej: 'Harrison's Principles of Internal Medicine', 'Braunwald's Heart Disease')\n"+
+				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas', 'Base de conocimiento', 'Fuentes especializadas', etc.\n\n"+
 				"PARA PUBMED:\n"+
 				"- Formato OBLIGATORIO: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
 				"- Usa SOLO información del bloque 'Referencias de PubMed' proporcionado\n"+
@@ -456,7 +456,10 @@ Respuesta obligatoria:
 				"**Libros y Manuales:**\n"+
 				"- [Listar fuentes de libros con nombres exactos]\n\n"+
 				"**Artículos Científicos (PubMed):**\n"+
-				"- [Listar artículos con formato: Título (PMID: ####, Año)]\n",
+				"- [Listar artículos con formato: Título (PMID: ####, Año)]\n\n"+
+				"PROHIBIDO INCLUIR:\n"+
+				"- NO incluyas secciones 'Verificación:', 'Alineado con el documento:', ni 'Bibliografía:'\n"+
+				"- SOLO incluye '## Fuentes:' al final de la respuesta\n",
 			ctxVec, ctxPub, refsBlock, prompt,
 		)
 	} else if integrationMode == "vector_only" {
@@ -486,11 +489,13 @@ Respuesta obligatoria:
 				"- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos\n"+
 				"- Tono académico: preciso, formal y con profundidad científica\n\n"+
 
-				"REGLAS ESTRICTAS DE FUENTES:\n"+
-				"- Usa el nombre exacto del documento proporcionado en el contexto\n"+
-				"- NO uses 'Base de conocimiento médico' genérico\n"+
-				"- Formato: Título del libro/manual (sin inventar autor/año si no los tienes)\n"+
-				"- Si no encuentras nombre específico del documento, usa 'Fuentes médicas especializadas'\n",
+				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
+				"- En el 'Contexto recuperado' arriba encontrarás el nombre EXACTO del libro/manual usado (ej: 'Harrison's Principles of Internal Medicine', 'Braunwald's Heart Disease')\n"+
+				"- DEBES citar ese nombre específico en la sección '## Fuentes:'\n"+
+				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas especializadas', 'Base de conocimiento', 'Literatura médica', 'Fuentes especializadas', etc.\n"+
+				"- Formato: Título exacto del libro (tal como aparece en el contexto)\n"+
+				"- NO incluyas secciones 'Verificación', 'Alineado con el documento', ni 'Bibliografía' - SOLO '## Fuentes:'\n"+
+				"- Ejemplo correcto: '## Fuentes:\nHarrison's Principles of Internal Medicine'\n",
 			ctxVec, prompt,
 		)
 	} else {
@@ -527,7 +532,10 @@ Respuesta obligatoria:
 				"- NO inventes títulos, PMIDs, autores ni años que no estén en el bloque de referencias\n"+
 				"- Si el año no está disponible en las referencias, omítelo pero mantén el PMID\n"+
 				"- Cada referencia DEBE tener PMID verificable\n"+
-				"- Si no hay referencias válidas, indica claramente: 'Fuente: PubMed (búsqueda general)'\n",
+				"- Si no hay referencias válidas, indica claramente: 'Fuente: PubMed (búsqueda general)'\n\n"+
+				"PROHIBIDO INCLUIR:\n"+
+				"- NO incluyas secciones 'Verificación:', 'Alineado con el documento:', ni 'Bibliografía:'\n"+
+				"- SOLO incluye '## Fuentes:' con los artículos y sus PMIDs específicos\n",
 			ctxPub, refsBlock, prompt,
 		)
 	}
