@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ema-backend/openai"
 )
 
 // mockAI implements AIClient for testing prompt generation without calling OpenAI.
@@ -57,6 +59,9 @@ func (m *mockAI) ListVectorStoreFiles(ctx context.Context, threadID string) ([]s
 	return []string{}, nil
 }
 func (m *mockAI) GetVectorStoreID(threadID string) string { return "vs_mock" }
+func (m *mockAI) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error) {
+	return []openai.ThreadMessage{}, nil
+}
 
 // TestStructuredPromptContent ensures the default structured prompt contains all required sections.
 func TestStructuredPromptContent(t *testing.T) {

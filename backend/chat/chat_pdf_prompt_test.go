@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"ema-backend/openai"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -71,6 +73,9 @@ func (m *mockAIPrompt) ListVectorStoreFiles(ctx context.Context, threadID string
 	return []string{}, nil
 }
 func (m *mockAIPrompt) GetVectorStoreID(threadID string) string { return "vs1" }
+func (m *mockAIPrompt) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error) {
+	return []openai.ThreadMessage{}, nil
+}
 
 // Test que verifica selección de prompt según STRUCTURED_PDF_SUMMARY
 func TestPDFStructuredPromptToggle(t *testing.T) {

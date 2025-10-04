@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"time"
+
+	"ema-backend/openai"
 )
 
 // AIClient abstracts the OpenAI client for easier mocking in unit tests.
@@ -31,4 +33,6 @@ type AIClient interface {
 	ForceNewVectorStore(ctx context.Context, threadID string) (string, error)
 	ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error)
 	GetVectorStoreID(threadID string) string
+	// Obtener historial conversacional para enriquecer búsquedas
+	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 }

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ema-backend/openai"
 )
 
 // MockAIClient implementa AIClient para tests
@@ -73,6 +75,9 @@ func (m *MockAIClient) ListVectorStoreFiles(ctx context.Context, threadID string
 	return []string{}, nil
 }
 func (m *MockAIClient) GetVectorStoreID(threadID string) string { return "vs_test" }
+func (m *MockAIClient) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error) {
+	return []openai.ThreadMessage{}, nil // Por defecto, sin historial en tests
+}
 
 // Implementación de los nuevos métodos
 func (m *MockAIClient) SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error) {

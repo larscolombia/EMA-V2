@@ -843,6 +843,66 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	return "", nil
 }
 
+// ThreadMessage representa un mensaje del historial del thread
+type ThreadMessage struct {
+	Role    string // "user" o "assistant"
+	Content string
+}
+
+// GetThreadMessages obtiene los últimos N mensajes del historial del thread
+// para proporcionar contexto conversacional en búsquedas
+func (c *Client) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]ThreadMessage, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	path := fmt.Sprintf("/threads/%s/messages?limit=%d&order=desc", threadID, limit)
+	resp, err := c.doJSON(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var ml struct {
+		Data []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text struct {
+					Value string `json:"value"`
+				} `json:"text"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&ml); err != nil {
+		return nil, err
+	}
+
+	messages := make([]ThreadMessage, 0, len(ml.Data))
+	for _, m := range ml.Data {
+		var content bytes.Buffer
+		for _, c := range m.Content {
+			if c.Type == "text" && c.Text.Value != "" {
+				content.WriteString(c.Text.Value)
+			}
+		}
+		if text := content.String(); text != "" {
+			messages = append(messages, ThreadMessage{
+				Role:    m.Role,
+				Content: text,
+			})
+		}
+	}
+
+	// Reverse para orden cronológico (los obtuvimos en orden desc)
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
+}
+
 // StreamAssistantMessage uses Assistants API but emits the final text as a single chunk for simplicity.
 func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt string) (<-chan string, error) {
 	if c.key == "" || c.AssistantID == "" {

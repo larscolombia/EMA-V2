@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"ema-backend/openai"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -51,6 +53,8 @@ type AIClient interface {
 	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
 	SearchPubMed(ctx context.Context, query string) (string, error)
 	StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
+	// Obtener historial conversacional para enriquecer búsquedas
+	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 }
 
 // VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
@@ -196,6 +200,53 @@ type Documento struct {
 	Referencias []string
 }
 
+// buildContextualizedQuery enriquece el prompt actual con contexto conversacional previo
+// para mejorar la relevancia de las búsquedas en vector stores, especialmente en preguntas
+// de seguimiento como "Y cuál sería el tratamiento?" que necesitan contexto de la pregunta anterior.
+func (h *Handler) buildContextualizedQuery(ctx context.Context, threadID, currentPrompt string) string {
+	// Si el prompt ya es largo y detallado, probablemente no necesita enriquecimiento
+	if len(currentPrompt) > 100 {
+		return currentPrompt
+	}
+
+	// Obtener últimos 3 mensajes del historial (para no sobrecargar)
+	messages, err := h.AI.GetThreadMessages(ctx, threadID, 6) // 3 pares user+assistant
+	if err != nil || len(messages) == 0 {
+		log.Printf("[conv][contextualize][no_history] thread=%s using_original_prompt", threadID)
+		return currentPrompt
+	}
+
+	// Construir contexto con los últimos intercambios
+	var contextParts []string
+
+	// Tomar máximo los últimos 2 mensajes (1 user + 1 assistant) para mantener contexto reciente
+	recentCount := 0
+	for i := len(messages) - 1; i >= 0 && recentCount < 2; i-- {
+		msg := messages[i]
+		// Truncar mensajes muy largos para no exceder límites
+		content := msg.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		contextParts = append([]string{fmt.Sprintf("%s: %s", msg.Role, content)}, contextParts...)
+		recentCount++
+	}
+
+	if len(contextParts) == 0 {
+		return currentPrompt
+	}
+
+	// Construir query enriquecida
+	enrichedQuery := fmt.Sprintf("Contexto previo:\n%s\n\nPregunta actual: %s",
+		strings.Join(contextParts, "\n"),
+		currentPrompt)
+
+	log.Printf("[conv][contextualize][enriched] thread=%s original_len=%d enriched_len=%d",
+		threadID, len(currentPrompt), len(enrichedQuery))
+
+	return enrichedQuery
+}
+
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt, focusDocID string, snap TopicSnapshot) (*SmartResponse, error) {
 	resp := &SmartResponse{
@@ -294,15 +345,20 @@ Respuesta obligatoria:
 
 	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s reason=general_question", threadID, targetVectorID)
 
+	// IMPORTANTE: Enriquecer el prompt con contexto conversacional para búsquedas
+	// Esto resuelve el problema de preguntas de seguimiento como "Y cuál sería el tratamiento?"
+	// que necesitan contexto de la pregunta anterior para buscar contenido relevante.
+	searchQuery := h.buildContextualizedQuery(ctx, threadID, prompt)
+
 	searchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
 	searchStart := time.Now()
-	vdocs := h.buscarVector(searchCtx, targetVectorID, prompt)
+	vdocs := h.buscarVector(searchCtx, targetVectorID, searchQuery) // Usar query enriquecida
 	vectorTime := time.Since(searchStart)
 
 	pubmedStart := time.Now()
-	pdocs := h.buscarPubMed(searchCtx, prompt)
+	pdocs := h.buscarPubMed(searchCtx, searchQuery) // Usar query enriquecida
 	pubmedTime := time.Since(pubmedStart)
 
 	log.Printf("[conv][SmartMessage][search.timing] thread=%s vector_ms=%d pubmed_ms=%d total_ms=%d",
@@ -1119,24 +1175,24 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	// CRÍTICO: Esperar a que el vector store termine de INDEXAR el archivo.
 	// AddFileToVectorStore solo inicia el proceso; la indexación es asíncrona.
 	// Hacemos polling del estado hasta que status=completed.
-	if strings.TrimSpace(prompt) != "" {
-		indexTimeout := 30 * time.Second // Default: 30s para PDFs hasta ~5MB
-		if v := os.Getenv("VS_INDEX_TIMEOUT_SEC"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				indexTimeout = time.Duration(n) * time.Second
-			}
+	// IMPORTANTE: Esto se hace SIEMPRE, incluso si no hay prompt inicial,
+	// para que las preguntas subsecuentes encuentren el contenido indexado.
+	indexTimeout := 30 * time.Second // Default: 30s para PDFs hasta ~5MB
+	if v := os.Getenv("VS_INDEX_TIMEOUT_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			indexTimeout = time.Duration(n) * time.Second
 		}
-		indexStart := time.Now()
-		log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s", threadID, vsID, fileID, indexTimeout)
-		if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
-			log.Printf("[conv][PDF][indexing.timeout] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
-				threadID, vsID, fileID, err, time.Since(indexStart))
-			// No fallar: continuar con la respuesta aunque la indexación no haya completado
-			// El LLM intentará buscar pero puede no encontrar todo el contenido
-		} else {
-			log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
-				threadID, vsID, fileID, time.Since(indexStart))
-		}
+	}
+	indexStart := time.Now()
+	log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s", threadID, vsID, fileID, indexTimeout)
+	if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
+		log.Printf("[conv][PDF][indexing.timeout] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
+			threadID, vsID, fileID, err, time.Since(indexStart))
+		// No fallar: continuar aunque la indexación no haya completado
+		// El usuario verá la confirmación pero las primeras preguntas pueden fallar
+	} else {
+		log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
+			threadID, vsID, fileID, time.Since(indexStart))
 	}
 
 	h.AI.AddSessionBytes(threadID, upFile.Size)
