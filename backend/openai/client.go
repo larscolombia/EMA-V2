@@ -722,7 +722,13 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 				"vector_store_ids": []string{vectorStoreID},
 			},
 		}
+		log.Printf("[runAndWait][DEBUG] thread=%s OVERRIDE_VECTOR_STORE=%s (forcing file_search to use ONLY this vector)", threadID, vectorStoreID)
 	}
+
+	// DEBUG: Log payload completo para verificar qué estamos enviando
+	payloadJSON, _ := json.Marshal(payload)
+	log.Printf("[runAndWait][DEBUG] thread=%s run_payload=%s", threadID, string(payloadJSON))
+
 	resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/runs", payload)
 	if err != nil {
 		return "", err
@@ -733,12 +739,23 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		return "", fmt.Errorf("create run failed: %s", string(b))
 	}
 	var run struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID            string `json:"id"`
+		Status        string `json:"status"`
+		ToolResources struct {
+			FileSearch struct {
+				VectorStoreIDs []string `json:"vector_store_ids"`
+			} `json:"file_search"`
+		} `json:"tool_resources"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&run); err != nil {
 		return "", err
 	}
+
+	// DEBUG: Verificar qué vector stores está usando realmente el run
+	if len(run.ToolResources.FileSearch.VectorStoreIDs) > 0 {
+		log.Printf("[runAndWait][DEBUG] thread=%s run_id=%s ACTUAL_VECTOR_STORES=%v", threadID, run.ID, run.ToolResources.FileSearch.VectorStoreIDs)
+	}
+
 	// poll
 	for {
 		select {
