@@ -450,30 +450,69 @@ func (c *Client) PollFileProcessed(ctx context.Context, fileID string, timeout t
 func (c *Client) pollVectorStoreFileIndexed(ctx context.Context, vsID, fileID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	backoff := 500 * time.Millisecond
+	pollCount := 0
+
 	for {
+		pollCount++
 		if time.Now().After(deadline) {
+			log.Printf("[indexing][timeout] vs=%s file=%s polls=%d elapsed=%s", vsID, fileID, pollCount, timeout)
 			return fmt.Errorf("vector store file %s not indexed in time", fileID)
 		}
+
 		resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vsID+"/files/"+fileID, nil)
 		if err != nil {
+			log.Printf("[indexing][api_error] vs=%s file=%s err=%v", vsID, fileID, err)
 			return err
 		}
+
 		var data struct {
-			Status string `json:"status"`
-			ID     string `json:"id"`
+			Status    string `json:"status"`
+			ID        string `json:"id"`
+			LastError *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"last_error"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&data)
 		resp.Body.Close()
 
+		// Log estado en cada poll
+		if pollCount%5 == 1 { // Log cada 5 polls para no saturar
+			log.Printf("[indexing][poll] vs=%s file=%s status=%s poll_count=%d", vsID, fileID, data.Status, pollCount)
+		}
+
 		if data.Status == "completed" {
+			log.Printf("[indexing][success] vs=%s file=%s polls=%d", vsID, fileID, pollCount)
 			return nil
 		}
-		if data.Status == "failed" || data.Status == "cancelled" {
-			return fmt.Errorf("vector store file indexing failed: %s (status=%s)", fileID, data.Status)
+
+		// Si falla, loggear el error detallado
+		if data.Status == "failed" {
+			errMsg := "unknown error"
+			if data.LastError != nil {
+				errMsg = fmt.Sprintf("%s: %s", data.LastError.Code, data.LastError.Message)
+			}
+			log.Printf("[indexing][FAILED] vs=%s file=%s polls=%d error=%s", vsID, fileID, pollCount, errMsg)
+
+			// Si falló muy rápido (<5s), podría ser transitorio - dar una última oportunidad
+			elapsed := time.Since(deadline.Add(-timeout))
+			if elapsed < 5*time.Second && pollCount < 10 {
+				log.Printf("[indexing][retry_after_fail] vs=%s file=%s reason=too_fast elapsed=%s", vsID, fileID, elapsed)
+				time.Sleep(2 * time.Second) // Esperar 2s antes de reintentar
+				continue
+			}
+
+			return fmt.Errorf("vector store file indexing failed: %s (status=%s, error=%s)", fileID, data.Status, errMsg)
+		}
+
+		if data.Status == "cancelled" {
+			log.Printf("[indexing][cancelled] vs=%s file=%s polls=%d", vsID, fileID, pollCount)
+			return fmt.Errorf("vector store file indexing cancelled: %s", fileID)
 		}
 
 		select {
 		case <-ctx.Done():
+			log.Printf("[indexing][context_cancelled] vs=%s file=%s polls=%d", vsID, fileID, pollCount)
 			return ctx.Err()
 		case <-time.After(backoff):
 			if backoff < 3*time.Second {

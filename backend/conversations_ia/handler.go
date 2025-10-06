@@ -1177,19 +1177,50 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	// Hacemos polling del estado hasta que status=completed.
 	// IMPORTANTE: Esto se hace SIEMPRE, incluso si no hay prompt inicial,
 	// para que las preguntas subsecuentes encuentren el contenido indexado.
-	indexTimeout := 30 * time.Second // Default: 30s para PDFs hasta ~5MB
+
+	// Timeout dinámico basado en tamaño del archivo
+	// ~2-3 segundos por MB es una estimación conservadora para PDFs grandes
+	indexTimeout := 30 * time.Second // Default mínimo
+	fileSizeMB := float64(upFile.Size) / (1024 * 1024)
+	if fileSizeMB > 5 {
+		// Para PDFs grandes, calcular timeout dinámico: 3s por MB con mínimo de 45s
+		calculatedTimeout := time.Duration(fileSizeMB*3) * time.Second
+		if calculatedTimeout > indexTimeout {
+			indexTimeout = calculatedTimeout
+		}
+		log.Printf("[conv][PDF][large_file] size_mb=%.2f calculated_timeout=%s", fileSizeMB, indexTimeout)
+	}
+
+	// Permitir override manual por variable de entorno
 	if v := os.Getenv("VS_INDEX_TIMEOUT_SEC"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			indexTimeout = time.Duration(n) * time.Second
+			log.Printf("[conv][PDF][timeout_override] manual_timeout=%s", indexTimeout)
 		}
 	}
+
 	indexStart := time.Now()
-	log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s", threadID, vsID, fileID, indexTimeout)
+	log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s size_mb=%.2f",
+		threadID, vsID, fileID, indexTimeout, fileSizeMB)
 	if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
-		log.Printf("[conv][PDF][indexing.timeout] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
+		log.Printf("[conv][PDF][indexing.error] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
 			threadID, vsID, fileID, err, time.Since(indexStart))
-		// No fallar: continuar aunque la indexación no haya completado
-		// El usuario verá la confirmación pero las primeras preguntas pueden fallar
+
+		// Diferenciar entre timeout (puede completarse después) y failed (error permanente)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "status=failed") || strings.Contains(errMsg, "status=cancelled") {
+			// Error PERMANENTE: el archivo NO se indexará nunca
+			// Retornar error al usuario en lugar de confirmar
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "PDF indexing failed",
+				"details": "OpenAI failed to process the PDF. This may be due to file corruption, unsupported format, or size limits. Please try with a different file.",
+			})
+			return
+		}
+
+		// Si es timeout, continuar (puede completarse en background)
+		// El usuario verá la confirmación pero las primeras preguntas pueden tardar
+		log.Printf("[conv][PDF][indexing.timeout.continuing] thread=%s vs=%s file_id=%s", threadID, vsID, fileID)
 	} else {
 		log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
 			threadID, vsID, fileID, time.Since(indexStart))
