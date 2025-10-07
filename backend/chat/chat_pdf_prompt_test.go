@@ -73,6 +73,9 @@ func (m *mockAIPrompt) ListVectorStoreFiles(ctx context.Context, threadID string
 	return []string{}, nil
 }
 func (m *mockAIPrompt) GetVectorStoreID(threadID string) string { return "vs1" }
+func (m *mockAIPrompt) ClearVectorStoreFiles(ctx context.Context, vsID string) error {
+	return nil
+}
 func (m *mockAIPrompt) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error) {
 	return []openai.ThreadMessage{}, nil
 }

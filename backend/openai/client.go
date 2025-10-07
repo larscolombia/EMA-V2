@@ -404,6 +404,107 @@ func (c *Client) AddFileToVectorStore(ctx context.Context, vsID, fileID string) 
 	return nil
 }
 
+// removeFileFromVectorStore removes a file from a vector store (not from OpenAI files, just from the vector store).
+func (c *Client) removeFileFromVectorStore(ctx context.Context, vsID, fileID string) error {
+	if vsID == "" || fileID == "" {
+		return fmt.Errorf("vsID or fileID is empty")
+	}
+	resp, err := c.doJSON(ctx, http.MethodDelete, "/vector_stores/"+vsID+"/files/"+fileID, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// 200-299 significa éxito
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		log.Printf("[vector_store][remove_file] vs=%s file=%s removed", vsID, fileID)
+		return nil
+	}
+	// 404 significa que el archivo ya no está en el vector store (no es un error crítico)
+	if resp.StatusCode == 404 {
+		log.Printf("[vector_store][remove_file] vs=%s file=%s already_removed", vsID, fileID)
+		return nil
+	}
+	b, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("remove file from vector store failed: %s (status=%d)", string(b), resp.StatusCode)
+}
+
+// ClearVectorStoreFiles removes ALL files from a vector store to ensure clean state.
+// This is critical to prevent mixing PDFs from different uploads.
+// Also invalidates the file cache for the thread to force fresh uploads.
+func (c *Client) ClearVectorStoreFiles(ctx context.Context, vsID string) error {
+	if vsID == "" {
+		return fmt.Errorf("vsID is empty")
+	}
+
+	// Buscar el threadID correspondiente a este vector store para limpiar su caché
+	var threadID string
+	c.vsMu.RLock()
+	for tid, vid := range c.vectorStore {
+		if vid == vsID {
+			threadID = tid
+			break
+		}
+	}
+	c.vsMu.RUnlock()
+
+	// Listar archivos actuales en el vector store
+	resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vsID+"/files?limit=100", nil)
+	if err != nil {
+		return fmt.Errorf("failed to list vector store files: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("list vector store files failed: %s (status=%d)", string(b), resp.StatusCode)
+	}
+
+	var data struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return fmt.Errorf("failed to decode vector store files: %v", err)
+	}
+
+	if len(data.Data) == 0 {
+		log.Printf("[vector_store][clear] vs=%s already_empty", vsID)
+		return nil
+	}
+
+	log.Printf("[vector_store][clear] vs=%s removing_files_count=%d", vsID, len(data.Data))
+
+	// Eliminar cada archivo del vector store
+	for _, file := range data.Data {
+		if err := c.removeFileFromVectorStore(ctx, vsID, file.ID); err != nil {
+			// Log error pero continuar con los demás archivos
+			log.Printf("[vector_store][clear] vs=%s file=%s error=%v", vsID, file.ID, err)
+		}
+	}
+
+	// CRÍTICO: Invalidar caché de archivos para este thread
+	// Esto fuerza que el próximo upload sea un archivo NUEVO en lugar de reutilizar
+	// un file_id anterior que podría estar corrupto o apuntar a un archivo viejo.
+	if threadID != "" {
+		c.fileMu.Lock()
+		clearedCount := 0
+		for key := range c.fileCache {
+			if strings.HasPrefix(key, threadID+"|") {
+				delete(c.fileCache, key)
+				clearedCount++
+			}
+		}
+		c.fileMu.Unlock()
+		if clearedCount > 0 {
+			log.Printf("[vector_store][clear] vs=%s thread=%s invalidated_file_cache_entries=%d", vsID, threadID, clearedCount)
+		}
+	}
+
+	log.Printf("[vector_store][clear] vs=%s cleared_successfully", vsID)
+	return nil
+}
+
 // pollFileProcessed waits until file status=processed or timeout.
 func (c *Client) pollFileProcessed(ctx context.Context, fileID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

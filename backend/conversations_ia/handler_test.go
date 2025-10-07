@@ -75,6 +75,9 @@ func (m *MockAIClient) ListVectorStoreFiles(ctx context.Context, threadID string
 	return []string{}, nil
 }
 func (m *MockAIClient) GetVectorStoreID(threadID string) string { return "vs_test" }
+func (m *MockAIClient) ClearVectorStoreFiles(ctx context.Context, vsID string) error {
+	return nil // Mock: siempre exitoso
+}
 func (m *MockAIClient) GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error) {
 	return []openai.ThreadMessage{}, nil // Por defecto, sin historial en tests
 }
@@ -104,6 +107,10 @@ func (m *MockAIClient) StreamAssistantWithSpecificVectorStore(ctx context.Contex
 // MockAIClientWithMetadata implementa AIClientWithMetadata para tests avanzados
 type MockAIClientWithMetadata struct {
 	*MockAIClient
+}
+
+func (m *MockAIClientWithMetadata) ClearVectorStoreFiles(ctx context.Context, vsID string) error {
+	return nil // Mock: siempre exitoso
 }
 
 func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {

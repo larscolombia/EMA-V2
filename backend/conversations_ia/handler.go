@@ -49,6 +49,8 @@ type AIClient interface {
 	ForceNewVectorStore(ctx context.Context, threadID string) (string, error)
 	ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error)
 	GetVectorStoreID(threadID string) string
+	// Limpiar archivos del vector store para prevenir mixing de PDFs
+	ClearVectorStoreFiles(ctx context.Context, vsID string) error
 	// Nuevos métodos para búsqueda específica en RAG y PubMed
 	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
 	SearchPubMed(ctx context.Context, query string) (string, error)
@@ -318,7 +320,10 @@ Pregunta del usuario:
 Respuesta obligatoria:
 - Lee SOLO el contenido de los PDF adjuntos
 - Cita ÚNICAMENTE lo que encuentres textualmente en ellos
-- Si la pregunta no se puede responder con el PDF, di: "Los documentos no contienen esta información"
+- Si preguntan por "capítulo N" o "sección X" y no encuentras ese título exacto:
+  * Busca capítulos numerados de otras formas (romano, arábigo, etc.)
+  * Busca la sección por su posición o tema relacionado
+  * Si aún así no existe, di: "Los documentos no contienen esta información"
 - Termina con: "Fuentes: [nombres de archivos]"`, prompt)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
@@ -1145,6 +1150,17 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		return
 	}
 	log.Printf("[conv][PDF][vs.ready] thread=%s vs=%s", threadID, vsID)
+
+	// CRÍTICO: Limpiar archivos anteriores del vector store antes de agregar el nuevo.
+	// Esto previene que OpenAI mezcle contenido de PDFs diferentes al responder.
+	// Sin esto, el vector store acumula todos los PDFs que se han subido alguna vez,
+	// causando respuestas incorrectas con contenido de PDFs anteriores.
+	log.Printf("[conv][PDF][clearing_old_files] thread=%s vs=%s", threadID, vsID)
+	if err := h.AI.ClearVectorStoreFiles(c.Request.Context(), vsID); err != nil {
+		// No fallar si la limpieza falla (best-effort), pero loggearlo
+		log.Printf("[conv][PDF][warn] clear_failed thread=%s vs=%s err=%v", threadID, vsID, err)
+	}
+
 	fileID, err := h.AI.UploadAssistantFile(c.Request.Context(), threadID, tmp)
 	if err != nil {
 		log.Printf("[conv][PDF][error] upload err=%v", err)

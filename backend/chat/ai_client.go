@@ -33,6 +33,8 @@ type AIClient interface {
 	ForceNewVectorStore(ctx context.Context, threadID string) (string, error)
 	ListVectorStoreFiles(ctx context.Context, threadID string) ([]string, error)
 	GetVectorStoreID(threadID string) string
+	// Limpiar archivos del vector store para prevenir mixing de PDFs
+	ClearVectorStoreFiles(ctx context.Context, vsID string) error
 	// Obtener historial conversacional para enriquecer búsquedas
 	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 }
