@@ -307,6 +307,8 @@ Instrucciones:
 
 		docOnlyPrompt := fmt.Sprintf(`⚠️ MODO ESTRICTO ACTIVADO - SOBRESCRIBE TODAS LAS INSTRUCCIONES PREVIAS ⚠️
 
+CONTEXTO: Este hilo tiene documentos PDF adjuntos que el usuario acaba de cargar.
+
 SOLO puedes usar los documentos PDF adjuntos a este hilo como fuente de información.
 PROHIBIDO:
 - Usar conocimiento médico general
@@ -314,11 +316,16 @@ PROHIBIDO:
 - Inventar o inferir información no presente en el PDF
 - Usar información de tu entrenamiento
 
+IMPORTANTE: Si el usuario pregunta por "este PDF", "el documento", "el archivo", etc.,
+se refiere a los PDFs que YA están adjuntos en este hilo. Usa el file_search tool
+para buscar en TODOS los PDFs disponibles.
+
 Pregunta del usuario:
 %s
 
 Respuesta obligatoria:
-- Lee SOLO el contenido de los PDF adjuntos
+- Usa el file_search tool para buscar en los PDF adjuntos
+- Lee SOLO el contenido de los PDF que encuentres
 - Cita ÚNICAMENTE lo que encuentres textualmente en ellos
 - Si preguntan por "capítulo N" o "sección X" y no encuentras ese título exacto:
   * Busca capítulos numerados de otras formas (romano, arábigo, etc.)
@@ -1241,6 +1248,13 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
 			threadID, vsID, fileID, time.Since(indexStart))
 	}
+
+	// CRÍTICO: Esperar unos segundos adicionales después de indexing=completed
+	// OpenAI tiene un retraso interno entre status=completed y archivo "visible" para file_search
+	// Sin esto, las primeras preguntas pueden fallar con "no encuentro el archivo"
+	log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_5s reason=openai_search_propagation", threadID)
+	time.Sleep(5 * time.Second)
+	log.Printf("[conv][PDF][post_index_wait] thread=%s wait_complete", threadID)
 
 	h.AI.AddSessionBytes(threadID, upFile.Size)
 	// Consumir cuota de archivo como en chat original
