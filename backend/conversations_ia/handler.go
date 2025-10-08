@@ -546,33 +546,39 @@ FORMATO DE RESPUESTA:
 				"Contexto recuperado (Libros y Manuales Médicos):\n%s\n\n"+
 				"Pregunta del usuario:\n%s\n\n"+
 
+				"⚠️ REGLA CRÍTICA DE EXTRAPOLACIÓN (MODO SOLO-VECTOR):\n"+
+				"- SOLO puedes responder con información EXPLÍCITAMENTE CONTENIDA en el 'Contexto recuperado' arriba\n"+
+				"- ❌ PROHIBIDO hacer inferencias, extrapolaciones o conexiones lógicas más allá del texto literal\n"+
+				"- ❌ PROHIBIDO aplicar conceptos fisiológicos normales a patologías no mencionadas en el texto\n"+
+				"- ❌ PROHIBIDO agregar información clínica que NO aparezca textualmente en el contexto\n"+
+				"- ✅ SI el contexto habla de desarrollo embrionario, NO lo extrapoles a tumores\n"+
+				"- ✅ SI el contexto NO menciona específicamente la patología preguntada, DEBES responder:\n"+
+				"     \"El material disponible no contiene información específica sobre [tema]. El contexto recuperado trata sobre [tema real del texto], que no aborda directamente la pregunta planteada.\"\n\n"+
+
 				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
 				"Estructura la respuesta así:\n\n"+
-				"[Respuesta académica detallada y profunda - mínimo 2-3 párrafos desarrollados]\n\n"+
+				"[Respuesta ESTRICTAMENTE basada en el texto recuperado - mínimo 2-3 párrafos SI hay información relevante]\n\n"+
 				"## Fuentes:\n"+
 				"[Fuentes en formato APA]\n\n"+
 
 				"REGLAS ESTRICTAS DE CONTENIDO:\n"+
 				"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
 				"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
-				"- PROFUNDIDAD ACADÉMICA: Desarrolla conceptos, fisiopatología, clasificaciones, manifestaciones clínicas, diagnóstico y tratamiento cuando sea relevante\n"+
-				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
-				"  * Valores de laboratorio con rangos (ej: NT-proBNP >300 pg/mL, FE <40%%)\n"+
-				"  * Hallazgos de imagen con mediciones (ej: diámetro ventricular >55mm)\n"+
-				"  * Umbrales clínicos específicos (ej: clase funcional NYHA, escalas de riesgo)\n"+
-				"  * Criterios clasificatorios oficiales (ej: ESC 2021, AHA/ACC 2022)\n"+
-				"- MÍNIMO 200-300 palabras de contenido académico sustancial\n"+
-				"- Incluye mecanismos, etiología, presentación clínica, enfoques diagnósticos y terapéuticos\n"+
-				"- Tono académico: preciso, formal y con profundidad científica\n\n"+
+				"- VERIFICACIÓN CRÍTICA: Antes de escribir, pregúntate: '¿Esta información aparece TEXTUALMENTE en el contexto recuperado?'\n"+
+				"- Si la respuesta es NO, NO la incluyas\n"+
+				"- NIVEL ACADÉMICO: Desarrolla solo conceptos que estén EXPLÍCITOS en el texto\n"+
+				"- VALORES CUANTITATIVOS: Incluye SOLO los que aparezcan en el texto recuperado\n"+
+				"- HONESTIDAD ACADÉMICA: Es mejor decir 'no encontré información' que inventar o extrapolar\n"+
+				"- Tono académico: preciso, formal y ESTRICTAMENTE fiel al documento fuente\n\n"+
 
 				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
-				"- En el 'Contexto recuperado' arriba encontrarás el nombre EXACTO del libro/manual usado (ej: 'Harrison's Principles of Internal Medicine', 'Braunwald's Heart Disease')\n"+
+				"- En el 'Contexto recuperado' arriba encontrarás el nombre EXACTO del libro/manual usado\n"+
 				"- DEBES citar ese nombre específico en la sección '## Fuentes:'\n"+
-				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas especializadas', 'Base de conocimiento', 'Literatura médica', 'Fuentes especializadas', etc.\n"+
+				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas especializadas', 'Base de conocimiento', etc.\n"+
 				"- Formato preferido: Cita en normas APA 7 (Autor. (Año). Título. Editorial.)\n"+
 				"- Si no tienes metadatos completos, usa: Título exacto del libro. (s.f.). [Libro de texto médico].\n"+
 				"- NO incluyas secciones 'Verificación', 'Alineado con el documento', ni 'Bibliografía' - SOLO '## Fuentes:'\n"+
-				"- Ejemplo mínimo: '## Fuentes:\nHarrison's Principles of Internal Medicine. (s.f.). [Libro de texto médico].'\n"+
+				"- Ejemplo mínimo: '## Fuentes:\nBm Embriología Clínica Moore 11a Ed. (s.f.). [Libro de texto médico].'\n"+
 				"%s\n",
 			ctxVec, prompt, apaInstructions,
 		)

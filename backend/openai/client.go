@@ -902,6 +902,7 @@ func (c *Client) CreateThread(ctx context.Context) (string, error) {
 }
 
 // addMessage posts a user message to a thread.
+// Implementa retry automático para manejar latencias de OpenAI API
 func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error {
 	payload := map[string]any{
 		"role": "user",
@@ -916,16 +917,27 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 	}
 	log.Printf("[addMessage][DEBUG] thread=%s msg_preview=%q", threadID, preview)
 
-	resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
-	if err != nil {
-		return err
+	// Intentar hasta 2 veces si falla por timeout
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
+		if err != nil {
+			lastErr = err
+			if attempt < 2 && (strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "timeout")) {
+				log.Printf("[addMessage][retry] thread=%s attempt=%d err=%v", threadID, attempt, err)
+				time.Sleep(2 * time.Second) // Pequeña pausa antes de reintentar
+				continue
+			}
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("add message failed: %s", string(b))
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("add message failed: %s", string(b))
-	}
-	return nil
+	return lastErr
 }
 
 // addMessageWithAttachment posts a user message with a file attachment (for file_search tool).
@@ -1168,8 +1180,8 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	vsID, _ := c.ensureVectorStore(ctx, threadID) // ignore error; run still works without
 
 	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
-	// Aumentado a 60s para manejar latencias de OpenAI API
-	addMsgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Aumentado a 90s + retry automático para manejar latencias extremas de OpenAI API
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
@@ -1244,8 +1256,8 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		return nil, err
 	}
 	// Create message (text only) - usar contexto independiente para evitar timeout
-	// Aumentado a 60s para manejar latencias de OpenAI API
-	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 60*time.Second)
+	// Aumentado a 90s + retry automático para manejar latencias extremas de OpenAI API
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancelAddMsg()
 
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
@@ -1326,8 +1338,8 @@ func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 	}
 	// Ruta normal Assistants v2
 	// Usar contexto independiente para addMessage para evitar timeout si el request HTTP ya consumió tiempo
-	// Aumentado a 60s para manejar latencias de OpenAI API
-	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 60*time.Second)
+	// Aumentado a 90s + retry automático para manejar latencias extremas de OpenAI API
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancelAddMsg()
 
 	if err := c.addMessage(addMsgCtx, threadID, userPrompt); err != nil {
@@ -2119,8 +2131,8 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 
 	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
 	// Esto evita que falle si el contexto padre ya consumió tiempo en búsquedas (PubMed, vector)
-	// Aumentado a 60s para manejar latencias de OpenAI API
-	addMsgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// Aumentado a 90s + retry automático para manejar latencias extremas de OpenAI API
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
