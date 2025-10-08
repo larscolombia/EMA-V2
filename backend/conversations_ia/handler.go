@@ -57,16 +57,8 @@ type AIClient interface {
 	StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
 	// Obtener historial conversacional para enriquecer búsquedas
 	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
-}
-
-// VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
-type VectorSearchResult struct {
-	Content   string      `json:"content"`
-	Source    string      `json:"source"`             // Título del documento o nombre del archivo
-	VectorID  string      `json:"vector_id"`          // ID del vector store
-	HasResult bool        `json:"has_result"`         // Indica si se encontró información relevante
-	Section   string      `json:"section,omitempty"`  // Sección/capítulo si es posible
-	Metadata  interface{} `json:"metadata,omitempty"` // PDFMetadata del archivo fuente
+	// QuickVectorSearch retorna contenido Y el nombre real del archivo (no adivinado)
+	QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
 }
 
 // SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
@@ -85,7 +77,7 @@ type SmartResponse struct {
 // AIClientWithMetadata extiende AIClient con capacidades de metadatos
 type AIClientWithMetadata interface {
 	AIClient
-	SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error)
+	SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
 }
 
 type Handler struct {
@@ -1608,110 +1600,39 @@ func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query st
 	return h.buscarVectorFallback(ctx, vectorID, query)
 }
 
-// extractBookTitle intenta extraer el nombre del libro del contenido del vector store
-func extractBookTitle(content string) string {
-	// Buscar patrones comunes de referencias de libros médicos
-	content = strings.TrimSpace(content)
-	lowerContent := strings.ToLower(content)
-
-	// PASO 1: Buscar títulos mencionados explícitamente
-	knownTitles := map[string]string{
-		"robbins":    "Robbins y Cotran. Patología Estructural y Funcional",
-		"harrison":   "Harrison's Principles of Internal Medicine",
-		"guyton":     "Guyton y Hall. Tratado de Fisiología Médica",
-		"kumar":      "Robbins y Cotran. Patología Estructural y Funcional",
-		"cotran":     "Robbins y Cotran. Patología Estructural y Funcional",
-		"nelson":     "Nelson. Tratado de Pediatría",
-		"williams":   "Williams Obstetrics",
-		"sabiston":   "Sabiston. Tratado de Cirugía",
-		"goldman":    "Goldman-Cecil Medicine",
-		"braunwald":  "Braunwald's Heart Disease",
-		"farreras":   "Farreras-Rozman. Medicina Interna",
-		"pathologic": "Robbins y Cotran. Pathologic Basis of Disease",
-	}
-
-	for keyword, fullTitle := range knownTitles {
-		if strings.Contains(lowerContent, keyword) {
-			return fullTitle
-		}
-	}
-
-	// PASO 2: Detectar por temas específicos de cada libro
-	// Patología (Robbins) - buscar términos clave de patología
-	pathologyKeywords := []string{
-		"histogénesis", "histopatología", "neoplasia", "carcinogénesis",
-		"metaplasia", "displasia", "anaplasia", "apoptosis",
-		"señalización wnt", "β-catenina", "apc", "poliposis adenomatosa",
-		"vía de señalización", "oncogén", "gen supresor",
-		"patogénesis molecular", "alteración genética",
-	}
-
-	pathologyCount := 0
-	for _, keyword := range pathologyKeywords {
-		if strings.Contains(lowerContent, keyword) {
-			pathologyCount++
-		}
-	}
-
-	// Si tiene 2 o más términos de patología, probablemente es Robbins
-	if pathologyCount >= 2 {
-		return "Robbins y Cotran. Patología Estructural y Funcional"
-	}
-
-	// Medicina Interna (Harrison) - buscar términos clínicos generales
-	harrisonKeywords := []string{
-		"manifestaciones clínicas", "diagnóstico diferencial", "tratamiento",
-		"epidemiología", "etiología", "fisiopatología",
-		"cuadro clínico", "abordaje terapéutico",
-	}
-
-	harrisonCount := 0
-	for _, keyword := range harrisonKeywords {
-		if strings.Contains(lowerContent, keyword) {
-			harrisonCount++
-		}
-	}
-
-	if harrisonCount >= 3 {
-		return "Harrison's Principles of Internal Medicine"
-	}
-
-	// Fisiología (Guyton) - buscar términos de fisiología
-	if strings.Contains(lowerContent, "fisiología") ||
-		strings.Contains(lowerContent, "homeostasis") ||
-		strings.Contains(lowerContent, "potencial de acción") {
-		return "Guyton y Hall. Tratado de Fisiología Médica"
-	}
-
-	// Si no encontramos título conocido, usar genérico
-	return "Libro de Texto Médico Especializado"
-} // buscarVectorFallback usa el método original cuando falla la búsqueda con fuentes
+// buscarVectorFallback usa quickVectorSearch que retorna el nombre REAL del archivo desde el vector store
 func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query string) []Documento {
 	log.Printf("[conv][buscarVectorFallback][start] vector=%s", vectorID)
 
 	out := []Documento{}
-	if s, err := h.AI.SearchInVectorStore(ctx, vectorID, query); err == nil && strings.TrimSpace(s) != "" {
-		trimmed := strings.TrimSpace(s)
+
+	// Usar quickVectorSearch en lugar de SearchInVectorStore para obtener el FileID y nombre real
+	if result, err := h.AI.QuickVectorSearch(ctx, vectorID, query); err == nil && result.HasResult && strings.TrimSpace(result.Content) != "" {
+		trimmed := strings.TrimSpace(result.Content)
 		if isLikelyNoDataResponse(trimmed) {
 			log.Printf("[conv][buscarVectorFallback][skip_no_data] vector=%s msg=%s", vectorID, sanitizePreview(trimmed))
 			return out
 		}
 
-		// Intentar extraer el nombre del libro del contenido
-		bookTitle := extractBookTitle(trimmed)
+		// Usar el título REAL del archivo obtenido del vector store (no adivinado)
+		bookTitle := result.Source
+		if strings.TrimSpace(bookTitle) == "" {
+			bookTitle = "Libro de Texto Médico Especializado"
+		}
 
-		// Log mejorado con preview del contenido para validar detección
+		// Log mejorado con preview del contenido y título REAL extraído
 		contentPreview := strings.ReplaceAll(trimmed, "\n", " ")
 		if len(contentPreview) > 200 {
 			contentPreview = contentPreview[:200] + "..."
 		}
-		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d extracted_title=%q content_preview=%q",
-			vectorID, len(s), bookTitle, contentPreview)
+		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d real_source=%q content_preview=%q",
+			vectorID, len(trimmed), bookTitle, contentPreview)
 
 		out = append(out, Documento{
 			Titulo:    bookTitle,
 			Contenido: trimmed,
 			Fuente:    "vector",
+			Metadata:  result.Metadata,
 		})
 	} else if err != nil {
 		log.Printf("[conv][buscarVectorFallback][error] vector=%s err=%v", vectorID, err)

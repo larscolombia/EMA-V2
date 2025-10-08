@@ -1166,11 +1166,12 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 		return nil, errors.New("assistants not configured")
 	}
 	vsID, _ := c.ensureVectorStore(ctx, threadID) // ignore error; run still works without
-	
+
 	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
-	addMsgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Aumentado a 60s para manejar latencias de OpenAI API
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
@@ -1243,9 +1244,10 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		return nil, err
 	}
 	// Create message (text only) - usar contexto independiente para evitar timeout
-	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 30*time.Second)
+	// Aumentado a 60s para manejar latencias de OpenAI API
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancelAddMsg()
-	
+
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
@@ -1324,9 +1326,10 @@ func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 	}
 	// Ruta normal Assistants v2
 	// Usar contexto independiente para addMessage para evitar timeout si el request HTTP ya consumió tiempo
-	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 30*time.Second)
+	// Aumentado a 60s para manejar latencias de OpenAI API
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancelAddMsg()
-	
+
 	if err := c.addMessage(addMsgCtx, threadID, userPrompt); err != nil {
 		return nil, err
 	}
@@ -1575,8 +1578,9 @@ type VectorSearchResult struct {
 	Metadata  *PDFMetadata `json:"metadata,omitempty"` // Metadatos del PDF si está disponible
 }
 
-// quickVectorSearch intenta recuperar fragmentos usando el endpoint directo de vector stores (más liviano que crear runs).
-func (c *Client) quickVectorSearch(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
+// QuickVectorSearch intenta recuperar fragmentos usando el endpoint directo de vector stores (más liviano que crear runs).
+// Retorna el contenido Y el nombre REAL del archivo (no adivinado), evitando desalineación de fuentes.
+func (c *Client) QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
 	if c.key == "" || strings.TrimSpace(vectorStoreID) == "" {
 		return nil, errors.New("vector store search not configured")
 	}
@@ -1793,7 +1797,7 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 	}
 
 	// Intento rápido: usar el endpoint directo para evitar runs lentos.
-	if quick, err := c.quickVectorSearch(ctx, vectorStoreID, query); err == nil {
+	if quick, err := c.QuickVectorSearch(ctx, vectorStoreID, query); err == nil {
 		// Agregar metadatos al resultado rápido
 		quick.Metadata = pdfMetadata
 		if quick.HasResult {
@@ -2115,9 +2119,10 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 
 	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
 	// Esto evita que falle si el contexto padre ya consumió tiempo en búsquedas (PubMed, vector)
-	addMsgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Aumentado a 60s para manejar latencias de OpenAI API
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
