@@ -52,10 +52,23 @@ type Client struct {
 func (c *Client) GetAssistantID() string { return c.AssistantID }
 
 type LastFileInfo struct {
-	ID   string
-	Name string
-	At   time.Time
-	Hash string
+	ID       string
+	Name     string
+	At       time.Time
+	Hash     string
+	Metadata *PDFMetadata // Metadatos extraídos del PDF (nil si no es PDF o falla extracción)
+}
+
+// PDFMetadata contiene información bibliográfica extraída de un PDF
+type PDFMetadata struct {
+	Title    string `json:"title,omitempty"`
+	Author   string `json:"author,omitempty"`
+	Subject  string `json:"subject,omitempty"`
+	Keywords string `json:"keywords,omitempty"`
+	Creator  string `json:"creator,omitempty"`
+	Producer string `json:"producer,omitempty"`
+	Created  string `json:"created,omitempty"`  // Fecha de creación
+	Modified string `json:"modified,omitempty"` // Fecha de modificación
 }
 
 // sanitizeEnv limpia espacios y elimina comillas simples o dobles rodeando todo el valor.
@@ -90,7 +103,7 @@ func NewClient() *Client {
 		AssistantID:  assistant,
 		Model:        model,
 		key:          key,
-		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		httpClient:   &http.Client{Timeout: 120 * time.Second}, // Aumentado para runs largos
 		vectorStore:  vsMap,
 		vsLastAccess: make(map[string]time.Time),
 		fileCache:    fcMap,
@@ -661,8 +674,18 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	if id, ok := c.fileCache[key]; ok {
 		c.fileMu.RUnlock()
 		fmt.Printf("DEBUG: Using cached file ID: %s\n", id)
+
+		// Extraer metadatos incluso para archivos cacheados
+		metadata := extractPDFMetadata(filePath)
+
 		c.lastMu.Lock()
-		c.lastFile[threadID] = LastFileInfo{ID: id, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}
+		c.lastFile[threadID] = LastFileInfo{
+			ID:       id,
+			Name:     filepath.Base(filePath),
+			At:       time.Now(),
+			Hash:     hash,
+			Metadata: metadata,
+		}
 		c.lastMu.Unlock()
 		return id, nil
 	}
@@ -702,14 +725,88 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 	c.fileMu.Unlock()
 	_ = saveFileCache(snap)
 
+	// Extraer metadatos del PDF si aplica
+	metadata := extractPDFMetadata(filePath)
+
 	// remember last uploaded file for this thread
 	c.lastMu.Lock()
-	c.lastFile[threadID] = LastFileInfo{ID: data.ID, Name: filepath.Base(filePath), At: time.Now(), Hash: hash}
+	c.lastFile[threadID] = LastFileInfo{
+		ID:       data.ID,
+		Name:     filepath.Base(filePath),
+		At:       time.Now(),
+		Hash:     hash,
+		Metadata: metadata,
+	}
 	c.lastMu.Unlock()
 	return data.ID, nil
 }
 
 func encoding_hex(b []byte) string { return hex.EncodeToString(b) }
+
+// extractPDFMetadata extrae metadatos de un archivo PDF
+// Retorna nil si no es PDF o si falla la extracción (no crítico)
+func extractPDFMetadata(filePath string) *PDFMetadata {
+	// Solo procesar archivos .pdf
+	if !strings.HasSuffix(strings.ToLower(filePath), ".pdf") {
+		return nil
+	}
+
+	// Validar que el archivo existe y es accesible
+	if _, err := os.Stat(filePath); err != nil {
+		log.Printf("[pdf][metadata][warning] file not accessible %s: %v", filePath, err)
+		return nil
+	}
+
+	meta := &PDFMetadata{}
+
+	// Extraer título del nombre de archivo
+	// Nota: rsc.io/pdf es una librería muy simple que no expone metadatos fácilmente
+	// Para extracción real de metadatos (Author, CreationDate, etc.) se necesitaría
+	// una librería más completa como github.com/pdfcpu/pdfcpu
+	baseName := filepath.Base(filePath)
+	nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+
+	// Limpiar y capitalizar el nombre del archivo
+	cleaned := strings.ReplaceAll(nameWithoutExt, "_", " ")
+	cleaned = strings.ReplaceAll(cleaned, "-", " ")
+	meta.Title = cleanPDFString(cleaned)
+
+	log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename)",
+		filepath.Base(filePath), meta.Title)
+
+	return meta
+}
+
+// cleanPDFString limpia strings extraídos de PDFs (elimina caracteres de control, etc.)
+func cleanPDFString(s string) string {
+	s = strings.TrimSpace(s)
+	// Eliminar caracteres de control y no imprimibles
+	var buf strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) || unicode.IsSpace(r) {
+			buf.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+// parsePDFDate convierte fechas PDF (formato D:YYYYMMDDHHmmSSOHH'mm') a año simple
+// Retorna solo el año para APA (ej: "2023")
+func parsePDFDate(pdfDate string) string {
+	// Formato típico: D:20230415120000+00'00'
+	// Extraer año (posiciones 2-6)
+	if len(pdfDate) < 6 {
+		return ""
+	}
+	if pdfDate[0] == 'D' && pdfDate[1] == ':' {
+		yearStr := pdfDate[2:6]
+		// Validar que sean dígitos
+		if _, err := strconv.Atoi(yearStr); err == nil {
+			return yearStr
+		}
+	}
+	return ""
+}
 
 // Session usage helpers
 func (c *Client) AddSessionBytes(threadID string, delta int64) {
@@ -836,7 +933,8 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
 func (c *Client) runAndWait(ctx context.Context, threadID string, instructions string, vectorStoreID string) (string, error) {
 	// Máxima duración interna antes de intentar devolver contenido parcial
-	const maxRunDuration = 55 * time.Second
+	// Aumentado a 90s para dar más tiempo a runs complejos con libros grandes
+	const maxRunDuration = 90 * time.Second
 	start := time.Now()
 	// create run
 	payload := map[string]any{"assistant_id": c.AssistantID}
@@ -932,7 +1030,9 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 						}
 						text := buf.String()
 						if strings.TrimSpace(text) != "" {
-							return text + "\n\n[Nota: respuesta parcial generada antes de completar el proceso para evitar timeout]", nil
+							// Devolver respuesta parcial sin nota de timeout
+							// El usuario no necesita saber detalles técnicos internos
+							return text, nil
 						}
 					}
 				}
@@ -1066,7 +1166,12 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 		return nil, errors.New("assistants not configured")
 	}
 	vsID, _ := c.ensureVectorStore(ctx, threadID) // ignore error; run still works without
-	if err := c.addMessage(ctx, threadID, prompt); err != nil {
+	
+	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
 	// Debug meta para detectar hilos mezclados: log con hash corto del prompt
@@ -1137,8 +1242,11 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 	if err := c.addFileToVectorStore(ctx, vsID, fileID); err != nil {
 		return nil, err
 	}
-	// Create message (text only)
-	if err := c.addMessage(ctx, threadID, prompt); err != nil {
+	// Create message (text only) - usar contexto independiente para evitar timeout
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelAddMsg()
+	
+	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
 	log.Printf("[assist][StreamAssistantMessageWithFile][start] thread=%s vs=%s file=%s prompt_len=%d", threadID, vsID, filepath.Base(filePath), len(prompt))
@@ -1215,7 +1323,11 @@ func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 		return out, nil
 	}
 	// Ruta normal Assistants v2
-	if err := c.addMessage(ctx, threadID, userPrompt); err != nil {
+	// Usar contexto independiente para addMessage para evitar timeout si el request HTTP ya consumió tiempo
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelAddMsg()
+	
+	if err := c.addMessage(addMsgCtx, threadID, userPrompt); err != nil {
 		return nil, err
 	}
 	out := make(chan string, 1)
@@ -1455,11 +1567,12 @@ func (c *Client) maybeCleanupVectorStores() {
 
 // VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
 type VectorSearchResult struct {
-	Content   string `json:"content"`
-	Source    string `json:"source"`            // Título del documento o nombre del archivo
-	VectorID  string `json:"vector_id"`         // ID del vector store
-	HasResult bool   `json:"has_result"`        // Indica si se encontró información relevante
-	Section   string `json:"section,omitempty"` // Sección/capítulo si es posible
+	Content   string       `json:"content"`
+	Source    string       `json:"source"`             // Título del documento o nombre del archivo
+	VectorID  string       `json:"vector_id"`          // ID del vector store
+	HasResult bool         `json:"has_result"`         // Indica si se encontró información relevante
+	Section   string       `json:"section,omitempty"`  // Sección/capítulo si es posible
+	Metadata  *PDFMetadata `json:"metadata,omitempty"` // Metadatos del PDF si está disponible
 }
 
 // quickVectorSearch intenta recuperar fragmentos usando el endpoint directo de vector stores (más liviano que crear runs).
@@ -1658,8 +1771,31 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 		return nil, errors.New("assistants not configured")
 	}
 
+	// Buscar threadID para este vectorStoreID (para obtener metadata)
+	var threadID string
+	c.vsMu.RLock()
+	for tid, vid := range c.vectorStore {
+		if vid == vectorStoreID {
+			threadID = tid
+			break
+		}
+	}
+	c.vsMu.RUnlock()
+
+	// Obtener metadatos del PDF si hay lastFile para este thread
+	var pdfMetadata *PDFMetadata
+	if threadID != "" {
+		c.lastMu.RLock()
+		if lf, ok := c.lastFile[threadID]; ok {
+			pdfMetadata = lf.Metadata
+		}
+		c.lastMu.RUnlock()
+	}
+
 	// Intento rápido: usar el endpoint directo para evitar runs lentos.
 	if quick, err := c.quickVectorSearch(ctx, vectorStoreID, query); err == nil {
+		// Agregar metadatos al resultado rápido
+		quick.Metadata = pdfMetadata
 		if quick.HasResult {
 			return quick, nil
 		}
@@ -1672,12 +1808,12 @@ func (c *Client) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStor
 	}
 
 	// Crear un thread temporal para la búsqueda
-	threadID, err := c.CreateThread(ctx)
+	tempThreadID, err := c.CreateThread(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary thread: %v", err)
 	}
 	defer func() {
-		_ = c.DeleteThreadArtifacts(ctx, threadID)
+		_ = c.DeleteThreadArtifacts(ctx, tempThreadID)
 	}()
 
 	// Obtener información de los archivos en el vector store para generar metadatos
@@ -1702,12 +1838,12 @@ Documentos disponibles: %s
 `, query, strings.Join(files, ", "))
 
 	// Ejecutar búsqueda anclada al vector store
-	text, err := c.runAndWaitWithVectorStore(ctx, threadID, searchPrompt, vectorStoreID)
+	text, err := c.runAndWaitWithVectorStore(ctx, tempThreadID, searchPrompt, vectorStoreID)
 	if err != nil {
 		return nil, fmt.Errorf("vector store search failed: %v", err)
 	}
 
-	result := &VectorSearchResult{VectorID: vectorStoreID, HasResult: false}
+	result := &VectorSearchResult{VectorID: vectorStoreID, HasResult: false, Metadata: pdfMetadata}
 
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" || strings.Contains(strings.ToUpper(trimmed), "NO_FOUND") || isLikelyNoDataResponse(trimmed) {
@@ -1829,8 +1965,8 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 	log.Printf("[openai][SearchPubMed][start] query_len=%d query_preview=%s", len(query), sanitizePreview(query))
 	start := time.Now()
 
-	// Contexto con timeout específico para PubMed (más generoso que el vector store)
-	pubmedCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	// Contexto con timeout reducido para PubMed (20s primera vez, 15s retry)
+	pubmedCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
 	// Crear un thread temporal para la búsqueda en PubMed
@@ -1897,8 +2033,8 @@ REGLAS CRÍTICAS:
 		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "context deadline exceeded") {
 			log.Printf("[openai][SearchPubMed][timeout] first_attempt thread=%s elapsed_ms=%d, trying_simplified_query", threadID, time.Since(start).Milliseconds())
 
-			// Crear nuevo contexto para reintento
-			retryCtx, retryCancel := context.WithTimeout(context.Background(), 25*time.Second)
+			// Crear nuevo contexto para reintento (15 segundos)
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer retryCancel()
 
 			// Query simplificada: solo conceptos clave
@@ -1977,7 +2113,12 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 		return nil, errors.New("assistants not configured")
 	}
 
-	if err := c.addMessage(ctx, threadID, prompt); err != nil {
+	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
+	// Esto evita que falle si el contexto padre ya consumió tiempo en búsquedas (PubMed, vector)
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	if err := c.addMessage(addMsgCtx, threadID, prompt); err != nil {
 		return nil, err
 	}
 

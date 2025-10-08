@@ -18,6 +18,144 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
 
+  // Formatea una cadena en estilo Título (conservando preposiciones comunes en minúscula)
+  String _toTitleCase(String input) {
+    if (input.trim().isEmpty) return input;
+    final lower = input.trim().toLowerCase();
+    const small = {
+      'de',
+      'del',
+      'la',
+      'las',
+      'los',
+      'y',
+      'o',
+      'u',
+      'en',
+      'para',
+      'por',
+      'con',
+      'sin',
+      'el',
+      'al',
+      'a',
+      'un',
+      'una',
+      'unos',
+      'unas',
+      'the',
+      'of',
+      'and',
+      'or',
+      'in',
+    };
+    final parts = lower.split(RegExp(r"[\s_\-]+"));
+    final buf = <String>[];
+    for (var i = 0; i < parts.length; i++) {
+      var w = parts[i];
+      if (w.isEmpty) continue;
+      if (i > 0 && small.contains(w)) {
+        buf.add(w);
+        continue;
+      }
+      // Capitalizar primera letra
+      buf.add(w[0].toUpperCase() + (w.length > 1 ? w.substring(1) : ''));
+    }
+    return buf.join(' ');
+  }
+
+  // Convierte una fuente genérica a un formato APA aproximado, sin inventar autores/revistas.
+  // Reglas:
+  // - "Título (PMID: 123456, 2023)" -> "Título. (2023). PubMed. https://pubmed.ncbi.nlm.nih.gov/123456/"
+  // - "... .pdf" -> "Título del archivo. (s.f.). [PDF]."
+  // - URL -> "Título (derivado del dominio). (s.f.). URL"
+  // - Fallback: retorna la fuente original tal cual
+  String _toApa(String source) {
+    final s = source.trim();
+    if (s.isEmpty) return s;
+
+    // Patrón PMID con posible año
+    final pmidRe = RegExp(
+      r'^(.*?)\s*\(?PMID:?\s*(\d+)(?:,\s*(\d{4}))?\)?',
+      caseSensitive: false,
+    );
+    final pm = pmidRe.firstMatch(s);
+    if (pm != null) {
+      final rawTitle = (pm.group(1) ?? '').trim().replaceAll(
+        RegExp(r'["\]\[]'),
+        '',
+      );
+      final title = rawTitle.isEmpty ? 'Artículo' : rawTitle;
+      final pmid = pm.group(2)!;
+      final year = (pm.group(3) ?? 's.f.');
+      return "$title. ($year). PubMed. https://pubmed.ncbi.nlm.nih.gov/$pmid/";
+    }
+
+    // PDF filename
+    if (s.toLowerCase().contains('.pdf')) {
+      // Extraer nombre base del archivo
+      final m = RegExp(r'([^/\\]+)\.pdf', caseSensitive: false).firstMatch(s);
+      final base = (m != null ? m.group(1) : s).toString();
+      final cleaned = base.replaceAll(RegExp(r'[_\-]+'), ' ');
+      final title = _toTitleCase(cleaned);
+      return "$title. (s.f.). [PDF].";
+    }
+
+    // URL genérica
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      return "(s.f.). $s"; // Sin título fiable, dejamos URL directa
+    }
+
+    // Heurística para Libros/Manuales médicos comunes
+    // Detectar patrones de títulos de libros médicos conocidos
+    final bookPatterns = {
+      r"harrison'?s?\s+principles?\s+of\s+internal\s+medicine":
+          "Harrison's Principles of Internal Medicine",
+      r"braunwald'?s?\s+heart\s+disease": "Braunwald's Heart Disease",
+      r"robbins\s+and\s+cotran\s+pathologic\s+basis":
+          "Robbins and Cotran Pathologic Basis of Disease",
+      r"nelson\s+textbook\s+of\s+pediatrics": "Nelson Textbook of Pediatrics",
+      r"williams\s+obstetrics": "Williams Obstetrics",
+      r"gray'?s?\s+anatomy": "Gray's Anatomy",
+      r"guyton\s+and\s+hall\s+textbook":
+          "Guyton and Hall Textbook of Medical Physiology",
+      r"cecil\s+textbook\s+of\s+medicine": "Cecil Textbook of Medicine",
+      r"sabiston\s+textbook\s+of\s+surgery": "Sabiston Textbook of Surgery",
+      r"principles?\s+of\s+internal\s+medicine":
+          "Principles of Internal Medicine",
+      r"principles?\s+of\s+surgery": "Principles of Surgery",
+      r"tratado\s+de\s+cardiolog[íi]a": "Tratado de Cardiología",
+      r"manual\s+de\s+medicina\s+interna": "Manual de Medicina Interna",
+    };
+
+    final lowerS = s.toLowerCase();
+    for (final pattern in bookPatterns.entries) {
+      if (RegExp(pattern.key, caseSensitive: false).hasMatch(lowerS)) {
+        // Formato APA para libro: Título. (s.f.). Editorial desconocida.
+        return "${pattern.value}. (s.f.). [Libro de texto médico].";
+      }
+    }
+
+    // Heurística genérica: tratar como Libro/Manual si no es PMID/URL/PDF
+    // Condiciones: contiene al menos un espacio (2+ palabras), no contiene dígitos ni 'doi' ni 'pmid'
+    final isLikelyBook =
+        s.contains(' ') &&
+        !RegExp(r'\d').hasMatch(s) &&
+        !s.toLowerCase().contains('doi') &&
+        !s.toLowerCase().contains('pmid') &&
+        !s.toLowerCase().contains('http');
+    if (isLikelyBook) {
+      // Normalizar título: capitalizar correctamente
+      final title = _toTitleCase(s.replaceAll(RegExp(r'\s+'), ' ').trim());
+      // Formato APA para libro sin más metadatos: Título. (s.f.). [Tipo de documento].
+      return "$title. (s.f.). [Libro/Manual médico].";
+    }
+
+    // Fallback: si no podemos transformar, agregamos punto final si falta
+    if (!s.endsWith('.')) return "$s.";
+    return s;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -39,33 +177,58 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   List<String> _extractSources(String text) {
     final List<String> sources = [];
 
-    // Buscar sección de fuentes
+    // Buscar sección de fuentes con ## Fuentes (formato nuevo del backend)
     final sourcesRegex = RegExp(
-      r'## Fuentes:\s*\n(.*?)(?=\n\n|\n## |$)',
+      r'##\s*Fuentes\s*\n(.*?)(?=\n\n|\n## |$)',
       dotAll: true,
+      caseSensitive: false,
     );
     final sourcesMatch = sourcesRegex.firstMatch(text);
 
     if (sourcesMatch != null) {
       final sourcesText = sourcesMatch.group(1) ?? '';
-      // Extraer elementos de lista
-      final listRegex = RegExp(r'^- (.+)$', multiLine: true);
+      // Extraer elementos de lista con - o *
+      final listRegex = RegExp(r'^[\-\*]\s*(.+)$', multiLine: true);
       sources.addAll(
         listRegex
             .allMatches(sourcesText)
-            .map((match) => match.group(1)!.trim()),
+            .map((match) => match.group(1)!.trim())
+            .where((s) => s.isNotEmpty),
       );
     }
 
-    // Si no hay fuentes estructuradas, buscar patrones alternativos
+    // Fallback: buscar patrón "Fuentes:" sin ##
     if (sources.isEmpty) {
-      // Buscar líneas de fuente al final
-      final altSourceRegex = RegExp(
-        r'Fuente:\s*(.+?)(?=\n|$)',
+      final altSourceRegex1 = RegExp(
+        r'Fuentes?:\s*\n(.*?)(?=\n\n|\n## |$)',
+        dotAll: true,
+        caseSensitive: false,
+      );
+      final altMatch = altSourceRegex1.firstMatch(text);
+      if (altMatch != null) {
+        final sourcesText = altMatch.group(1) ?? '';
+        final listRegex = RegExp(r'^[\-\*]\s*(.+)$', multiLine: true);
+        sources.addAll(
+          listRegex
+              .allMatches(sourcesText)
+              .map((match) => match.group(1)!.trim())
+              .where((s) => s.isNotEmpty),
+        );
+      }
+    }
+
+    // Fallback 2: Buscar "Fuente:" o "Fuentes:" en línea única
+    if (sources.isEmpty) {
+      final altSourceRegex2 = RegExp(
+        r'Fuentes?:\s*(.+?)(?=\n|$)',
         multiLine: true,
+        caseSensitive: false,
       );
       sources.addAll(
-        altSourceRegex.allMatches(text).map((match) => match.group(1)!.trim()),
+        altSourceRegex2
+            .allMatches(text)
+            .map((match) => match.group(1)!.trim())
+            .where((s) => s.isNotEmpty),
       );
     }
 
@@ -77,16 +240,27 @@ class _ChatMessageAiState extends State<ChatMessageAi>
 
     String content = text;
 
-    // El ChatMarkdownWrapper ya maneja la limpieza de placeholders
+    // Remover sección "## Fuentes" completa (formato nuevo)
+    final sourcesRegex1 = RegExp(
+      r'\n##\s*Fuentes\s*\n.*',
+      dotAll: true,
+      caseSensitive: false,
+    );
+    content = content.replaceAll(sourcesRegex1, '');
 
-    // Remover las secciones de fuentes para mostrar solo el contenido principal
-    final sourcesRegex = RegExp(r'\n## Fuentes:\s*\n.*', dotAll: true);
-    content = content.replaceAll(sourcesRegex, '');
+    // Remover sección "Fuentes:" sin ## (fallback)
+    final sourcesRegex2 = RegExp(
+      r'\nFuentes?:\s*\n.*',
+      dotAll: true,
+      caseSensitive: false,
+    );
+    content = content.replaceAll(sourcesRegex2, '');
 
-    // También remover patrones de fuente simples al final
+    // Remover patrones de fuente simples al final
     final altSourceRegex = RegExp(
-      r'\n\*?\(?(Fuente:.*?)\)?\*?$',
+      r'\n\*?\(?(Fuentes?:.*?)\)?\*?$',
       multiLine: true,
+      caseSensitive: false,
     );
     content = content.replaceAll(altSourceRegex, '');
 
@@ -197,7 +371,7 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                                 ),
                                 Expanded(
                                   child: Text(
-                                    source,
+                                    _toApa(source),
                                     style: TextStyle(
                                       color: Colors.white60,
                                       fontSize: 12,

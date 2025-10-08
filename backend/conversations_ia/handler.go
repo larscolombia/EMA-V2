@@ -61,11 +61,12 @@ type AIClient interface {
 
 // VectorSearchResult contiene tanto el contenido encontrado como metadatos de la fuente
 type VectorSearchResult struct {
-	Content   string `json:"content"`
-	Source    string `json:"source"`     // Título del documento o nombre del archivo
-	VectorID  string `json:"vector_id"`  // ID del vector store
-	HasResult bool   `json:"has_result"` // Indica si se encontró información relevante
-	Section   string `json:"section,omitempty"`
+	Content   string      `json:"content"`
+	Source    string      `json:"source"`             // Título del documento o nombre del archivo
+	VectorID  string      `json:"vector_id"`          // ID del vector store
+	HasResult bool        `json:"has_result"`         // Indica si se encontró información relevante
+	Section   string      `json:"section,omitempty"`  // Sección/capítulo si es posible
+	Metadata  interface{} `json:"metadata,omitempty"` // PDFMetadata del archivo fuente
 }
 
 // SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
@@ -200,6 +201,8 @@ type Documento struct {
 	Fuente    string // "vector" o "pubmed"
 	// Referencias bibliográficas asociadas al contenido (cuando la fuente es PubMed)
 	Referencias []string
+	// Metadatos del PDF si está disponible (para formateo APA)
+	Metadata interface{} // PDFMetadata
 }
 
 // buildContextualizedQuery enriquece el prompt actual con contexto conversacional previo
@@ -331,7 +334,14 @@ Respuesta obligatoria:
   * Busca capítulos numerados de otras formas (romano, arábigo, etc.)
   * Busca la sección por su posición o tema relacionado
   * Si aún así no existe, di: "Los documentos no contienen esta información"
-- Termina con: "Fuentes: [nombres de archivos]"`, prompt)
+
+FORMATO DE RESPUESTA:
+- Escribe tu respuesta en formato Markdown limpio
+- Usa ## para títulos de sección
+- Termina SIEMPRE con una sección de fuentes en este formato exacto:
+
+## Fuentes
+- [nombre del archivo PDF]`, prompt)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
@@ -362,7 +372,8 @@ Respuesta obligatoria:
 	// que necesitan contexto de la pregunta anterior para buscar contenido relevante.
 	searchQuery := h.buildContextualizedQuery(ctx, threadID, prompt)
 
-	searchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	// Timeout aumentado para permitir búsquedas en PubMed que pueden tardar
+	searchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	searchStart := time.Now()
@@ -378,8 +389,11 @@ Respuesta obligatoria:
 
 	ctxVec, ctxPub := fusionarResultados(vdocs, pdocs)
 
-	log.Printf("[conv][SmartMessage][debug] thread=%s vdocs_len=%d pdocs_len=%d ctxVec_len=%d ctxPub_len=%d",
-		threadID, len(vdocs), len(pdocs), len(ctxVec), len(ctxPub))
+	// Generar instrucciones APA basadas en metadatos disponibles
+	apaInstructions := buildAPAInstructions(vdocs)
+
+	log.Printf("[conv][SmartMessage][debug] thread=%s vdocs_len=%d pdocs_len=%d ctxVec_len=%d ctxPub_len=%d has_apa_instr=%v",
+		threadID, len(vdocs), len(pdocs), len(ctxVec), len(ctxPub), apaInstructions != "")
 	if len(vdocs) > 0 {
 		for i, d := range vdocs {
 			log.Printf("[conv][SmartMessage][debug.vdoc.%d] titulo=\"%s\" contenido_len=%d fuente=%s",
@@ -513,7 +527,8 @@ Respuesta obligatoria:
 				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
 				"PARA LIBROS/MANUALES:\n"+
 				"- Busca en 'CONTEXTO PRINCIPAL' arriba el nombre EXACTO del libro usado\n"+
-				"- DEBES citarlo textualmente (ej: 'Harrison's Principles of Internal Medicine', 'Braunwald's Heart Disease')\n"+
+				"- DEBES citarlo textualmente en formato APA 7: Autor. (Año). Título. Editorial.\n"+
+				"- Si no hay metadatos completos, usa: Título exacto. (s.f.). [Libro de texto médico].\n"+
 				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas', 'Base de conocimiento', 'Fuentes especializadas', etc.\n\n"+
 				"PARA PUBMED:\n"+
 				"- Formato OBLIGATORIO: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
@@ -522,13 +537,14 @@ Respuesta obligatoria:
 				"- NO inventes títulos, autores, PMIDs ni años\n\n"+
 				"SECCIÓN ## Fuentes: DEBE incluir:\n"+
 				"**Libros y Manuales:**\n"+
-				"- [Listar fuentes de libros con nombres exactos]\n\n"+
+				"- [Listar fuentes de libros en formato APA con metadatos si están disponibles]\n\n"+
 				"**Artículos Científicos (PubMed):**\n"+
 				"- [Listar artículos con formato: Título (PMID: ####, Año)]\n\n"+
 				"PROHIBIDO INCLUIR:\n"+
 				"- NO incluyas secciones 'Verificación:', 'Alineado con el documento:', ni 'Bibliografía:'\n"+
-				"- SOLO incluye '## Fuentes:' al final de la respuesta\n",
-			ctxVec, ctxPub, refsBlock, prompt,
+				"- SOLO incluye '## Fuentes:' al final de la respuesta\n"+
+				"%s\n",
+			ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
@@ -561,10 +577,12 @@ Respuesta obligatoria:
 				"- En el 'Contexto recuperado' arriba encontrarás el nombre EXACTO del libro/manual usado (ej: 'Harrison's Principles of Internal Medicine', 'Braunwald's Heart Disease')\n"+
 				"- DEBES citar ese nombre específico en la sección '## Fuentes:'\n"+
 				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas especializadas', 'Base de conocimiento', 'Literatura médica', 'Fuentes especializadas', etc.\n"+
-				"- Formato: Título exacto del libro (tal como aparece en el contexto)\n"+
+				"- Formato preferido: Cita en normas APA 7 (Autor. (Año). Título. Editorial.)\n"+
+				"- Si no tienes metadatos completos, usa: Título exacto del libro. (s.f.). [Libro de texto médico].\n"+
 				"- NO incluyas secciones 'Verificación', 'Alineado con el documento', ni 'Bibliografía' - SOLO '## Fuentes:'\n"+
-				"- Ejemplo correcto: '## Fuentes:\nHarrison's Principles of Internal Medicine'\n",
-			ctxVec, prompt,
+				"- Ejemplo mínimo: '## Fuentes:\nHarrison's Principles of Internal Medicine. (s.f.). [Libro de texto médico].'\n"+
+				"%s\n",
+			ctxVec, prompt, apaInstructions,
 		)
 	} else {
 		// MODO PUBMED ONLY
@@ -1581,6 +1599,7 @@ func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query st
 				Titulo:    title,
 				Contenido: content,
 				Fuente:    "vector",
+				Metadata:  res.Metadata, // Incluir metadatos del PDF
 			}}
 		}
 		log.Printf("[conv][buscarVectorConFuentes][metadata_empty] vector=%s", vectorID)
@@ -1589,7 +1608,84 @@ func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query st
 	return h.buscarVectorFallback(ctx, vectorID, query)
 }
 
-// buscarVectorFallback usa el método original cuando falla la búsqueda con fuentes
+// extractBookTitle intenta extraer el nombre del libro del contenido del vector store
+func extractBookTitle(content string) string {
+	// Buscar patrones comunes de referencias de libros médicos
+	content = strings.TrimSpace(content)
+	lowerContent := strings.ToLower(content)
+
+	// PASO 1: Buscar títulos mencionados explícitamente
+	knownTitles := map[string]string{
+		"robbins":    "Robbins y Cotran. Patología Estructural y Funcional",
+		"harrison":   "Harrison's Principles of Internal Medicine",
+		"guyton":     "Guyton y Hall. Tratado de Fisiología Médica",
+		"kumar":      "Robbins y Cotran. Patología Estructural y Funcional",
+		"cotran":     "Robbins y Cotran. Patología Estructural y Funcional",
+		"nelson":     "Nelson. Tratado de Pediatría",
+		"williams":   "Williams Obstetrics",
+		"sabiston":   "Sabiston. Tratado de Cirugía",
+		"goldman":    "Goldman-Cecil Medicine",
+		"braunwald":  "Braunwald's Heart Disease",
+		"farreras":   "Farreras-Rozman. Medicina Interna",
+		"pathologic": "Robbins y Cotran. Pathologic Basis of Disease",
+	}
+
+	for keyword, fullTitle := range knownTitles {
+		if strings.Contains(lowerContent, keyword) {
+			return fullTitle
+		}
+	}
+
+	// PASO 2: Detectar por temas específicos de cada libro
+	// Patología (Robbins) - buscar términos clave de patología
+	pathologyKeywords := []string{
+		"histogénesis", "histopatología", "neoplasia", "carcinogénesis",
+		"metaplasia", "displasia", "anaplasia", "apoptosis",
+		"señalización wnt", "β-catenina", "apc", "poliposis adenomatosa",
+		"vía de señalización", "oncogén", "gen supresor",
+		"patogénesis molecular", "alteración genética",
+	}
+
+	pathologyCount := 0
+	for _, keyword := range pathologyKeywords {
+		if strings.Contains(lowerContent, keyword) {
+			pathologyCount++
+		}
+	}
+
+	// Si tiene 2 o más términos de patología, probablemente es Robbins
+	if pathologyCount >= 2 {
+		return "Robbins y Cotran. Patología Estructural y Funcional"
+	}
+
+	// Medicina Interna (Harrison) - buscar términos clínicos generales
+	harrisonKeywords := []string{
+		"manifestaciones clínicas", "diagnóstico diferencial", "tratamiento",
+		"epidemiología", "etiología", "fisiopatología",
+		"cuadro clínico", "abordaje terapéutico",
+	}
+
+	harrisonCount := 0
+	for _, keyword := range harrisonKeywords {
+		if strings.Contains(lowerContent, keyword) {
+			harrisonCount++
+		}
+	}
+
+	if harrisonCount >= 3 {
+		return "Harrison's Principles of Internal Medicine"
+	}
+
+	// Fisiología (Guyton) - buscar términos de fisiología
+	if strings.Contains(lowerContent, "fisiología") ||
+		strings.Contains(lowerContent, "homeostasis") ||
+		strings.Contains(lowerContent, "potencial de acción") {
+		return "Guyton y Hall. Tratado de Fisiología Médica"
+	}
+
+	// Si no encontramos título conocido, usar genérico
+	return "Libro de Texto Médico Especializado"
+} // buscarVectorFallback usa el método original cuando falla la búsqueda con fuentes
 func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query string) []Documento {
 	log.Printf("[conv][buscarVectorFallback][start] vector=%s", vectorID)
 
@@ -1600,9 +1696,20 @@ func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query stri
 			log.Printf("[conv][buscarVectorFallback][skip_no_data] vector=%s msg=%s", vectorID, sanitizePreview(trimmed))
 			return out
 		}
-		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d", vectorID, len(s))
+
+		// Intentar extraer el nombre del libro del contenido
+		bookTitle := extractBookTitle(trimmed)
+
+		// Log mejorado con preview del contenido para validar detección
+		contentPreview := strings.ReplaceAll(trimmed, "\n", " ")
+		if len(contentPreview) > 200 {
+			contentPreview = contentPreview[:200] + "..."
+		}
+		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d extracted_title=%q content_preview=%q",
+			vectorID, len(s), bookTitle, contentPreview)
+
 		out = append(out, Documento{
-			Titulo:    "",
+			Titulo:    bookTitle,
 			Contenido: trimmed,
 			Fuente:    "vector",
 		})
@@ -1767,6 +1874,84 @@ func fusionarResultados(vectorDocs, pubmedDocs []Documento) (ctxVec, ctxPub stri
 		ctxPub = strings.TrimSpace(b.String())
 	}
 	return
+}
+
+// buildAPAInstructions genera instrucciones de formato APA basadas en los metadatos disponibles
+func buildAPAInstructions(vectorDocs []Documento) string {
+	if len(vectorDocs) == 0 {
+		return ""
+	}
+
+	var instructions strings.Builder
+	instructions.WriteString("\n\nMETADATOS DISPONIBLES PARA CITAS APA:\n")
+
+	hasMetadata := false
+	hasTitles := false
+
+	for i, doc := range vectorDocs {
+		// Verificar si tiene metadatos reales
+		if doc.Metadata != nil {
+			hasMetadata = true
+			// Intentar acceder a metadatos como map
+			if metaMap, ok := doc.Metadata.(map[string]interface{}); ok {
+				title := getStringFromMap(metaMap, "title")
+				author := getStringFromMap(metaMap, "author")
+				created := getStringFromMap(metaMap, "created")
+
+				if title != "" || author != "" {
+					fmt.Fprintf(&instructions, "Documento %d (%s):\n", i+1, doc.Titulo)
+					if title != "" {
+						fmt.Fprintf(&instructions, "  - Título: %s\n", title)
+					}
+					if author != "" {
+						fmt.Fprintf(&instructions, "  - Autor: %s\n", author)
+					}
+					if created != "" {
+						fmt.Fprintf(&instructions, "  - Año: %s\n", created)
+					}
+				}
+			}
+		}
+
+		// Verificar si al menos tiene título
+		if strings.TrimSpace(doc.Titulo) != "" {
+			hasTitles = true
+			if !hasMetadata {
+				// Solo listar títulos si no hay metadatos
+				fmt.Fprintf(&instructions, "Documento %d: %s (sin metadatos adicionales)\n", i+1, doc.Titulo)
+			}
+		}
+	}
+
+	if hasMetadata {
+		instructions.WriteString("\nFORMATO APA 7 PARA ## Fuentes (usa metadatos arriba):\n")
+		instructions.WriteString("- Con todos los datos: Autor. (Año). Título. [PDF].\n")
+		instructions.WriteString("- Sin autor: Título. (Año). [PDF].\n")
+		instructions.WriteString("- Sin año: Autor. (s.f.). Título. [PDF].\n")
+		instructions.WriteString("- Mínimo: Título. (s.f.). [PDF/Libro de texto médico].\n")
+		instructions.WriteString("- IMPORTANTE: USA los metadatos proporcionados arriba\n")
+	} else if hasTitles {
+		instructions.WriteString("\nFORMATO APA MÍNIMO para ## Fuentes:\n")
+		instructions.WriteString("- Usa el título exacto listado arriba\n")
+		instructions.WriteString("- Formato: Título exacto. (s.f.). [Libro de texto médico].\n")
+		instructions.WriteString("- Ejemplo: Robbins y Cotran. Patología Estructural y Funcional. (s.f.). [Libro de texto médico].\n")
+	} else {
+		instructions.WriteString("\nNo hay metadatos ni títulos disponibles.\n")
+		instructions.WriteString("FORMATO GENÉRICO para ## Fuentes:\n")
+		instructions.WriteString("- Libro de Texto Médico Especializado. (s.f.). [Libro de texto médico].\n")
+	}
+
+	return instructions.String()
+}
+
+// getStringFromMap helper para extraer strings de maps de metadatos
+func getStringFromMap(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok {
+		if str, ok := val.(string); ok {
+			return strings.TrimSpace(str)
+		}
+	}
+	return ""
 }
 
 // joinDocTitles toma documentos (vector) y devuelve títulos únicos y concisos separados por ", "
