@@ -483,143 +483,46 @@ FORMATO DE RESPUESTA:
 	if integrationMode == "hybrid" {
 		// MODO HÍBRIDO: Integrar vector store y PubMed
 		input = fmt.Sprintf(
-			"CONTEXTO DE LA CONVERSACIÓN:\n"+
-				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
-
-				"CONTEXTO PRINCIPAL (Libros y Manuales Médicos):\n%s\n\n"+
-				"CONTEXTO COMPLEMENTARIO (Artículos Recientes de PubMed):\n%s\n\n"+
-				"Referencias de PubMed (≥2020):\n%s\n\n"+
-				"Pregunta del usuario:\n%s\n\n"+
-
-				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
-				"Estructura la respuesta así:\n\n"+
-				"[Respuesta académica integrando ambas fuentes - mínimo 2-3 párrafos desarrollados]\n\n"+
-				"## Fuentes:\n"+
-				"[Fuentes en formato APA, separando libros y artículos de PubMed]\n\n"+
-
-				"REGLAS CRÍTICAS DE INTEGRACIÓN HÍBRIDA:\n"+
-				"- INTEGRA información de AMBAS fuentes cuando sea relevante\n"+
-				"- Estructura: Comienza con fundamentos de libros/manuales, complementa con hallazgos recientes de PubMed\n"+
-				"- Ejemplo de integración: 'Según el *Tratado de Cardiología de Braunwald*, la IC-FEr se caracteriza por... Estudios recientes en PubMed (Smith et al., 2023, PMID: 123456) han encontrado que...'\n"+
-				"- NO dupliques información que esté en ambas fuentes; sintetiza y complementa\n"+
-				"- Si hay contradicciones, menciónalo explícitamente citando ambas fuentes\n\n"+
-
-				"REGLAS DE CONTENIDO:\n"+
-				"- NO incluir '## Respuesta académica:' al inicio\n"+
-				"- NO incluir sección '## Evidencia usada:'\n"+
-				"- PROFUNDIDAD: fisiopatología, manifestaciones clínicas, diagnóstico, tratamiento\n"+
-				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
-				"  * Valores de laboratorio con rangos (ej: NT-proBNP >300 pg/mL, FE <40%%)\n"+
-				"  * Hallazgos de imagen con mediciones (ej: diámetro ventricular >55mm)\n"+
-				"  * Umbrales clínicos específicos (ej: clase funcional NYHA, escalas de riesgo)\n"+
-				"  * Criterios clasificatorios (ej: ESC 2021, AHA/ACC 2022)\n"+
-				"- MÍNIMO 250-350 palabras de contenido sustancial\n"+
-				"- Tono académico: preciso, formal, con profundidad científica\n\n"+
-
-				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
-				"PARA LIBROS/MANUALES:\n"+
-				"- Busca en 'CONTEXTO PRINCIPAL' arriba el nombre EXACTO del libro usado\n"+
-				"- DEBES citarlo textualmente en formato APA 7: Autor. (Año). Título. Editorial.\n"+
-				"- Si no hay metadatos completos, usa: Título exacto. (s.f.). [Libro de texto médico].\n"+
-				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas', 'Base de conocimiento', 'Fuentes especializadas', etc.\n\n"+
-				"PARA PUBMED:\n"+
-				"- Formato OBLIGATORIO: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
-				"- Usa SOLO información del bloque 'Referencias de PubMed' proporcionado\n"+
-				"- Si falta el año, omítelo pero mantén el PMID\n"+
-				"- NO inventes títulos, autores, PMIDs ni años\n\n"+
-				"SECCIÓN ## Fuentes: DEBE incluir:\n"+
-				"**Libros y Manuales:**\n"+
-				"- [Listar fuentes de libros en formato APA con metadatos si están disponibles]\n\n"+
-				"**Artículos Científicos (PubMed):**\n"+
-				"- [Listar artículos con formato: Título (PMID: ####, Año)]\n\n"+
-				"PROHIBIDO INCLUIR:\n"+
-				"- NO incluyas secciones 'Verificación:', 'Alineado con el documento:', ni 'Bibliografía:'\n"+
-				"- SOLO incluye '## Fuentes:' al final de la respuesta\n"+
+			"Eres un asistente médico experto.\n\n"+
+				"Contexto (Libros Médicos):\n%s\n\n"+
+				"Contexto (PubMed ≥2020):\n%s\n\n"+
+				"Referencias PubMed:\n%s\n\n"+
+				"Pregunta:\n%s\n\n"+
+				"REGLAS:\n"+
+				"- Integra información de ambas fuentes\n"+
+				"- Comienza con fundamentos (libros), complementa con evidencia reciente (PubMed)\n"+
+				"- Incluye valores cuantitativos cuando estén disponibles\n"+
+				"- Formato: [Respuesta 250-350 palabras] + ## Fuentes: [APA]\n"+
+				"- Fuentes: Cita títulos exactos de libros y artículos PubMed (con PMID)\n"+
 				"%s\n",
 			ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
-			"CONTEXTO DE LA CONVERSACIÓN:\n"+
-				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
-
-				"Contexto recuperado (Libros y Manuales Médicos):\n%s\n\n"+
-				"Pregunta del usuario:\n%s\n\n"+
-
-				"⚠️ REGLA CRÍTICA DE EXTRAPOLACIÓN (MODO SOLO-VECTOR):\n"+
-				"- SOLO puedes responder con información EXPLÍCITAMENTE CONTENIDA en el 'Contexto recuperado' arriba\n"+
-				"- ❌ PROHIBIDO hacer inferencias, extrapolaciones o conexiones lógicas más allá del texto literal\n"+
-				"- ❌ PROHIBIDO aplicar conceptos fisiológicos normales a patologías no mencionadas en el texto\n"+
-				"- ❌ PROHIBIDO agregar información clínica que NO aparezca textualmente en el contexto\n"+
-				"- ✅ SI el contexto habla de desarrollo embrionario, NO lo extrapoles a tumores\n"+
-				"- ✅ SI el contexto NO menciona específicamente la patología preguntada, DEBES responder:\n"+
-				"     \"El material disponible no contiene información específica sobre [tema]. El contexto recuperado trata sobre [tema real del texto], que no aborda directamente la pregunta planteada.\"\n\n"+
-
-				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
-				"Estructura la respuesta así:\n\n"+
-				"[Respuesta ESTRICTAMENTE basada en el texto recuperado - mínimo 2-3 párrafos SI hay información relevante]\n\n"+
-				"## Fuentes:\n"+
-				"[Fuentes en formato APA]\n\n"+
-
-				"REGLAS ESTRICTAS DE CONTENIDO:\n"+
-				"- NO incluir '## Respuesta académica:' al inicio - comenzar directamente con el contenido\n"+
-				"- NO incluir sección '## Evidencia usada:' en ningún lugar\n"+
-				"- VERIFICACIÓN CRÍTICA: Antes de escribir, pregúntate: '¿Esta información aparece TEXTUALMENTE en el contexto recuperado?'\n"+
-				"- Si la respuesta es NO, NO la incluyas\n"+
-				"- NIVEL ACADÉMICO: Desarrolla solo conceptos que estén EXPLÍCITOS en el texto\n"+
-				"- VALORES CUANTITATIVOS: Incluye SOLO los que aparezcan en el texto recuperado\n"+
-				"- HONESTIDAD ACADÉMICA: Es mejor decir 'no encontré información' que inventar o extrapolar\n"+
-				"- Tono académico: preciso, formal y ESTRICTAMENTE fiel al documento fuente\n\n"+
-
-				"REGLAS CRÍTICAS DE FUENTES (OBLIGATORIO):\n"+
-				"- En el 'Contexto recuperado' arriba encontrarás el nombre EXACTO del libro/manual usado\n"+
-				"- DEBES citar ese nombre específico en la sección '## Fuentes:'\n"+
-				"- PROHIBIDO usar términos genéricos como 'Fuentes médicas especializadas', 'Base de conocimiento', etc.\n"+
-				"- Formato preferido: Cita en normas APA 7 (Autor. (Año). Título. Editorial.)\n"+
-				"- Si no tienes metadatos completos, usa: Título exacto del libro. (s.f.). [Libro de texto médico].\n"+
-				"- NO incluyas secciones 'Verificación', 'Alineado con el documento', ni 'Bibliografía' - SOLO '## Fuentes:'\n"+
-				"- Ejemplo mínimo: '## Fuentes:\nBm Embriología Clínica Moore 11a Ed. (s.f.). [Libro de texto médico].'\n"+
+			"Eres un asistente médico experto.\n\n"+
+				"Contexto (Libros Médicos):\n%s\n\n"+
+				"Pregunta:\n%s\n\n"+
+				"REGLAS CRÍTICAS:\n"+
+				"- Responde SOLO con información EXPLÍCITA del contexto arriba\n"+
+				"- NO hagas inferencias ni extrapoles\n"+
+				"- Si el contexto no tiene la información, dilo claramente\n"+
+				"- Formato: [Respuesta] + ## Fuentes: [Citas APA]\n"+
+				"- Cita el título exacto del libro del contexto\n"+
 				"%s\n",
 			ctxVec, prompt, apaInstructions,
 		)
 	} else {
 		// MODO PUBMED ONLY
 		input = fmt.Sprintf(
-			"CONTEXTO DE LA CONVERSACIÓN:\n"+
-				"Eres un asistente médico experto. El usuario está preguntando en el contexto de una conversación médica académica.\n\n"+
-
-				"Contexto recuperado (Artículos Científicos de PubMed):\n%s\n\n"+
-				"Referencias (PubMed ≥2020):\n%s\n\n"+
-				"Pregunta del usuario:\n%s\n\n"+
-
-				"FORMATO DE RESPUESTA OBLIGATORIO:\n"+
-				"Estructura la respuesta así:\n\n"+
-				"[Respuesta académica basada en evidencia reciente - mínimo 2-3 párrafos desarrollados]\n\n"+
-				"## Fuentes:\n"+
-				"[Referencias de PubMed en formato APA]\n\n"+
-
-				"REGLAS CRÍTICAS DE CONTENIDO:\n"+
-				"- NO incluir '## Respuesta académica:' al inicio\n"+
-				"- NO incluir sección '## Evidencia usada:'\n"+
-				"- Enfócate en evidencia basada en investigación reciente\n"+
-				"- NIVEL CLÍNICO AVANZADO: incluye criterios diagnósticos cuantitativos siempre que existan en las fuentes\n"+
-				"  * Valores de laboratorio con rangos de estudios (ej: NT-proBNP >300 pg/mL)\n"+
-				"  * Hallazgos de imagen con mediciones reportadas\n"+
-				"  * Umbrales clínicos de los estudios citados\n"+
-				"  * Criterios de inclusión/exclusión con valores específicos\n"+
-				"- MÍNIMO 200-250 palabras de contenido sustancial\n"+
-				"- Tono académico y científico\n\n"+
-
-				"REGLAS ESTRICTAS DE FUENTES:\n"+
-				"- Formato OBLIGATORIO para cada referencia: '<Título exacto del estudio> (PMID: #######, Año)'\n"+
-				"- Usa EXCLUSIVAMENTE información del bloque 'Referencias' proporcionado arriba\n"+
-				"- NO inventes títulos, PMIDs, autores ni años que no estén en el bloque de referencias\n"+
-				"- Si el año no está disponible en las referencias, omítelo pero mantén el PMID\n"+
-				"- Cada referencia DEBE tener PMID verificable\n"+
-				"- Si no hay referencias válidas, indica claramente: 'Fuente: PubMed (búsqueda general)'\n\n"+
-				"PROHIBIDO INCLUIR:\n"+
-				"- NO incluyas secciones 'Verificación:', 'Alineado con el documento:', ni 'Bibliografía:'\n"+
-				"- SOLO incluye '## Fuentes:' con los artículos y sus PMIDs específicos\n",
+			"Eres un asistente médico experto.\n\n"+
+				"Contexto (PubMed ≥2020):\n%s\n\n"+
+				"Referencias:\n%s\n\n"+
+				"Pregunta:\n%s\n\n"+
+				"REGLAS:\n"+
+				"- Responde basado en evidencia reciente de PubMed\n"+
+				"- Incluye valores cuantitativos cuando estén disponibles\n"+
+				"- Formato: [Respuesta 200-250 palabras] + ## Fuentes: [Título (PMID: ####, Año)]\n"+
+				"- Usa SOLO referencias del bloque arriba\n",
 			ctxPub, refsBlock, prompt,
 		)
 	}
