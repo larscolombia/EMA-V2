@@ -211,8 +211,9 @@ func TestSearchPubMedSpanish(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	t.Run("spanish query - heart failure", func(t *testing.T) {
-		result, err := client.SearchPubMed(ctx, "insuficiencia cardíaca fracción de eyección reducida tratamiento")
+	t.Run("spanish query - GIST tumor", func(t *testing.T) {
+		// Query similar a la del usuario real
+		result, err := client.SearchPubMed(ctx, "mejor tratamiento para tumor gist gastrico de 5cm")
 		if err != nil {
 			t.Fatalf("SearchPubMed failed: %v", err)
 		}
@@ -238,5 +239,11 @@ func TestSearchPubMedSpanish(t *testing.T) {
 
 		t.Logf("✓ Found %d studies with Spanish query (auto-translated)", len(studies))
 		t.Logf("✓ Summary: %v", data["summary"])
+
+		// Mostrar primer estudio
+		if len(studies) > 0 {
+			firstStudy := studies[0].(map[string]interface{})
+			t.Logf("✓ First study: %s (PMID: %s)", firstStudy["title"], firstStudy["pmid"])
+		}
 	})
 }

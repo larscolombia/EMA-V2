@@ -1995,6 +1995,13 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 		query = translatedQuery
 	}
 
+	// Limpiar puntuación problemática para PubMed
+	query = strings.ReplaceAll(query, "?", "")
+	query = strings.ReplaceAll(query, "¿", "")
+	query = strings.ReplaceAll(query, "!", "")
+	query = strings.ReplaceAll(query, "¡", "")
+	query = strings.TrimSpace(query)
+
 	// Contexto con timeout para PubMed API (35s total: 20s búsqueda + 15s detalles)
 	pubmedCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
@@ -2427,7 +2434,14 @@ func (c *Client) translateMedicalQuery(ctx context.Context, query string) string
 	lowerQuery := strings.ToLower(query)
 
 	// Detectar si la query parece estar en español
-	spanishIndicators := []string{"¿", "á", "é", "í", "ó", "ú", "ñ", "cómo", "cuál", "qué"}
+	// Incluye: caracteres especiales, palabras interrogativas, palabras comunes médicas en español
+	spanishIndicators := []string{
+		"¿", "á", "é", "í", "ó", "ú", "ñ", // Caracteres especiales
+		"cómo", "cuál", "qué", "cuales", "cual", "como", "que", // Interrogativos
+		"tratamiento", "paciente", "enfermedad", "síntoma", "diagnóstico", "terapia", // Términos médicos
+		"mejor", "para", "con", "del", "por", "sin", "sobre", // Preposiciones comunes
+		"tumor", "cáncer", "cardíaca", "renal", "hepático", "pulmonar", // Términos anatómicos
+	}
 	isSpanish := false
 	for _, indicator := range spanishIndicators {
 		if strings.Contains(lowerQuery, indicator) {
@@ -2437,11 +2451,15 @@ func (c *Client) translateMedicalQuery(ctx context.Context, query string) string
 	}
 
 	if !isSpanish {
+		log.Printf("[openai][translateQuery][skip] query appears to be in English, no translation needed")
 		return query // Ya está en inglés, no traducir
 	}
 
+	log.Printf("[openai][translateQuery][detected] Spanish detected, will translate query_preview=%s", truncateText(query, 80))
+
 	// Usar OpenAI para traducción médica precisa
 	if c.api == nil {
+		log.Printf("[openai][translateQuery][fallback] No API key available, using simple cleanup")
 		// Fallback: limpieza simple si no hay API disponible
 		result := strings.ReplaceAll(query, "¿", "")
 		result = strings.ReplaceAll(result, "¡", "")
@@ -2454,8 +2472,9 @@ func (c *Client) translateMedicalQuery(ctx context.Context, query string) string
 	messages := []openai.ChatCompletionMessage{
 		{
 			Role: "system",
-			Content: "You are a medical translator. Translate the following medical question from Spanish to English. " +
-				"Preserve all medical terminology accurately. Return ONLY the English translation, no explanations.",
+			Content: "You are a medical search query translator. Convert the Spanish medical question into English search terms for PubMed. " +
+				"Extract only the key medical concepts (disease, treatment, anatomy, etc.). " +
+				"Remove question words (qué, cuál, cómo). Return ONLY the English search terms, no punctuation.",
 		},
 		{
 			Role:    "user",
@@ -2479,10 +2498,12 @@ func (c *Client) translateMedicalQuery(ctx context.Context, query string) string
 	}
 
 	if len(resp.Choices) == 0 {
+		log.Printf("[openai][translateQuery][error] No choices in response, using original query")
 		return query
 	}
 
 	translated := strings.TrimSpace(resp.Choices[0].Message.Content)
+	log.Printf("[openai][translateQuery][success] original=%s translated=%s", truncateText(query, 50), truncateText(translated, 50))
 	return translated
 }
 
