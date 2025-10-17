@@ -52,37 +52,52 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // 1. Convert literal \n to actual line breaks
     processed = processed.replaceAll('\\n', '\n');
 
-    // 2. Clean up duplicate reference sections and normalize structure
+    // 2. Ensure paragraphs are properly separated
+    // Replace double line breaks with proper markdown spacing
+    processed = processed.replaceAll(RegExp(r'\n\n+'), '\n\n');
+
+    // 3. Clean up duplicate reference sections and normalize structure
     processed = _consolidateReferences(processed);
 
-    // 3. Format lists properly (convert numbered lists to markdown)
+    // 4. Format lists properly (convert numbered lists to markdown)
     processed = _formatLists(processed);
 
-    // 3.1. Ensure proper spacing between numbered list items
+    // 4.1. Ensure proper spacing between numbered list items
     processed = processed.replaceAllMapped(
       RegExp(r'(\d+\.\s+\*\*[^*]+\*\*)\s*(\d+\.\s+\*\*)', multiLine: true),
       (match) => '${match.group(1)}\n\n${match.group(2)}',
     );
 
-    // 3.2. Fix any numbered lists that are still stuck together
+    // 4.2. Fix any numbered lists that are still stuck together
     processed = processed.replaceAllMapped(
       RegExp(r'(\w+\.\s*)(\d+\.\s+)', multiLine: true),
       (match) => '${match.group(1)}\n\n${match.group(2)}',
     );
 
-    // 4. Handle source indicators - clean format
+    // 5. Handle source indicators - clean format
     processed = processed.replaceAllMapped(
       RegExp(r'\*\(Fuente:\s*([^)]+)\)\*'),
       (match) => '\n\n*Fuente: ${match.group(1)}*\n',
     );
 
-    // 5. Legacy cleanup (for any old content still in cache)
+    // 5. Ensure paragraph spacing by preserving double line breaks
+    // Replace multiple line breaks (3 or more) with exactly 2 for consistent paragraph spacing
+    processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+
+    // 6. Ensure there's a blank line after each paragraph ending with a period
+    // This helps separate paragraphs that might be stuck together
+    processed = processed.replaceAllMapped(
+      RegExp(r'([.!?])\s*\n([A-ZÁÉÍÓÚÑ])', multiLine: true),
+      (match) => '${match.group(1)}\n\n${match.group(2)}',
+    );
+
+    // 7. Legacy cleanup (for any old content still in cache)
     processed = processed.replaceAll(RegExp(r'\$1eferencias'), 'Referencias');
     processed = processed.replaceAll(RegExp(r'\$1esumen'), 'Resumen');
     processed = processed.replaceAll(RegExp(r'\$2oi:'), 'doi:');
     processed = processed.replaceAll(RegExp(r'\$2ururo'), 'eururo');
 
-    // 6. Clean up any remaining malformed placeholders (legacy support)
+    // 8. Clean up any remaining malformed placeholders (legacy support)
     // Remove isolated $1 $2 patterns (most common case)
     processed = processed.replaceAll(RegExp(r'\$1\s+\$2\s*'), '');
 
@@ -96,10 +111,17 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAll(RegExp(r'\$1(?![a-zA-Z])'), '');
     processed = processed.replaceAll(RegExp(r'\$2(?![a-zA-Z])'), '');
 
-    // Clean up any resulting double spaces
-    processed = processed.replaceAll(RegExp(r'\s{2,}'), ' ');
+    // 9. Clean up excessive spaces in a line (but preserve line breaks)
+    processed = processed.replaceAllMapped(
+      RegExp(r'([^\n])\s{2,}([^\n])', multiLine: true),
+      (match) => '${match.group(1)} ${match.group(2)}',
+    );
 
-    // 7. Handle malformed PMID references
+    // 10. Remove standalone ## that are not headers (malformed section markers)
+    processed = processed.replaceAll(RegExp(r'\.##\s*F'), '.');
+    processed = processed.replaceAll(RegExp(r'##\s*$', multiLine: true), '');
+
+    // 10.1. Handle malformed PMID references and special brackets
     processed = processed.replaceAllMapped(
       RegExp(r'【PMID:\s*(\d+)】'),
       (match) => '[PMID: ${match.group(1)}]',
@@ -108,24 +130,101 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAll(RegExp(r'\[PMID:\s*\$1\]'), '');
     processed = processed.replaceAll(RegExp(r'PMID:\s*\$1'), '');
 
-    // 8. Fix missing spaces after ## in headers
+    // 10.2. Replace all 【】 brackets with regular []
+    processed = processed.replaceAll('【', '[');
+    processed = processed.replaceAll('】', ']');
+
+    // 10.3. Format inline references to be more discrete and not interrupt reading
+    // Convert long inline references to a cleaner superscript-style format
+
+    // Step 1: Ensure period before references when missing
+    // Fix "palabra[Referencia]." → "palabra.(Referencia)"
+    processed = processed.replaceAllMapped(
+      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ])\[([^\]]+)\]\.', caseSensitive: false),
+      (match) => '${match.group(1)}.(${match.group(2)})',
+    );
+
+    // Step 2: Convert all bracket references to parentheses (APA format)
+    // [Reference] → (Reference)
+    processed = processed.replaceAllMapped(
+      RegExp(
+        r'\[([^\]]+?(?:PMID|Schwartz|Manual|Libro|PDF)[^\]]*)\]',
+        caseSensitive: false,
+      ),
+      (match) => '(${match.group(1)})',
+    );
+
+    // Step 3: Format long book/manual references to be discrete
+    // Pattern 1: Books/Manuals with (PDF/Libro...) format
+    // Matches: "text - Title. (year). (PDF/Libro de texto...)"
+    processed = processed.replaceAllMapped(
+      RegExp(
+        r'(\w+)\s*[-–—]\s*([A-Z][^.]{3,40})\.\s*\([^)]+\)\.\s*\((?:PDF|Libro)[^\)]*\)[.,]?',
+        caseSensitive: false,
+      ),
+      (match) {
+        final title = match
+            .group(2)!
+            .split(' ')
+            .take(2)
+            .join(' '); // First 2 words
+        return '${match.group(1)}. *($title)*';
+      },
+    );
+
+    // Pattern 2: Long article citations with PMID
+    // Matches: "text - Article title. — Journal (PMID: 123456, 2023)"
+    processed = processed.replaceAllMapped(
+      RegExp(
+        r'(\w+)\s*[-–—]\s*[^.]{10,}?\.\s*[-–—]\s*[^(]{5,}?\(PMID:\s*(\d+)[^)]*\)',
+        caseSensitive: false,
+      ),
+      (match) => '${match.group(1)}. *(PMID: ${match.group(2)})*',
+    );
+
+    // Pattern 3: Books without leading dash but with (PDF...) marker
+    // Matches: "Title/Manual name. (year). (PDF...)"
+    processed = processed.replaceAllMapped(
+      RegExp(
+        r'\s+([A-Z][A-Za-zÀ-ÿ\s]{5,40})\.\s*\([^)]+\)\.\s*\((?:PDF|Libro)[^\)]*\)\s*',
+        caseSensitive: false,
+      ),
+      (match) {
+        final title = match
+            .group(1)!
+            .trim()
+            .split(' ')
+            .take(2)
+            .join(' '); // First 2 words
+        return '. *($title)* ';
+      },
+    );
+
+    // Pattern 4: Standalone long PMID citations (without text before)
+    // Matches: "- Long article title... (PMID: 123456)"
+    processed = processed.replaceAllMapped(
+      RegExp(
+        r'\s*[-–—]\s*[^(]{15,}?\(PMID:\s*(\d+)[^)]*\)\s*',
+        caseSensitive: false,
+      ),
+      (match) => '. *(PMID: ${match.group(1)})* ',
+    ); // 11. Fix missing spaces after ## in headers
     processed = processed.replaceAll(RegExp(r'##([^\s#])'), '## \$1');
 
-    // 8.1. Also ensure proper line breaks before headers
+    // 11.1. Also ensure proper line breaks before headers
     processed = processed.replaceAll(RegExp(r'([^\n])(\n## )'), '\$1\n\n\$2');
 
-    // 8.1. Ensure proper spacing around all headers
+    // 11.2. Ensure proper spacing around all headers
     processed = processed.replaceAllMapped(
       RegExp(r'^(#{1,6})\s*(.+)$', multiLine: true),
       (match) => '${match.group(1)} ${match.group(2)}',
     );
 
-    // 9. Clean up excessive whitespace but preserve intentional breaks
+    // 12. Clean up excessive whitespace but preserve paragraph breaks
     processed = processed.replaceAll(RegExp(r'\n{4,}'), '\n\n\n');
     processed = processed.replaceAll(RegExp(r'[ \t]+'), ' ');
-    processed = processed.replaceAll(RegExp(r' +'), ' ');
 
-    // 10. Process placeholders if replacements are provided
+    // 13. Process placeholders if replacements are provided
     if (widget.placeholderReplacements != null) {
       widget.placeholderReplacements!.forEach((placeholder, replacement) {
         processed = processed.replaceAll(
@@ -315,51 +414,55 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
         displayLarge: widget.style.copyWith(
           fontSize: 18,
           fontWeight: FontWeight.bold,
-          height: 1.3,
+          height: 1.5,
         ),
         // H2 - Section titles (Evidencia usada, Fuentes, etc.)
         displayMedium: widget.style.copyWith(
           fontSize: 16,
           fontWeight: FontWeight.bold,
-          height: 1.4,
+          height: 1.6,
         ),
         // H3 - Subsection titles
         displaySmall: widget.style.copyWith(
           fontSize: 15,
           fontWeight: FontWeight.w600,
-          height: 1.4,
+          height: 1.6,
         ),
         // H4 - Minor titles
         headlineLarge: widget.style.copyWith(
           fontSize: 15,
           fontWeight: FontWeight.w600,
-          height: 1.4,
+          height: 1.6,
         ),
         // H5 - Small titles
         headlineMedium: widget.style.copyWith(
           fontSize: 14,
           fontWeight: FontWeight.w500,
-          height: 1.4,
+          height: 1.6,
         ),
         // H6 - Minimal titles
         headlineSmall: widget.style.copyWith(
           fontSize: 14,
           fontWeight: FontWeight.w500,
-          height: 1.4,
+          height: 1.6,
         ),
-        // Body text - use the same style passed from ChatMessageAi
-        bodyLarge: widget.style.copyWith(height: 1.5),
-        bodyMedium: widget.style.copyWith(height: 1.5),
+        // Body text - use the same style passed from ChatMessageAi with better spacing
+        bodyLarge: widget.style.copyWith(height: 1.7),
+        bodyMedium: widget.style.copyWith(height: 1.7),
       ),
     );
 
     // Simple content without nested scrolls for chat messages
+    // Wrap in a container to ensure proper paragraph spacing
     Widget content = Theme(
       data: customTheme,
       child: DefaultTextStyle.merge(
-        style: widget.style.copyWith(height: 1.5),
+        style: widget.style.copyWith(height: 1.7),
         textAlign: TextAlign.justify,
-        child: GptMarkdown(_processedText),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4.0),
+          child: GptMarkdown(_processedText),
+        ),
       ),
     );
 

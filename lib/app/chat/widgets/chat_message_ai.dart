@@ -240,29 +240,35 @@ class _ChatMessageAiState extends State<ChatMessageAi>
 
     String content = text;
 
-    // Remover sección "## Fuentes" completa (formato nuevo)
-    final sourcesRegex1 = RegExp(
-      r'\n##\s*Fuentes\s*\n.*',
-      dotAll: true,
-      caseSensitive: false,
+    // 1. Remover sección "## Fuentes" completa con todo su contenido
+    // Este patrón captura desde ## Fuentes hasta el final del texto
+    content = content.replaceAll(
+      RegExp(r'\n*##\s*Fuentes\s*:?\s*\n[\s\S]*$', caseSensitive: false),
+      '',
     );
-    content = content.replaceAll(sourcesRegex1, '');
 
-    // Remover sección "Fuentes:" sin ## (fallback)
-    final sourcesRegex2 = RegExp(
-      r'\nFuentes?:\s*\n.*',
-      dotAll: true,
-      caseSensitive: false,
+    // 2. Remover sección "Fuentes:" sin ## (fallback para formatos antiguos)
+    content = content.replaceAll(
+      RegExp(r'\n*Fuentes?\s*:?\s*\n[\s\S]*$', caseSensitive: false),
+      '',
     );
-    content = content.replaceAll(sourcesRegex2, '');
 
-    // Remover patrones de fuente simples al final
-    final altSourceRegex = RegExp(
-      r'\n\*?\(?(Fuentes?:.*?)\)?\*?$',
-      multiLine: true,
-      caseSensitive: false,
+    // 3. Remover líneas que empiezan con "- " y contienen referencias bibliográficas
+    // (Manual, PMID, PDF, etc.) que puedan haber quedado
+    content = content.replaceAll(
+      RegExp(
+        r'\n\s*-\s+.*?(?:Manual\s+Schwartz|PMID:\s*\d+|\.pdf|PubMed).*?$',
+        caseSensitive: false,
+        multiLine: true,
+      ),
+      '',
     );
-    content = content.replaceAll(altSourceRegex, '');
+
+    // 4. Remover símbolos ## mal formados al final
+    content = content.replaceAll(RegExp(r'\.?\s*##\s*[A-Z]?\s*$'), '.');
+
+    // 5. Limpiar espacios en blanco excesivos al final
+    content = content.replaceAll(RegExp(r'\s+$'), '');
 
     return content.trim();
   }
@@ -320,7 +326,8 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                     style: const TextStyle(
                       fontSize: 15,
                       color: Colors.white,
-                      height: 1.5,
+                      height: 1.7,
+                      letterSpacing: 0.2,
                     ),
                   ),
                 ),
@@ -357,25 +364,39 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                         ),
                         const SizedBox(height: 8),
                         ..._extractSources(widget.message.text).map(
-                          (source) => Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
+                          (source) => Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.1),
+                                width: 0.5,
+                              ),
+                            ),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  '• ',
-                                  style: TextStyle(
-                                    color: Colors.white60,
-                                    fontSize: 12,
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: 2,
+                                    right: 8,
+                                  ),
+                                  child: Icon(
+                                    Icons.article_outlined,
+                                    color: Colors.white54,
+                                    size: 14,
                                   ),
                                 ),
                                 Expanded(
                                   child: Text(
                                     _toApa(source),
                                     style: TextStyle(
-                                      color: Colors.white60,
-                                      fontSize: 12,
-                                      height: 1.3,
+                                      color: Colors.white70,
+                                      fontSize: 11.5,
+                                      height: 1.4,
+                                      fontStyle: FontStyle.italic,
                                     ),
                                   ),
                                 ),

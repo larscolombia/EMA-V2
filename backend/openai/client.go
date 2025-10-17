@@ -141,8 +141,8 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 	model := c.Model
 	if model == "" {
 		if len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_" {
-			// Assistant IDs are not models; default to a general model unless CHAT_MODEL is provided
-			model = "gpt-4o-mini"
+			// Assistant IDs are not models; default to o3-mini (better reasoning) unless CHAT_MODEL is provided
+			model = "o3-mini"
 		} else {
 			// If AssistantID is actually a model name, allow using it directly
 			model = c.AssistantID
@@ -160,7 +160,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 		log.Printf("[openai][stream.init.error] %v", err)
 		fbModel := c.Model
 		if fbModel == "" || (len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_") {
-			fbModel = "gpt-4o-mini"
+			fbModel = "o3-mini"
 		}
 		resp, err2 := c.api.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model: fbModel,
@@ -216,7 +216,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 		if !anyToken {
 			fbModel := c.Model
 			if fbModel == "" || (len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_") {
-				fbModel = "gpt-4o-mini"
+				fbModel = "o3-mini"
 			}
 			resp, err := c.api.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 				Model: fbModel,
@@ -1319,7 +1319,7 @@ func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 	if c.AssistantID == "" { // usar chat completions como fallback
 		model := c.Model
 		if strings.TrimSpace(model) == "" {
-			model = "gpt-4o-mini" // default razonable
+			model = "o3-mini" // default razonable con mejor razonamiento
 		}
 		out := make(chan string, 1)
 		go func() {
