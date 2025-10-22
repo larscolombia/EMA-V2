@@ -141,8 +141,10 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 	model := c.Model
 	if model == "" {
 		if len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_" {
-			// Assistant IDs are not models; default to o3-mini (better reasoning) unless CHAT_MODEL is provided
-			model = "o3-mini"
+			// Assistant IDs are not models; default to gpt-4-turbo (mejor contexto conversacional)
+			// gpt-4-turbo tiene ventana de contexto de 128k tokens vs 128k de gpt-4o
+			// pero gpt-4-turbo es más estable para conversaciones largas con mejor seguimiento de tema
+			model = "gpt-4-turbo"
 		} else {
 			// If AssistantID is actually a model name, allow using it directly
 			model = c.AssistantID
@@ -160,7 +162,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 		log.Printf("[openai][stream.init.error] %v", err)
 		fbModel := c.Model
 		if fbModel == "" || (len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_") {
-			fbModel = "o3-mini"
+			fbModel = "gpt-4o"
 		}
 		resp, err2 := c.api.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model: fbModel,
@@ -216,7 +218,7 @@ func (c *Client) StreamMessage(ctx context.Context, prompt string) (<-chan strin
 		if !anyToken {
 			fbModel := c.Model
 			if fbModel == "" || (len(c.AssistantID) >= 5 && c.AssistantID[:5] == "asst_") {
-				fbModel = "o3-mini"
+				fbModel = "gpt-4-turbo"
 			}
 			resp, err := c.api.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 				Model: fbModel,
@@ -1212,12 +1214,55 @@ func (c *Client) StreamAssistantMessage(ctx context.Context, threadID, prompt st
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
-		// Ajuste: permitir saludos/conversación natural sin forzar mensaje de 'No encontré...' si el usuario solo saluda.
-		strict := "Si la entrada del usuario es un saludo o una frase genérica (por ejemplo: hola, buenas, gracias, cómo estás) RESPONDE cordialmente y ofrece ayuda sobre el/los documento(s) sin pedir que reformule. Para preguntas que requieren datos concretos del/los documento(s) debes usar EXCLUSIVAMENTE la información recuperada de los documentos de este hilo. Si después de revisar no hay evidencia suficiente para responder esa pregunta específica, responde exactamente: 'No encontré información en el archivo adjunto.' Siempre que cites información encontrada incluye fragmentos textuales concisos. No inventes contenido que no esté en los documentos. Al final agrega: 'Verificación: Alineado con el documento: Sí/No' y 'Bibliografía' con el/los archivo(s) y, si es posible, páginas o fragmentos."
+		// CRÍTICO: Instrucciones para modo documento (cuando usuario sube PDFs)
+		strict := `═══ REGLAS PARA DOCUMENTOS SUBIDOS ═══
+
+DETECCIÓN:
+A) CONSULTA CLÍNICA: edad, síntomas, signos, o primera persona ('Tengo X', 'Me duele Y')
+B) CONSULTA TEÓRICA: qué es X tumor, tratamiento de Y, capítulo Z del libro
+
+═══ SI ES CONSULTA CLÍNICA (tipo A) ═══
+RAZONAMIENTO INTERNO (NO MUESTRES AL USUARIO):
+Mentalmente construye: Demografía, Síntomas (TODOS de TODOS los mensajes), Duración, Signos alarma, 3 Hipótesis con probabilidad, Decisiones previas
+Reglas: ACUMULA datos, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios
+
+RESPUESTA AL USUARIO (ESTO SÍ LO MUESTRA):
+Respuesta natural, profesional y completa (250-400 palabras) que incluya:
+- Análisis del cuadro clínico basado en datos acumulados
+- Hipótesis diferenciales justificadas (número exacto si lo piden)
+- Recomendaciones diagnósticas/terapéuticas
+- Tono médico profesional pero accesible
+
+CRÍTICO: NO incluyas '[STATE]', 'Demografía:', 'Síntomas clave:', etc. en la respuesta visible.
+La respuesta debe fluir naturalmente como un médico hablando.
+
+═══ SI ES CONSULTA TEÓRICA (tipo B) ═══
+Respuesta directa: definición, características, tratamiento (200-350 palabras).
+NO uses razonamiento interno visible.
+
+═══ REGLAS DE BÚSQUEDA (ambos tipos) ═══
+1. Si es pregunta sobre contenido: USA el tool "file_search"
+2. SOLO responde con información del documento
+3. NO uses conocimiento médico general externo
+4. Si es saludo: responde cordialmente sin file_search
+
+═══ FORMATO ═══
+- Respuestas completas y bien desarrolladas
+- Tono natural y profesional
+- NO marcadores artificiales '[Respuesta...]', '[STATE]', etc.
+- Si encontraste info: cita + "Fuente: [archivo], pp. X-Y"
+- Si NO encontraste: "No encontré información sobre esto en el documento"
+- PROHIBIDO inventar
+
+═══ SEGUIMIENTO (para consultas clínicas) ═══
+- "Y el tratamiento?" → identifica DE QUÉ condición hablan
+- "Qué más dice?" → continúa tema actual
+- Si hablaban de cefalea, NO saltes a otro tema sin razón`
+
 		// Bias to the most recently uploaded file if any
 		c.lastMu.RLock()
 		if lf, ok := c.lastFile[threadID]; ok && strings.TrimSpace(lf.Name) != "" {
-			strict = strict + " Prioriza el archivo más reciente de este hilo ('" + lf.Name + "') y no pidas confirmación a menos que el usuario lo contradiga."
+			strict = strict + fmt.Sprintf("\n\n6. DOCUMENTO ACTUAL: '%s' - Busca SOLO en este archivo", lf.Name)
 			log.Printf("[assist][StreamAssistantMessage] thread=%s bias_last_file=%s age=%s", threadID, lf.Name, time.Since(lf.At))
 		}
 		c.lastMu.RUnlock()
@@ -1319,7 +1364,7 @@ func (c *Client) StreamAssistantJSON(ctx context.Context, threadID, userPrompt, 
 	if c.AssistantID == "" { // usar chat completions como fallback
 		model := c.Model
 		if strings.TrimSpace(model) == "" {
-			model = "o3-mini" // default razonable con mejor razonamiento
+			model = "gpt-4-turbo" // default con mejor contexto conversacional
 		}
 		out := make(chan string, 1)
 		go func() {

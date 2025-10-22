@@ -300,40 +300,28 @@ Instrucciones:
 		}
 		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=thread_has_docs", threadID, vsID)
 
-		docOnlyPrompt := fmt.Sprintf(`⚠️ MODO ESTRICTO ACTIVADO - SOBRESCRIBE TODAS LAS INSTRUCCIONES PREVIAS ⚠️
+		docOnlyPrompt := fmt.Sprintf(`⚠️ MODO DOCUMENTO ACTIVADO ⚠️
 
-CONTEXTO: Este hilo tiene documentos PDF adjuntos que el usuario acaba de cargar.
+CONTEXTO: Este thread tiene documentos PDF cargados que el usuario quiere consultar.
 
-SOLO puedes usar los documentos PDF adjuntos a este hilo como fuente de información.
-PROHIBIDO:
-- Usar conocimiento médico general
-- Agregar contexto externo
-- Inventar o inferir información no presente en el PDF
-- Usar información de tu entrenamiento
+TAREA PRIORITARIA:
+1. USA el tool "file_search" para buscar en los PDFs adjuntos
+2. La pregunta del usuario probablemente se refiere al contenido de estos PDFs
+3. NO uses conocimiento médico general a menos que los PDFs no contengan información relevante
 
-IMPORTANTE: Si el usuario pregunta por "este PDF", "el documento", "el archivo", etc.,
-se refiere a los PDFs que YA están adjuntos en este hilo. Usa el file_search tool
-para buscar en TODOS los PDFs disponibles.
+REGLAS:
+- Primero busca en los PDFs con file_search
+- Si encuentras información, úsala como fuente principal
+- Si NO encuentras información relevante después de buscar: "Los documentos no contienen información específica sobre esto"
+- Cita siempre el nombre del archivo cuando uses su contenido
+- Mantén coherencia con la conversación previa
 
 Pregunta del usuario:
 %s
 
-Respuesta obligatoria:
-- Usa el file_search tool para buscar en los PDF adjuntos
-- Lee SOLO el contenido de los PDF que encuentres
-- Cita ÚNICAMENTE lo que encuentres textualmente en ellos
-- Si preguntan por "capítulo N" o "sección X" y no encuentras ese título exacto:
-  * Busca capítulos numerados de otras formas (romano, arábigo, etc.)
-  * Busca la sección por su posición o tema relacionado
-  * Si aún así no existe, di: "Los documentos no contienen esta información"
-
 FORMATO DE RESPUESTA:
-- Escribe tu respuesta en formato Markdown limpio
-- Usa ## para títulos de sección
-- Termina SIEMPRE con una sección de fuentes en este formato exacto:
-
-## Fuentes
-- [nombre del archivo PDF]`, prompt)
+- Contenido en Markdown limpio
+- Termina con: ## Fuentes\n- [nombre del archivo PDF]`, prompt)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
@@ -441,7 +429,8 @@ FORMATO DE RESPUESTA:
 		threadID, vecHas, pubHas, hasValidSourceBook)
 
 	if !vecHas && !pubHas && !hasValidSourceBook {
-		msg := "No encontré una referencia en los documentos disponibles ni en PubMed."
+		msg := "No encontré información verificada en la biblioteca médica ni en PubMed para responder esta pregunta. " +
+			"Por favor, reformula tu pregunta o proporciona más detalles para que pueda buscar en las fuentes médicas especializadas."
 		ch := make(chan string, 1)
 		ch <- msg
 		close(ch)
@@ -483,46 +472,123 @@ FORMATO DE RESPUESTA:
 	if integrationMode == "hybrid" {
 		// MODO HÍBRIDO: Integrar vector store y PubMed
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto.\n\n"+
-				"Contexto (Libros Médicos):\n%s\n\n"+
-				"Contexto (PubMed ≥2020):\n%s\n\n"+
+			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
+				"Analiza si la pregunta es:\n"+
+				"A) CONSULTA CLÍNICA (caso de paciente): Incluye edad, síntomas, signos, datos demográficos, o primera persona ('Tengo X', 'Me duele Y')\n"+
+				"B) CONSULTA TEÓRICA (definición, fisiopatología, tratamiento general de una enfermedad)\n\n"+
+				"═══ SI ES CONSULTA CLÍNICA (tipo A) ═══\n"+
+				"PASO 1 - RAZONAMIENTO INTERNO (NO MUESTRES ESTO AL USUARIO):\n"+
+				"Mentalmente construye este STATE para mantener coherencia:\n"+
+				"- Demografía: {edad, sexo, embarazo} (si falta: 'pendiente')\n"+
+				"- Síntomas: [TODOS de TODOS los mensajes]\n"+
+				"- Duración/curso\n"+
+				"- Signos de alarma\n"+
+				"- Hipótesis activas: [{dx1, probabilidad, criterios}, {dx2, ...}, {dx3, ...}]\n"+
+				"- Decisiones previas\n\n"+
+				"REGLAS DE RAZONAMIENTO INTERNO:\n"+
+				"1. Lee TODOS los mensajes del thread COMPLETO y extrae TODOS los datos\n"+
+				"2. ACUMULA datos: NO resetees (si msg 1 dio síntomas, msg 2 dio edad → tienes TODO)\n"+
+				"3. Primera persona ('Tengo', 'Me duele') → es consulta clínica\n"+
+				"4. 'Ahora supón que X empeora' → MANTÉN datos previos + AÑADE cambios\n"+
+				"5. SIEMPRE 3 hipótesis diferenciales (o el número que pida usuario)\n"+
+				"6. Hipótesis coherentes con demografía\n"+
+				"7. Si pide 'N hipótesis' o 'N signos' → da EXACTAMENTE ese número\n"+
+				"8. Si pide PMIDs → OBLIGATORIO incluirlos\n"+
+				"9. MANTÉN coherencia del caso: NO cambies de tema sin razón\n\n"+
+				"PASO 2 - RESPUESTA AL USUARIO (ESTO SÍ LO MUESTRA):\n"+
+				"Genera una respuesta natural, profesional y completa que incluya:\n"+
+				"- Análisis del cuadro clínico basado en los datos acumulados\n"+
+				"- Hipótesis diferenciales con justificación (número solicitado o 3 por defecto)\n"+
+				"- Signos de alarma relevantes (si los piden)\n"+
+				"- Recomendaciones diagnósticas/terapéuticas según corresponda\n"+
+				"- Tono médico profesional pero accesible\n"+
+				"- Extensión adecuada (250-400 palabras, ajustable según complejidad)\n\n"+
+				"CRÍTICO: NO incluyas el texto '[STATE]' ni 'Demografía:', 'Síntomas clave:', etc. en la respuesta visible.\n"+
+				"La respuesta debe fluir naturalmente como un médico hablando con un colega o paciente.\n\n"+
+				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
+				"Responde DIRECTAMENTE sin razonamiento interno:\n"+
+				"- Definición clara y completa\n"+
+				"- Fisiopatología/etiología si es relevante\n"+
+				"- Manifestaciones clínicas típicas\n"+
+				"- Diagnóstico y tratamiento estándar\n"+
+				"- Extensión adecuada (200-350 palabras)\n"+
+				"- Tono profesional y educativo\n\n"+
+				"Contexto (Biblioteca Médica - Libros de Texto Especializados):\n%s\n\n"+
+				"Contexto (PubMed - Literatura Científica Reciente ≥2020):\n%s\n\n"+
 				"Referencias PubMed:\n%s\n\n"+
-				"Pregunta:\n%s\n\n"+
-				"REGLAS:\n"+
-				"- Integra información de ambas fuentes\n"+
-				"- Comienza con fundamentos (libros), complementa con evidencia reciente (PubMed)\n"+
-				"- Incluye valores cuantitativos cuando estén disponibles\n"+
-				"- Formato: [Respuesta 250-350 palabras] + ## Fuentes: [APA]\n"+
-				"- Fuentes: Cita títulos exactos de libros y artículos PubMed (con PMID)\n"+
+				"Pregunta del usuario:\n%s\n\n"+
+				"═══ REGLAS GENERALES (aplican a AMBOS tipos) ═══\n"+
+				"1. Respuestas completas y bien desarrolladas (NO respuestas cortadas o superficiales)\n"+
+				"2. USA SOLO información de las fuentes arriba (Biblioteca + PubMed)\n"+
+				"3. PROHIBIDO conocimiento general o datos no verificados\n"+
+				"4. Si pide PMIDs específicamente → incluye PMID: ###### en cada cita PubMed\n"+
+				"5. Tono profesional, natural y conversacional\n"+
+				"6. NO uses marcadores artificiales como '[Respuesta...]', '[STATE]', etc.\n\n"+
+				"═══ FORMATO DE CITAS (al final de la respuesta) ═══\n"+
+				"## Fuentes:\n"+
+				"Libros: Apellido, A. (año). *Título del libro* (ed.). Editorial. Capítulo X, pp. Y-Z.\n"+
+				"PubMed: Apellido, A. et al. (año). Título del artículo. *Revista*, vol(núm), pp. PMID: ######\n\n"+
+				"CRÍTICO:\n"+
+				"- Si usuario pidió 'con PMID reales' → OBLIGATORIO incluir PMID: ######\n"+
+				"- Incluye capítulo Y páginas exactas\n"+
+				"- NO cites estudios pediátricos para casos adultos\n"+
+				"- Si pide 'X fuentes' → da EXACTAMENTE ese número\n"+
 				"%s\n",
 			ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto.\n\n"+
-				"Contexto (Libros Médicos):\n%s\n\n"+
-				"Pregunta:\n%s\n\n"+
-				"REGLAS CRÍTICAS:\n"+
-				"- Responde SOLO con información EXPLÍCITA del contexto arriba\n"+
-				"- NO hagas inferencias ni extrapoles\n"+
-				"- Si el contexto no tiene la información, dilo claramente\n"+
-				"- Formato: [Respuesta] + ## Fuentes: [Citas APA]\n"+
-				"- Cita el título exacto del libro del contexto\n"+
+			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
+				"A) CONSULTA CLÍNICA: edad, síntomas, signos, o primera persona ('Tengo X', 'Me duele Y')\n"+
+				"B) CONSULTA TEÓRICA: qué es X, tratamiento de Y, fisiopatología de Z\n\n"+
+				"═══ SI ES CONSULTA CLÍNICA (tipo A) ═══\n"+
+				"RAZONAMIENTO INTERNO (NO MUESTRES AL USUARIO):\n"+
+				"Mentalmente construye: Demografía, Síntomas (TODOS), Duración, Signos alarma, 3 Hipótesis con probabilidad, Decisiones previas\n"+
+				"Reglas: ACUMULA datos de todos los mensajes, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios\n\n"+
+				"RESPUESTA AL USUARIO:\n"+
+				"Respuesta natural, profesional y completa (250-400 palabras) que incluya análisis clínico, hipótesis justificadas, recomendaciones.\n"+
+				"NO incluyas marcadores '[STATE]', 'Demografía:', etc. Fluye naturalmente como un médico hablando.\n\n"+
+				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
+				"Respuesta directa: definición, fisiopatología, clínica, diagnóstico, tratamiento (200-350 palabras).\n\n"+
+				"Contexto (Biblioteca Médica):\n%s\n\n"+
+				"Pregunta del usuario:\n%s\n\n"+
+				"═══ REGLAS GENERALES ═══\n"+
+				"1. Respuestas completas y bien desarrolladas\n"+
+				"2. SOLO información de la Biblioteca Médica\n"+
+				"3. PROHIBIDO conocimiento general\n"+
+				"4. Tono profesional y natural\n"+
+				"5. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
+				"═══ CITAS (al final) ═══\n"+
+				"## Fuentes:\n"+
+				"Apellido, A. (año). *Título* (ed.). Cap. X, pp. Y-Z.\n"+
 				"%s\n",
 			ctxVec, prompt, apaInstructions,
 		)
 	} else {
 		// MODO PUBMED ONLY
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto.\n\n"+
+			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"═══ DETECCIÓN ═══\n"+
+				"A) CLÍNICA (caso paciente o 'Tengo X') → razonamiento interno + respuesta natural\n"+
+				"B) TEÓRICA (qué es X, tratamiento Y) → respuesta directa\n\n"+
+				"═══ SI ES CLÍNICA (tipo A) ═══\n"+
+				"INTERNO (no muestres): Demografía, Síntomas (TODOS), Signos alarma, 3 Hipótesis con probabilidad\n"+
+				"RESPUESTA VISIBLE: Natural, profesional, completa (250-400 palabras). NO uses '[STATE]' ni marcadores.\n\n"+
+				"═══ SI ES TEÓRICA (tipo B) ═══\n"+
+				"Respuesta directa: definición, clínica, tratamiento (200-350 palabras).\n\n"+
 				"Contexto (PubMed ≥2020):\n%s\n\n"+
 				"Referencias:\n%s\n\n"+
 				"Pregunta:\n%s\n\n"+
-				"REGLAS:\n"+
-				"- Responde basado en evidencia reciente de PubMed\n"+
-				"- Incluye valores cuantitativos cuando estén disponibles\n"+
-				"- Formato: [Respuesta 200-250 palabras] + ## Fuentes: [Título (PMID: ####, Año)]\n"+
-				"- Usa SOLO referencias del bloque arriba\n",
+				"═══ REGLAS ═══\n"+
+				"1. Respuestas completas y naturales\n"+
+				"2. SOLO evidencia de PubMed\n"+
+				"3. Si pide PMIDs → incluye PMID: ###### en CADA cita\n"+
+				"4. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
+				"═══ CITAS ═══\n"+
+				"## Fuentes:\n"+
+				"Apellido, A. et al. (año). Título. *Revista*, vol(núm), pp. PMID: ######\n",
 			ctxPub, refsBlock, prompt,
 		)
 	}
@@ -1171,8 +1237,9 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 	// CRÍTICO: Esperar unos segundos adicionales después de indexing=completed
 	// OpenAI tiene un retraso interno entre status=completed y archivo "visible" para file_search
 	// Sin esto, las primeras preguntas pueden fallar con "no encuentro el archivo"
-	log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_5s reason=openai_search_propagation", threadID)
-	time.Sleep(5 * time.Second)
+	// AUMENTADO: De 5s a 15s para asegurar propagación completa del índice en la red de OpenAI
+	log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_15s reason=openai_search_propagation", threadID)
+	time.Sleep(15 * time.Second)
 	log.Printf("[conv][PDF][post_index_wait] thread=%s wait_complete", threadID)
 
 	h.AI.AddSessionBytes(threadID, upFile.Size)
@@ -1222,21 +1289,25 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		return
 	}
 	// Si viene prompt junto al PDF, responder en modo doc-only usando el vector store del hilo
-	p := fmt.Sprintf(`INSTRUCCIÓN CRÍTICA Y PRIORITARIA (sobrescribe todas las demás instrucciones):
+	p := fmt.Sprintf(`⚠️ INSTRUCCIÓN CRÍTICA Y PRIORITARIA ⚠️
 
-🚨 SOLO usa información de los documentos PDF adjuntos a este hilo.
-🚨 PROHIBIDO usar conocimiento externo, memorias previas o entrenamiento general.
-🚨 Si la información NO está en el PDF, responde: "El documento no contiene esta información."
+CONTEXTO: El usuario acaba de subir un documento PDF y está preguntando sobre él.
+El PDF YA ESTÁ INDEXADO en el vector store de este thread.
+
+TU TAREA OBLIGATORIA:
+1. USA el tool "file_search" INMEDIATAMENTE para buscar en el PDF
+2. Lee ÚNICAMENTE el contenido que el tool file_search te devuelva
+3. Responde SOLO con información del PDF (no uses tu conocimiento previo)
+
+🚨 REGLAS ESTRICTAS:
+- NO inventes información
+- NO uses conocimiento médico general
+- SI el tool file_search no encuentra información relevante, di: "El documento no contiene información suficiente para responder esta pregunta"
+- Si encuentras la información, cítala textualmente
+- Termina con: "Fuente: [nombre del archivo PDF]"
 
 Pregunta del usuario:
-%s
-
-Protocolo de respuesta obligatorio:
-1. Lee ÚNICAMENTE los documentos PDF adjuntos
-2. Extrae SOLO la información que encuentres en ellos
-3. NO agregues contexto, explicaciones externas ni información general
-4. Si no encuentras la respuesta en el PDF, di claramente que no está en el documento
-5. Termina con: "Fuente: [nombre del archivo PDF]"`, base)
+%s`, base)
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
