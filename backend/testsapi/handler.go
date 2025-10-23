@@ -422,6 +422,15 @@ func (h *Handler) evaluate(c *gin.Context) {
 			return
 		}
 	}
+	// Construir string de fuentes claras para incluir en las instrucciones
+	sourcesInfo := ""
+	if vectorSource != "" {
+		sourcesInfo += "Libro consultado: " + vectorSource + "\n"
+	}
+	if pubmedContext != "" {
+		sourcesInfo += "Artículos de PubMed consultados (incluye PMIDs específicos en las referencias)\n"
+	}
+
 	evalInstr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con las claves:",
 		"evaluation: array de {question_id:int, is_correct:0|1, fit:string} (fit = explicación clínica breve, SIN mencionar libros o fuentes).",
@@ -429,14 +438,19 @@ func (h *Handler) evaluate(c *gin.Context) {
 		"fit_global:string = TEXTO MULTIPÁRRAFO estructurado (no HTML) con las siguientes secciones claramente separadas por doble salto de línea:\n" +
 			"1) 'Puntaje y Calificación:' en la primera línea incluye: 'Total de respuestas correctas: X de N.' en la siguiente línea 'Puntaje: <porcentaje con 2 decimales>%.' y en la tercera línea 'Clasificación: <desempeño alto|desempeño adecuado|desempeño moderado|desempeño bajo>' según porcentaje (>=85 alto, 70-84 adecuado, 50-69 moderado, <50 bajo).\n" +
 			"2) 'Retroalimentación:' párrafos (mínimo 2, máximo 5) que: a) Feliciten el esfuerzo. b) Destaquen fortalezas específicas detectadas. c) Expliquen conceptos médicos relevantes (fisiopatología, tratamientos, diagnósticos) SIN mencionar libros. d) Incluyan 1-2 recomendaciones prácticas de estudio sobre temas médicos. e) Inviten a profundizar en conceptos específicos.\n" +
-			"3) 'Referencias:' una línea con 1–3 citas abreviadas (ej: 'Harrison 21ª ed.' o 'PMID: XXXXX') como respaldo académico.\n" +
+			"3) 'Referencias:' DEBE incluir citas COMPLETAS y ESPECÍFICAS de las fuentes consultadas:\n" +
+			"   - Si usaste libro: nombre COMPLETO del libro (ej: 'Harrison. Principios de Medicina Interna, 21ª edición' o 'Robbins y Cotran. Patología Estructural y Funcional').\n" +
+			"   - Si usaste PubMed: incluye PMID específico y título del estudio (ej: 'PMID: 12345678 - Cardiovascular risk factors in hypertensive patients').\n" +
+			"   - Lista 1-3 referencias separadas por punto y coma.\n" +
+			"   - FUENTES DISPONIBLES: " + sourcesInfo + "\n" +
 			"Mantén formato de texto plano, sin viñetas, sin JSON dentro. Usa saltos de línea dobles entre secciones y simples entre oraciones dentro de cada párrafo.",
 		// Instrucciones adicionales
 		"CRÍTICO: La retroalimentación debe explicar CONCEPTOS MÉDICOS (fisiopatología, tratamientos, diagnósticos).",
 		"PROHIBIDO: NO menciones libros, autores o fuentes en el texto de retroalimentación (solo en la sección Referencias al final).",
 		"CORRECTO: Explica directamente los conceptos (ej: 'La hipertensión arterial se define como...', 'Los factores de riesgo cardiovascular incluyen...').",
 		"Verifica cada respuesta usando el conocimiento médico del contexto proporcionado.",
-		"Las citas en 'Referencias' deben ser abreviadas y profesionales.",
+		"CRÍTICO REFERENCIAS: Las citas en 'Referencias' deben ser COMPLETAS, ESPECÍFICAS y VERIFICABLES (nombre completo de libros, PMIDs con títulos de artículos).",
+		"Extrae los PMIDs y títulos exactos del contexto de PubMed proporcionado arriba.",
 		"Mantén coherencia, claridad y rigor clínico.",
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",

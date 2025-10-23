@@ -27,10 +27,13 @@ class ClinicalQuestionMessageSingle extends StatelessWidget {
     final textOptions =
         question.options.map((option) {
           index++;
-          return Text(
-            '${letters[index]} $option',
-            style: optionStyle,
-            textAlign: TextAlign.justify,
+          return Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Text(
+              '${letters[index]} $option',
+              style: optionStyle,
+              textAlign: TextAlign.justify,
+            ),
           );
         }).toList();
 
@@ -59,18 +62,24 @@ class ClinicalQuestionMessageSingle extends StatelessWidget {
             ),
           ),
         if (question.isAnswered)
-          Container(
-            margin: const EdgeInsets.only(top: 0, bottom: 8, left: 24),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppStyles.whiteColor,
-              border: Border.all(color: AppStyles.primary900, width: 1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              question.answerdString,
-              style: AppStyles.chatMessageUser,
-              textAlign: TextAlign.right,
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.75,
+              ),
+              margin: const EdgeInsets.only(top: 0, bottom: 8, left: 48),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppStyles.whiteColor,
+                border: Border.all(color: AppStyles.primary900, width: 1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                question.answerdString,
+                style: AppStyles.chatMessageUser,
+                textAlign: TextAlign.left,
+              ),
             ),
           ),
       ],

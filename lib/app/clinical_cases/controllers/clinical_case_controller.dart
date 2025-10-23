@@ -338,33 +338,36 @@ class ClinicalCaseController extends GetxController
         feedBackAndNewQuestion.toString(),
       );
 
-      // Generar un mensaje de ia a partir de la respuesta de la ia
-      final aiFeedBackMessage = ChatMessageModel.ai(
-        chatId: questionWithAnswer.quizId,
-        text: feedBackAndNewQuestion.fit!,
-      );
-
-      Logger.objectValue('aiFeedBackMessage', aiFeedBackMessage.toString());
-
-      _insertMessages([aiFeedBackMessage]);
-      clinicalCaseServive.insertMessage(aiFeedBackMessage);
-
       // en ese caso se trata del último comentario de la IA
       // para cerrar el caso clínico.
       if (feedBackAndNewQuestion.question == '') {
         isComplete.value = true;
         // Capturar mensaje de resumen final si llegó (prefijo 'Resumen Final:') y guardarlo oculto
+        // NO insertarlo en messages para que no aparezca en el chat
         final summaryText = feedBackAndNewQuestion.fit ?? '';
         if (summaryText.startsWith('Resumen Final:')) {
           _pendingInteractiveSummary.value = ChatMessageModel.ai(
             chatId: questionWithAnswer.quizId,
             text: summaryText,
           );
+          // Guardar en DB pero NO mostrarlo en el chat aún
+          clinicalCaseServive.insertMessage(_pendingInteractiveSummary.value!);
         }
         interactiveEvaluationGenerated.value = false; // aún no mostrado
         isTyping.value = false; // Make sure to set typing to false
         return;
       } else {
+        // Generar mensaje de feedback normal (NO es resumen final)
+        final aiFeedBackMessage = ChatMessageModel.ai(
+          chatId: questionWithAnswer.quizId,
+          text: feedBackAndNewQuestion.fit!,
+        );
+
+        Logger.objectValue('aiFeedBackMessage', aiFeedBackMessage.toString());
+
+        _insertMessages([aiFeedBackMessage]);
+        clinicalCaseServive.insertMessage(aiFeedBackMessage);
+
         // Chequear límite antes de agregar una nueva pregunta
         final totalQuestionsBefore =
             questions.length; // ya incluye la actual respondida
@@ -376,6 +379,10 @@ class ClinicalCaseController extends GetxController
             _pendingInteractiveSummary.value = ChatMessageModel.ai(
               chatId: questionWithAnswer.quizId,
               text: summaryText,
+            );
+            // Guardar pero NO mostrar en chat
+            clinicalCaseServive.insertMessage(
+              _pendingInteractiveSummary.value!,
             );
           }
           interactiveEvaluationGenerated.value = false;

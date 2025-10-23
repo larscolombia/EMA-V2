@@ -740,6 +740,30 @@ func (h *Handler) Message(c *gin.Context) {
 	closing := h.closureDue[threadID]
 	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d closing=%v", threadID, curr, maxQuestions, closing)
 
+	// PASO CRÍTICO: Buscar evidencia RAG (libros + PubMed) ANTES de generar feedback
+	// para fundamentar la evaluación en fuentes confiables
+	var ragContext string
+	func() {
+		defer func() { _ = recover() }()
+		h.mu.Lock()
+		lastQ := h.lastQuestionText[threadID]
+		h.mu.Unlock()
+		if strings.TrimSpace(lastQ) == "" {
+			return
+		}
+		// Construir query combinando pregunta + respuesta del usuario
+		searchQuery := lastQ + " " + strings.TrimSpace(req.Mensaje)
+		if len(searchQuery) > 300 {
+			searchQuery = searchQuery[:300]
+		}
+		ragCtx, ragCancel := context.WithTimeout(ctx, 6*time.Second)
+		defer ragCancel()
+		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
+		if strings.TrimSpace(refs) != "" {
+			ragContext = "CONTEXTO MÉDICO DE REFERENCIA (úsalo para fundamentar tu evaluación):\n" + refs + "\n\n"
+		}
+	}()
+
 	userPrompt := req.Mensaje
 	var instr string
 	if closing {
@@ -789,7 +813,7 @@ func (h *Handler) Message(c *gin.Context) {
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
 			"FORMATO FEEDBACK según tipo de pregunta anterior:",
 			feedbackFormat,
-			"En todos los casos termina con línea 'Fuente:' y 1-2 citas (libro/guía o PMID)." + diagnosticInfo,
+			"CRÍTICO: Basa tu evaluación y explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
@@ -800,7 +824,13 @@ func (h *Handler) Message(c *gin.Context) {
 		}, " ")
 	}
 
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
+	// Prefijar contexto RAG al userPrompt para que el asistente lo use
+	promptWithContext := userPrompt
+	if ragContext != "" {
+		promptWithContext = ragContext + "RESPUESTA DEL USUARIO: " + userPrompt
+	}
+
+	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, promptWithContext, instr)
 	if err != nil {
 		d := withThread(h.minTurn(), threadID)
 		d["schema_version"] = interactiveSchemaVersion
@@ -1361,6 +1391,7 @@ func mapUserAnswerToIndex(userRaw string, explicit *int, options []string) (int,
 		}
 	}
 	// similitud textual: escoger la opción con mayor jaccard sobre tokens normalizados
+	// CRÍTICO: Umbral alto (0.7) para evitar falsos positivos y asegurar evaluación precisa
 	bestIdx := -1
 	bestScore := 0.0
 	nu := tokenize(normalizeAnswer(u))
@@ -1371,7 +1402,7 @@ func mapUserAnswerToIndex(userRaw string, explicit *int, options []string) (int,
 			bestIdx = i
 		}
 	}
-	if bestIdx >= 0 && bestScore >= 0.4 {
+	if bestIdx >= 0 && bestScore >= 0.7 {
 		return bestIdx, true
 	}
 	return -1, false

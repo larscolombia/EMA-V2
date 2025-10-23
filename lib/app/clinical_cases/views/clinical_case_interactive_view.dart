@@ -3,6 +3,8 @@ import 'package:ema_educacion_medica_avanzada/app/chat/widgets/chat_message_ai.d
 import 'package:ema_educacion_medica_avanzada/app/chat/widgets/chat_message_user.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/widgets/clinical_question_inputs.dart';
+import 'package:ema_educacion_medica_avanzada/app/clinical_cases/widgets/clinical_question_message_single.dart';
+import 'package:ema_educacion_medica_avanzada/app/quizzes/models/question_type.dart';
 import 'package:ema_educacion_medica_avanzada/common/layouts/app_layout.dart';
 import 'package:ema_educacion_medica_avanzada/common/widgets/show_error_widget.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
@@ -71,12 +73,58 @@ class _ClinicalCaseInteractiveViewState
                   controller: controller.scrollController,
                   padding: const EdgeInsets.only(left: 8, right: 8, top: 16),
                   child: Obx(() {
-                    List<Widget> items =
-                        controller.messages.map((message) {
-                          return message.aiMessage
-                              ? ChatMessageAi(message: message)
-                              : ChatMessageUser(message: message);
-                        }).toList();
+                    // IDs de preguntas respondidas (para no duplicar sus respuestas)
+                    final answeredQuestionIds =
+                        controller.questions
+                            .where((q) => q.isAnswered && q.options.isNotEmpty)
+                            .map((q) => q.id)
+                            .toSet();
+
+                    List<Widget> items = [];
+
+                    for (var message in controller.messages) {
+                      if (message.aiMessage) {
+                        // Buscar si este mensaje corresponde a una pregunta
+                        final matchingQuestion =
+                            controller.questions
+                                .where((q) => q.id == message.uid)
+                                .firstOrNull;
+
+                        if (matchingQuestion != null &&
+                            matchingQuestion.options.isNotEmpty) {
+                          // Es una pregunta con opciones, usar widget especializado
+                          if (matchingQuestion.type ==
+                              QuestionType.singleChoice) {
+                            items.add(
+                              ClinicalQuestionMessageSingle(
+                                question: matchingQuestion,
+                              ),
+                            );
+                            continue;
+                          }
+                        }
+                        // Es un mensaje normal de IA (feedback)
+                        items.add(ChatMessageAi(message: message));
+                      } else {
+                        // Es mensaje de usuario
+                        // Verificar si es una respuesta a una pregunta que ya se muestra en el widget
+                        // Las respuestas a preguntas tienen el texto que coincide con answerdString
+                        bool isQuestionResponse = answeredQuestionIds.any((
+                          qId,
+                        ) {
+                          final q =
+                              controller.questions
+                                  .where((quest) => quest.id == qId)
+                                  .firstOrNull;
+                          return q != null && q.answerdString == message.text;
+                        });
+
+                        // Solo mostrar si NO es una respuesta de pregunta (ya incluida en el widget)
+                        if (!isQuestionResponse) {
+                          items.add(ChatMessageUser(message: message));
+                        }
+                      }
+                    }
 
                     return Column(
                       children: [
