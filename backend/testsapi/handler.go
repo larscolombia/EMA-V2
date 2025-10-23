@@ -178,9 +178,8 @@ func (h *Handler) generate(c *gin.Context) {
 
 	// Añadir contexto de fuentes si está disponible
 	if vectorContext != "" {
-		sb.WriteString("CONTEXTO DE LIBRO MÉDICO (")
-		sb.WriteString(vectorSource)
-		sb.WriteString("):\n")
+		sb.WriteString("=== CONOCIMIENTO MÉDICO DE REFERENCIA ===\n")
+		sb.WriteString("(Extraído de fuente académica confiable)\n\n")
 		// Limitar a 3000 caracteres para no saturar el prompt
 		if len(vectorContext) > 3000 {
 			vectorContext = vectorContext[:3000]
@@ -190,7 +189,8 @@ func (h *Handler) generate(c *gin.Context) {
 	}
 
 	if pubmedContext != "" {
-		sb.WriteString("CONTEXTO DE PUBMED:\n")
+		sb.WriteString("=== EVIDENCIA CIENTÍFICA ADICIONAL ===\n")
+		sb.WriteString("(Estudios y literatura médica)\n\n")
 		// Limitar a 2000 caracteres
 		if len(pubmedContext) > 2000 {
 			pubmedContext = pubmedContext[:2000]
@@ -199,22 +199,27 @@ func (h *Handler) generate(c *gin.Context) {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString("Basándote EXCLUSIVAMENTE en el contexto proporcionado arriba, ")
+	sb.WriteString("=== INSTRUCCIONES PARA GENERAR PREGUNTAS ===\n")
+	sb.WriteString("Usa el conocimiento médico proporcionado arriba como base científica para crear preguntas clínicas prácticas.\n")
+	sb.WriteString("IMPORTANTE: Las preguntas deben ser sobre CONCEPTOS MÉDICOS, diagnósticos, tratamientos, factores de riesgo, fisiopatología, etc.\n")
+	sb.WriteString("NO preguntes sobre los libros o fuentes (ej: NO '¿Qué dice el libro sobre...?' o '¿Según qué autor...?').\n")
+	sb.WriteString("SÍ pregunta sobre conocimiento médico (ej: '¿Cuáles son los factores de riesgo cardiovascular?' o '¿Cuál es el tratamiento de primera línea para...?').\n\n")
+
 	if len(catNames) > 0 {
-		sb.WriteString("genera preguntas sobre: ")
+		sb.WriteString("Categoría médica: ")
 		sb.WriteString(strings.Join(catNames, ", "))
-		sb.WriteString(". ")
+		sb.WriteString(".\n")
 	} else {
-		sb.WriteString("genera preguntas de medicina interna. ")
+		sb.WriteString("Categoría médica: Medicina Interna General.\n")
 	}
 	if strings.TrimSpace(req.Nivel) != "" {
-		sb.WriteString("Nivel: ")
+		sb.WriteString("Nivel de dificultad: ")
 		sb.WriteString(req.Nivel)
-		sb.WriteString(". ")
+		sb.WriteString(".\n")
 	}
-	sb.WriteString("Tipos de pregunta aleatorios entre: true_false, open_ended, single_choice. \n")
-	sb.WriteString("Para single_choice incluye 4 o 5 opciones y una única respuesta correcta. \n")
-	sb.WriteString("Responde estrictamente en formato JSON, sin bloque de código ni texto adicional.")
+	sb.WriteString("Tipos de pregunta: true_false, open_ended, single_choice (aleatorios).\n")
+	sb.WriteString("Para single_choice incluye 4-5 opciones con una única respuesta correcta.\n")
+	sb.WriteString("Formato de respuesta: JSON estricto, sin texto adicional.")
 
 	threadID, err := h.ai.CreateThread(ctx)
 	if err != nil {
@@ -236,10 +241,12 @@ func (h *Handler) generate(c *gin.Context) {
 		instr = append(instr, "Limita el contenido estrictamente a medicina interna.")
 	}
 	instr = append(instr,
-		"CRÍTICO: Basa TODAS las preguntas y respuestas EXCLUSIVAMENTE en el contexto proporcionado en el prompt (libros médicos y PubMed).",
-		"NO inventes información ni uses conocimiento general que no esté en el contexto proporcionado.",
-		"Si el contexto no es suficiente para generar todas las preguntas solicitadas, genera las que puedas con el contexto disponible.",
-		"Mantén coherencia, claridad y nivel académico acorde al nivel solicitado.",
+		"CRÍTICO: Las preguntas deben ser sobre CONOCIMIENTO MÉDICO (diagnósticos, tratamientos, fisiopatología, factores de riesgo, manejo clínico).",
+		"PROHIBIDO: NO preguntes sobre fuentes, libros o autores (ej: '¿Qué menciona el libro...?', '¿Según qué autor...?').",
+		"CORRECTO: Pregunta directamente sobre conceptos (ej: '¿Cuáles son los factores de riesgo de IAM?', '¿Cuál es el tratamiento de primera línea para HTA?').",
+		"Basa el contenido médico en el conocimiento proporcionado en el contexto, pero formula preguntas clínicas directas.",
+		"NO inventes información: usa SOLO el conocimiento del contexto proporcionado.",
+		"Mantén coherencia, claridad y rigor clínico.",
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",
 	)
@@ -365,12 +372,11 @@ func (h *Handler) evaluate(c *gin.Context) {
 
 	// PASO 2: Build prompt for evaluation con contexto
 	sb := strings.Builder{}
-	
+
 	// Añadir contexto de fuentes si está disponible
 	if vectorContext != "" {
-		sb.WriteString("CONTEXTO DE REFERENCIA (")
-		sb.WriteString(vectorSource)
-		sb.WriteString("):\n")
+		sb.WriteString("=== CONOCIMIENTO MÉDICO DE REFERENCIA ===\n")
+		sb.WriteString("(Para validar respuestas clínicas)\n\n")
 		if len(vectorContext) > 2000 {
 			vectorContext = vectorContext[:2000]
 		}
@@ -379,7 +385,8 @@ func (h *Handler) evaluate(c *gin.Context) {
 	}
 
 	if pubmedContext != "" {
-		sb.WriteString("EVIDENCIA DE PUBMED:\n")
+		sb.WriteString("=== EVIDENCIA CIENTÍFICA ===\n")
+		sb.WriteString("(Literatura médica actual)\n\n")
 		if len(pubmedContext) > 1500 {
 			pubmedContext = pubmedContext[:1500]
 		}
@@ -387,10 +394,12 @@ func (h *Handler) evaluate(c *gin.Context) {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString("Basándote en el contexto médico proporcionado arriba, evalúa las respuestas del usuario.\n")
-	sb.WriteString("Devuelve JSON con las claves: \n")
-	sb.WriteString("{ \"evaluation\": [ { \"question_id\": <int>, \"is_correct\": 0|1, \"fit\": <string> }... ], \"correct_answers\": <int>, \"fit_global\": <string> }\n")
-	sb.WriteString("No incluyas texto fuera del JSON.\n")
+	sb.WriteString("=== TAREA DE EVALUACIÓN ===\n")
+	sb.WriteString("Usa el conocimiento médico proporcionado arriba para evaluar las respuestas del usuario.\n")
+	sb.WriteString("Proporciona feedback clínico educativo sobre los conceptos médicos.\n")
+	sb.WriteString("IMPORTANTE: El feedback debe explicar conceptos médicos, NO mencionar libros o fuentes en el texto de retroalimentación.\n\n")
+	sb.WriteString("Formato de respuesta:\n")
+	sb.WriteString("{ \"evaluation\": [ { \"question_id\": <int>, \"is_correct\": 0|1, \"fit\": <string> }... ], \"correct_answers\": <int>, \"fit_global\": <string> }\n\n")
 	sb.WriteString("Respuestas del usuario: ")
 	// Compact user answers into JSON-like text for the model
 	items := make([]map[string]any, 0, len(req.Items))
@@ -415,18 +424,19 @@ func (h *Handler) evaluate(c *gin.Context) {
 	}
 	evalInstr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con las claves:",
-		"evaluation: array de {question_id:int, is_correct:0|1, fit:string} (fit = feedback clínico breve por pregunta).",
+		"evaluation: array de {question_id:int, is_correct:0|1, fit:string} (fit = explicación clínica breve, SIN mencionar libros o fuentes).",
 		"correct_answers:int,",
 		"fit_global:string = TEXTO MULTIPÁRRAFO estructurado (no HTML) con las siguientes secciones claramente separadas por doble salto de línea:\n" +
 			"1) 'Puntaje y Calificación:' en la primera línea incluye: 'Total de respuestas correctas: X de N.' en la siguiente línea 'Puntaje: <porcentaje con 2 decimales>%.' y en la tercera línea 'Clasificación: <desempeño alto|desempeño adecuado|desempeño moderado|desempeño bajo>' según porcentaje (>=85 alto, 70-84 adecuado, 50-69 moderado, <50 bajo).\n" +
-			"2) 'Retroalimentación:' párrafos (mínimo 2, máximo 5) que: a) Feliciten el esfuerzo. b) Destaquen fortalezas específicas detectadas. c) Señalen brevemente los patrones de error o conceptos a reforzar (sin listas extensas). d) Incluyan 1-2 recomendaciones prácticas de estudio. e) Inviten a solicitar explicación detallada de preguntas falladas.\n" +
-			"3) 'Referencias:' una línea con 1–3 citas abreviadas de fuentes médicas de alto valor basadas en el contexto proporcionado (ej: '" + vectorSource + "' o 'PMID: XXXXX').\n" +
+			"2) 'Retroalimentación:' párrafos (mínimo 2, máximo 5) que: a) Feliciten el esfuerzo. b) Destaquen fortalezas específicas detectadas. c) Expliquen conceptos médicos relevantes (fisiopatología, tratamientos, diagnósticos) SIN mencionar libros. d) Incluyan 1-2 recomendaciones prácticas de estudio sobre temas médicos. e) Inviten a profundizar en conceptos específicos.\n" +
+			"3) 'Referencias:' una línea con 1–3 citas abreviadas (ej: 'Harrison 21ª ed.' o 'PMID: XXXXX') como respaldo académico.\n" +
 			"Mantén formato de texto plano, sin viñetas, sin JSON dentro. Usa saltos de línea dobles entre secciones y simples entre oraciones dentro de cada párrafo.",
 		// Instrucciones adicionales
-		"CRÍTICO: Fundamenta la evaluación EXCLUSIVAMENTE en el contexto médico proporcionado en el prompt (libros y PubMed).",
-		"Verifica cada respuesta contra el conocimiento médico del contexto proporcionado.",
-		"Incluye las citas en fit_global basándote en las fuentes del contexto (libros médicos o PMIDs de PubMed).",
-		"NO inventes información ni uses conocimiento que no esté explícitamente en el contexto.",
+		"CRÍTICO: La retroalimentación debe explicar CONCEPTOS MÉDICOS (fisiopatología, tratamientos, diagnósticos).",
+		"PROHIBIDO: NO menciones libros, autores o fuentes en el texto de retroalimentación (solo en la sección Referencias al final).",
+		"CORRECTO: Explica directamente los conceptos (ej: 'La hipertensión arterial se define como...', 'Los factores de riesgo cardiovascular incluyen...').",
+		"Verifica cada respuesta usando el conocimiento médico del contexto proporcionado.",
+		"Las citas en 'Referencias' deben ser abreviadas y profesionales.",
 		"Mantén coherencia, claridad y rigor clínico.",
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",
