@@ -54,6 +54,10 @@ class LoginController extends GetxController {
       return;
     }
 
+    print('🚀 LOGIN INITIATED');
+    print('Email: ${emailController.text}');
+    print('API URL: $apiUrl');
+
     try {
       isLoading.value = true;
       final user = await _authService.login(
@@ -61,21 +65,28 @@ class LoginController extends GetxController {
         passwordController.text,
       );
 
+      print('✅ Login successful, user: ${user.email}');
+
       await _storage.write(key: 'auth_token', value: user.authToken);
       await _storage.write(
-          key: 'last_session', value: DateTime.now().toIso8601String());
+        key: 'last_session',
+        value: DateTime.now().toIso8601String(),
+      );
       await _userService.setCurrentUser(user);
 
       // Manejar "Remember me" de forma más concisa
       if (rememberMe.value) {
         await _storage.write(
-            key: 'remembered_email', value: emailController.text);
+          key: 'remembered_email',
+          value: emailController.text,
+        );
       } else {
         await _storage.delete(key: 'remembered_email');
       }
 
       Get.offAllNamed(Routes.home.name);
     } catch (e) {
+      print('❌ Login failed: $e');
       Get.snackbar(
         'Error de inicio de sesión',
         _extractErrorMessage(e),

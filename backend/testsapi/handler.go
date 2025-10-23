@@ -114,12 +114,10 @@ func (h *Handler) generate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	// Prepare prompt to the assistant
-	// Keep it concise; the Assistant itself holds domain rules. We only pass variables.
-	sb := strings.Builder{}
-	sb.WriteString("Genera un JSON con {\"questions\": [...] } de tamaño ")
-	sb.WriteString(intToStr(req.NumQuestions))
-	sb.WriteString(", usando el conocimiento recuperado por el assistant de sus fuentes configuradas. Si no se especifica categoría, usa medicina interna. ")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+
 	// Resolve category names for clarity if provided
 	var catNames []string
 	if len(req.IdCategoria) > 0 && h.resolveCategoryNames != nil {
@@ -127,22 +125,96 @@ func (h *Handler) generate(c *gin.Context) {
 			catNames = names
 		}
 	}
+
+	// PASO 1: Realizar búsquedas en libros y PubMed para basar las preguntas en fuentes confiables
+	vectorID := os.Getenv("CUESTIONARIOS_VECTOR_STORE_ID")
+	if vectorID == "" {
+		vectorID = "vs_680fc484cef081918b2b9588b701e2f4" // vector por defecto de cuestionarios médicos
+	}
+
+	// Construir query de búsqueda basada en categorías o medicina interna
+	searchQuery := "medicina interna"
 	if len(catNames) > 0 {
-		sb.WriteString("categorías: ")
+		searchQuery = strings.Join(catNames, " ")
+	}
+	log.Printf("[testsapi.generate] searching sources: categories=%v query=%s", catNames, searchQuery)
+
+	// Buscar en libros (vector store)
+	vectorContext := ""
+	vectorSource := ""
+	if extClient, ok := h.ai.(interface {
+		QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
+	}); ok {
+		if result, err := extClient.QuickVectorSearch(ctx, vectorID, searchQuery); err == nil && result != nil && result.HasResult {
+			vectorContext = strings.TrimSpace(result.Content)
+			vectorSource = strings.TrimSpace(result.Source)
+			if vectorSource == "" {
+				vectorSource = "Libro de Medicina"
+			}
+			log.Printf("[testsapi.generate] vector search OK: source=%s content_len=%d", vectorSource, len(vectorContext))
+		} else {
+			log.Printf("[testsapi.generate] vector search failed or empty: err=%v", err)
+		}
+	}
+
+	// Buscar en PubMed
+	pubmedContext := ""
+	if extClient, ok := h.ai.(interface {
+		SearchPubMed(ctx context.Context, query string) (string, error)
+	}); ok {
+		if result, err := extClient.SearchPubMed(ctx, searchQuery); err == nil {
+			pubmedContext = strings.TrimSpace(result)
+			log.Printf("[testsapi.generate] pubmed search OK: content_len=%d", len(pubmedContext))
+		} else {
+			log.Printf("[testsapi.generate] pubmed search failed: err=%v", err)
+		}
+	}
+
+	// PASO 2: Preparar el prompt con contexto recuperado
+	sb := strings.Builder{}
+	sb.WriteString("Genera un JSON con {\"questions\": [...] } de tamaño ")
+	sb.WriteString(intToStr(req.NumQuestions))
+	sb.WriteString(".\n\n")
+
+	// Añadir contexto de fuentes si está disponible
+	if vectorContext != "" {
+		sb.WriteString("CONTEXTO DE LIBRO MÉDICO (")
+		sb.WriteString(vectorSource)
+		sb.WriteString("):\n")
+		// Limitar a 3000 caracteres para no saturar el prompt
+		if len(vectorContext) > 3000 {
+			vectorContext = vectorContext[:3000]
+		}
+		sb.WriteString(vectorContext)
+		sb.WriteString("\n\n")
+	}
+
+	if pubmedContext != "" {
+		sb.WriteString("CONTEXTO DE PUBMED:\n")
+		// Limitar a 2000 caracteres
+		if len(pubmedContext) > 2000 {
+			pubmedContext = pubmedContext[:2000]
+		}
+		sb.WriteString(pubmedContext)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("Basándote EXCLUSIVAMENTE en el contexto proporcionado arriba, ")
+	if len(catNames) > 0 {
+		sb.WriteString("genera preguntas sobre: ")
 		sb.WriteString(strings.Join(catNames, ", "))
 		sb.WriteString(". ")
+	} else {
+		sb.WriteString("genera preguntas de medicina interna. ")
 	}
 	if strings.TrimSpace(req.Nivel) != "" {
-		sb.WriteString("nivel: ")
+		sb.WriteString("Nivel: ")
 		sb.WriteString(req.Nivel)
 		sb.WriteString(". ")
 	}
 	sb.WriteString("Tipos de pregunta aleatorios entre: true_false, open_ended, single_choice. \n")
 	sb.WriteString("Para single_choice incluye 4 o 5 opciones y una única respuesta correcta. \n")
 	sb.WriteString("Responde estrictamente en formato JSON, sin bloque de código ni texto adicional.")
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
-	defer cancel()
 
 	threadID, err := h.ai.CreateThread(ctx)
 	if err != nil {
@@ -164,9 +236,9 @@ func (h *Handler) generate(c *gin.Context) {
 		instr = append(instr, "Limita el contenido estrictamente a medicina interna.")
 	}
 	instr = append(instr,
-		"Usa exclusivamente información contenida en las fuentes configuradas del assistant (vector privado) y en https://pubmed.ncbi.nlm.nih.gov/.",
-		"No utilices otras fuentes ni inventes información.",
-		"No menciones nunca el vector en el contenido.",
+		"CRÍTICO: Basa TODAS las preguntas y respuestas EXCLUSIVAMENTE en el contexto proporcionado en el prompt (libros médicos y PubMed).",
+		"NO inventes información ni uses conocimiento general que no esté en el contexto proporcionado.",
+		"Si el contexto no es suficiente para generar todas las preguntas solicitadas, genera las que puedas con el contexto disponible.",
 		"Mantén coherencia, claridad y nivel académico acorde al nivel solicitado.",
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",
@@ -242,9 +314,81 @@ func (h *Handler) evaluate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	// Build prompt for evaluation
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+
+	// PASO 1: Buscar en fuentes médicas para fundamentar la evaluación
+	vectorID := os.Getenv("CUESTIONARIOS_VECTOR_STORE_ID")
+	if vectorID == "" {
+		vectorID = "vs_680fc484cef081918b2b9588b701e2f4"
+	}
+
+	// Construir query basada en las respuestas del usuario para buscar contexto relevante
+	searchQuery := "evaluación médica"
+	if len(req.Items) > 0 {
+		// Usar la primera pregunta como contexto de búsqueda
+		searchQuery = req.Items[0].Answer
+	}
+	log.Printf("[testsapi.evaluate] searching sources for evaluation: query=%s", searchQuery)
+
+	// Buscar contexto en libros
+	vectorContext := ""
+	vectorSource := ""
+	if extClient, ok := h.ai.(interface {
+		QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
+	}); ok {
+		if result, err := extClient.QuickVectorSearch(ctx, vectorID, searchQuery); err == nil && result != nil && result.HasResult {
+			vectorContext = strings.TrimSpace(result.Content)
+			vectorSource = strings.TrimSpace(result.Source)
+			if vectorSource == "" {
+				vectorSource = "Libro de Medicina"
+			}
+			log.Printf("[testsapi.evaluate] vector search OK: source=%s content_len=%d", vectorSource, len(vectorContext))
+		} else {
+			log.Printf("[testsapi.evaluate] vector search failed or empty: err=%v", err)
+		}
+	}
+
+	// Buscar en PubMed
+	pubmedContext := ""
+	if extClient, ok := h.ai.(interface {
+		SearchPubMed(ctx context.Context, query string) (string, error)
+	}); ok {
+		if result, err := extClient.SearchPubMed(ctx, searchQuery); err == nil {
+			pubmedContext = strings.TrimSpace(result)
+			log.Printf("[testsapi.evaluate] pubmed search OK: content_len=%d", len(pubmedContext))
+		} else {
+			log.Printf("[testsapi.evaluate] pubmed search failed: err=%v", err)
+		}
+	}
+
+	// PASO 2: Build prompt for evaluation con contexto
 	sb := strings.Builder{}
-	sb.WriteString("Evalúa las respuestas del usuario. Devuelve JSON con las claves: \n")
+	
+	// Añadir contexto de fuentes si está disponible
+	if vectorContext != "" {
+		sb.WriteString("CONTEXTO DE REFERENCIA (")
+		sb.WriteString(vectorSource)
+		sb.WriteString("):\n")
+		if len(vectorContext) > 2000 {
+			vectorContext = vectorContext[:2000]
+		}
+		sb.WriteString(vectorContext)
+		sb.WriteString("\n\n")
+	}
+
+	if pubmedContext != "" {
+		sb.WriteString("EVIDENCIA DE PUBMED:\n")
+		if len(pubmedContext) > 1500 {
+			pubmedContext = pubmedContext[:1500]
+		}
+		sb.WriteString(pubmedContext)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("Basándote en el contexto médico proporcionado arriba, evalúa las respuestas del usuario.\n")
+	sb.WriteString("Devuelve JSON con las claves: \n")
 	sb.WriteString("{ \"evaluation\": [ { \"question_id\": <int>, \"is_correct\": 0|1, \"fit\": <string> }... ], \"correct_answers\": <int>, \"fit_global\": <string> }\n")
 	sb.WriteString("No incluyas texto fuera del JSON.\n")
 	sb.WriteString("Respuestas del usuario: ")
@@ -259,9 +403,6 @@ func (h *Handler) evaluate(c *gin.Context) {
 	}
 	b, _ := json.Marshal(items)
 	sb.Write(b)
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
-	defer cancel()
 
 	threadID := req.Thread
 	if strings.TrimSpace(threadID) == "" {
@@ -279,14 +420,14 @@ func (h *Handler) evaluate(c *gin.Context) {
 		"fit_global:string = TEXTO MULTIPÁRRAFO estructurado (no HTML) con las siguientes secciones claramente separadas por doble salto de línea:\n" +
 			"1) 'Puntaje y Calificación:' en la primera línea incluye: 'Total de respuestas correctas: X de N.' en la siguiente línea 'Puntaje: <porcentaje con 2 decimales>%.' y en la tercera línea 'Clasificación: <desempeño alto|desempeño adecuado|desempeño moderado|desempeño bajo>' según porcentaje (>=85 alto, 70-84 adecuado, 50-69 moderado, <50 bajo).\n" +
 			"2) 'Retroalimentación:' párrafos (mínimo 2, máximo 5) que: a) Feliciten el esfuerzo. b) Destaquen fortalezas específicas detectadas. c) Señalen brevemente los patrones de error o conceptos a reforzar (sin listas extensas). d) Incluyan 1-2 recomendaciones prácticas de estudio. e) Inviten a solicitar explicación detallada de preguntas falladas.\n" +
-			"3) 'Referencias:' una línea con 1–3 citas abreviadas de fuentes médicas de alto valor (ej: 'Harrison. Principios de Medicina Interna.' o 'PMID: 12345678').\n" +
+			"3) 'Referencias:' una línea con 1–3 citas abreviadas de fuentes médicas de alto valor basadas en el contexto proporcionado (ej: '" + vectorSource + "' o 'PMID: XXXXX').\n" +
 			"Mantén formato de texto plano, sin viñetas, sin JSON dentro. Usa saltos de línea dobles entre secciones y simples entre oraciones dentro de cada párrafo.",
 		// Instrucciones adicionales
-		"Limita el contenido estrictamente a medicina interna.",
-		"Usa exclusivamente información contenida en el vector vs_680fc484cef081918b2b9588b701e2f4 y en https://pubmed.ncbi.nlm.nih.gov/.",
-		"No utilices otras fuentes ni inventes información.",
-		"Incluye las citas en fit_global (por ejemplo, 'Harrison. Principios de Medicina Interna' o 'PMID: <número>'), sin mencionar el vector.",
-		"Mantén coherencia, claridad y nivel académico acorde al nivel solicitado.",
+		"CRÍTICO: Fundamenta la evaluación EXCLUSIVAMENTE en el contexto médico proporcionado en el prompt (libros y PubMed).",
+		"Verifica cada respuesta contra el conocimiento médico del contexto proporcionado.",
+		"Incluye las citas en fit_global basándote en las fuentes del contexto (libros médicos o PMIDs de PubMed).",
+		"NO inventes información ni uses conocimiento que no esté explícitamente en el contexto.",
+		"Mantén coherencia, claridad y rigor clínico.",
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",
 	}, " ")

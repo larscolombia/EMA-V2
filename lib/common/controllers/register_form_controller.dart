@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -155,8 +156,14 @@ class RegisterFormController extends GetxController {
           professionController.text.isEmpty ? null : professionController.text,
     };
 
+    print('🚀 REGISTER INITIATED');
+    print('Email: ${emailController.text}');
+    print('API URL: $apiUrl');
+
     try {
       await _authService.register(formData);
+
+      print('✅ Registration successful');
 
       // Si el registro es exitoso, redirigir al login
       Get.offNamed('/login');
@@ -167,6 +174,7 @@ class RegisterFormController extends GetxController {
         colorText: Colors.white,
       );
     } catch (e) {
+      print('❌ Registration failed: $e');
       // Manejo de errores del backend
       final errorMessage = _extractErrorMessage(e);
       Get.snackbar(
