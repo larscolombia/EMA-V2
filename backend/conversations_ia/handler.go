@@ -304,7 +304,7 @@ Instrucciones:
 
 		// Obtener nombres de documentos para enriquecer el prompt
 		docNames := h.getThreadDocumentNames(ctx, threadID)
-		
+
 		// Usar prompt mejorado con fallbacks inteligentes
 		docOnlyPrompt := h.buildDocOnlyPromptEnhanced(prompt, docNames)
 
@@ -314,7 +314,7 @@ Instrucciones:
 		}
 		resp.Stream = stream
 		resp.Source = "doc_only"
-		
+
 		// Añadir nombres de documentos si los tenemos
 		if len(docNames) > 0 {
 			resp.AllowedSources = docNames
@@ -1118,7 +1118,7 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 			fname := filepath.Base(upFile.Filename)
 			log.Printf("[conv][PDF][scanned_rejected] thread=%s file=%s coverage=%.1f%% pages=%d",
 				threadID, fname, metadata.TextCoveragePercent, metadata.PageCount)
-			
+
 			msg := fmt.Sprintf(`Este documento (**%s**) parece estar compuesto principalmente por imágenes o escaneos (%.1f%% de cobertura de texto en %d páginas), por lo que no se puede leer texto directamente.
 
 **Opciones disponibles:**
@@ -1126,9 +1126,9 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 - Si el documento es un escaneo, necesitarás aplicar OCR (Reconocimiento Óptico de Caracteres) antes de subirlo
 - Puedes usar herramientas como Adobe Acrobat, Google Drive, o servicios online de OCR
 
-No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`, 
+No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 				fname, metadata.TextCoveragePercent, metadata.PageCount)
-			
+
 			if v, ok := c.Get("quota_remaining"); ok {
 				c.Header("X-Quota-Remaining", toString(v))
 			}
@@ -1139,7 +1139,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 			c.Header("X-Thread-ID", threadID)
 			c.Header("X-Source-Used", "pdf_scanned_error")
 			log.Printf("[conv][PDF][scanned_response] thread=%s file=%s", threadID, fname)
-			
+
 			one := make(chan string, 1)
 			one <- msg
 			close(one)
@@ -1319,12 +1319,12 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 		sseMaybeCapture(c, wrapWithStages(stages, one), threadID)
 		return
 	}
-	
+
 	// Si viene prompt junto al PDF, usar el prompt mejorado con fallbacks inteligentes
 	fname := filepath.Base(upFile.Filename)
 	docNames := []string{fname}
 	p := h.buildDocOnlyPromptEnhanced(base, docNames)
-	
+
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
@@ -1416,14 +1416,14 @@ func (h *Handler) getThreadDocumentNames(ctx context.Context, threadID string) [
 	if vsID == "" {
 		return []string{}
 	}
-	
+
 	// Intentar obtener info del último archivo cargado (tiene metadata)
 	// Esto es más eficiente que iterar todos los archivos
 	fileIDs, err := h.AI.ListVectorStoreFiles(ctx, threadID)
 	if err != nil || len(fileIDs) == 0 {
 		return []string{}
 	}
-	
+
 	names := make([]string, 0, len(fileIDs))
 	// Por ahora retornamos indicador genérico; en futuro podemos iterar fileIDs
 	// para obtener nombres reales usando getFileName del cliente openai
@@ -1440,12 +1440,12 @@ func (h *Handler) getPDFMetadata(ctx context.Context, threadID string) (*openai.
 	type metadataGetter interface {
 		GetLastFileMetadata(threadID string) *openai.PDFMetadata
 	}
-	
+
 	if getter, ok := h.AI.(metadataGetter); ok {
 		metadata := getter.GetLastFileMetadata(threadID)
 		return metadata, nil
 	}
-	
+
 	return nil, fmt.Errorf("client does not support metadata retrieval")
 }
 
@@ -1474,7 +1474,7 @@ func (h *Handler) questionRefersToDocument(prompt string) bool {
 			return true
 		}
 	}
-	
+
 	// Detectar preguntas muy cortas (≤ 5 palabras) como potencialmente referidas al documento
 	// cuando el thread tiene documentos cargados
 	words := strings.Fields(prompt)
@@ -1491,7 +1491,7 @@ func (h *Handler) questionRefersToDocument(prompt string) bool {
 func (h *Handler) enrichQueryWithContext(prompt string, docNames []string) string {
 	prompt = strings.TrimSpace(prompt)
 	lower := strings.ToLower(prompt)
-	
+
 	// Si la consulta es muy vaga o corta, enriquecerla
 	if len(prompt) < 20 || strings.Contains(lower, "qué es") || strings.Contains(lower, "que dice") {
 		if len(docNames) > 0 {
@@ -1499,19 +1499,19 @@ func (h *Handler) enrichQueryWithContext(prompt string, docNames []string) strin
 		}
 		return fmt.Sprintf("Busca en los PDFs adjuntos información sobre: %s. Si no encuentras contenido exacto, proporciona un índice aproximado (títulos, secciones) del documento.", prompt)
 	}
-	
+
 	return prompt
 }
 
 // buildDocOnlyPromptEnhanced construye prompt mejorado con fallbacks inteligentes
 func (h *Handler) buildDocOnlyPromptEnhanced(userPrompt string, docNames []string) string {
 	enrichedPrompt := h.enrichQueryWithContext(userPrompt, docNames)
-	
+
 	docContext := "los PDFs adjuntos al thread"
 	if len(docNames) > 0 {
 		docContext = fmt.Sprintf("el documento: %s", strings.Join(docNames, ", "))
 	}
-	
+
 	return fmt.Sprintf(`⚠️ INSTRUCCIÓN CRÍTICA: MODO DOCUMENTO PDF ⚠️
 
 CONTEXTO: Este thread tiene documentos PDF cargados que debes consultar OBLIGATORIAMENTE.

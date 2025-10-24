@@ -65,17 +65,17 @@ type LastFileInfo struct {
 
 // PDFMetadata contiene información bibliográfica extraída de un PDF
 type PDFMetadata struct {
-	Title            string `json:"title,omitempty"`
-	Author           string `json:"author,omitempty"`
-	Subject          string `json:"subject,omitempty"`
-	Keywords         string `json:"keywords,omitempty"`
-	Creator          string `json:"creator,omitempty"`
-	Producer         string `json:"producer,omitempty"`
-	Created          string `json:"created,omitempty"`           // Fecha de creación
-	Modified         string `json:"modified,omitempty"`          // Fecha de modificación
-	HasExtractableText bool   `json:"has_extractable_text"`      // Si el PDF tiene texto extraíble (no es solo imagen)
-	TextCoveragePercent float64 `json:"text_coverage_percent"`  // Porcentaje estimado de contenido con texto
-	PageCount        int    `json:"page_count,omitempty"`        // Número de páginas
+	Title               string  `json:"title,omitempty"`
+	Author              string  `json:"author,omitempty"`
+	Subject             string  `json:"subject,omitempty"`
+	Keywords            string  `json:"keywords,omitempty"`
+	Creator             string  `json:"creator,omitempty"`
+	Producer            string  `json:"producer,omitempty"`
+	Created             string  `json:"created,omitempty"`     // Fecha de creación
+	Modified            string  `json:"modified,omitempty"`    // Fecha de modificación
+	HasExtractableText  bool    `json:"has_extractable_text"`  // Si el PDF tiene texto extraíble (no es solo imagen)
+	TextCoveragePercent float64 `json:"text_coverage_percent"` // Porcentaje estimado de contenido con texto
+	PageCount           int     `json:"page_count,omitempty"`  // Número de páginas
 }
 
 // sanitizeEnv limpia espacios y elimina comillas simples o dobles rodeando todo el valor.
@@ -799,7 +799,7 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	}
 
 	meta.PageCount = pdfReader.NumPage()
-	
+
 	// Muestrear páginas para detectar texto extraíble
 	// Estrategia: revisar primeras 3 páginas, página media y últimas 2
 	totalPages := pdfReader.NumPage()
@@ -837,13 +837,13 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 		if page.V.IsNull() {
 			continue
 		}
-		
+
 		content := page.Content()
-		
+
 		// Extraer texto de la página
 		textContent := extractTextFromContent(&content)
 		textLen := len(strings.TrimSpace(textContent))
-		
+
 		if textLen > 50 { // Umbral mínimo: al menos 50 caracteres de texto real
 			pagesWithText++
 			totalTextLength += textLen
@@ -858,7 +858,7 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	} else {
 		coveragePercent := (float64(pagesWithText) / float64(sampledPages)) * 100
 		meta.TextCoveragePercent = coveragePercent
-		
+
 		// Considerar que tiene texto extraíble si >= 70% de páginas muestreadas tienen texto
 		meta.HasExtractableText = coveragePercent >= 70.0
 	}
@@ -869,7 +869,7 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	}
 
 	log.Printf("[pdf][metadata][extracted] file=%s title=%q pages=%d sampled=%d with_text=%d coverage=%.1f%% avg_chars=%d has_text=%v",
-		filepath.Base(filePath), meta.Title, totalPages, sampledPages, pagesWithText, 
+		filepath.Base(filePath), meta.Title, totalPages, sampledPages, pagesWithText,
 		meta.TextCoveragePercent, avgTextPerPage, meta.HasExtractableText)
 
 	return meta
