@@ -778,12 +778,29 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	cleaned = strings.ReplaceAll(cleaned, "-", " ")
 	meta.Title = cleanPDFString(cleaned)
 
+	// Proteger contra panics de la librería rsc.io/pdf
+	// Algunos PDFs usan codificaciones no soportadas que causan panic
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[pdf][metadata][panic] recovered from PDF parsing panic %s: %v", filePath, r)
+			// Asumimos que el PDF tiene texto si no podemos parsearlo
+			// Es mejor procesar y dejar que OpenAI lo maneje
+			meta.HasExtractableText = true
+			meta.TextCoveragePercent = 100.0
+			meta.PageCount = 0
+			log.Printf("[pdf][metadata][extracted] file=%s title=%q (parse_panic, assumed_text=true)",
+				filepath.Base(filePath), meta.Title)
+		}
+	}()
+
 	// Intentar abrir y analizar el PDF para detectar texto
 	f, err := os.Open(filePath)
 	if err != nil {
 		log.Printf("[pdf][metadata][warning] cannot open for text analysis %s: %v", filePath, err)
-		// Aún retornamos metadata básica
-		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, text_check=failed)",
+		// Asumimos que tiene texto si no podemos abrirlo
+		meta.HasExtractableText = true
+		meta.TextCoveragePercent = 100.0
+		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, text_check=failed, assumed_text=true)",
 			filepath.Base(filePath), meta.Title)
 		return meta
 	}
@@ -793,7 +810,10 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	pdfReader, err := pdf.NewReader(f, fileInfo.Size())
 	if err != nil {
 		log.Printf("[pdf][metadata][warning] cannot parse PDF %s: %v", filePath, err)
-		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, parse_failed)",
+		// Asumimos que tiene texto si no podemos parsearlo
+		meta.HasExtractableText = true
+		meta.TextCoveragePercent = 100.0
+		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, parse_failed, assumed_text=true)",
 			filepath.Base(filePath), meta.Title)
 		return meta
 	}
@@ -859,8 +879,9 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 		coveragePercent := (float64(pagesWithText) / float64(sampledPages)) * 100
 		meta.TextCoveragePercent = coveragePercent
 
-		// Considerar que tiene texto extraíble si >= 70% de páginas muestreadas tienen texto
-		meta.HasExtractableText = coveragePercent >= 70.0
+		// Threshold ajustado a 50%: si la mitad de páginas tienen texto, es usable
+		// Esto permite procesar PDFs mixtos (algunas páginas escaneadas, otras digitales)
+		meta.HasExtractableText = coveragePercent >= 50.0
 	}
 
 	avgTextPerPage := 0
