@@ -214,28 +214,97 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
   }
 
   String _normalizeMarkdown(String s) {
-    // Normalize common patterns like "1) Item" -> "1. Item" for ordered lists
     var text = s.replaceAll('\r\n', '\n');
-    // Ensure a space after heading marks (e.g., ##Title -> ## Title)
+
+    // PASO 1: Limpiar # sueltos que puedan romper el markdown
+    // Eliminar # aislados al final de líneas o párrafos
+    text = text.replaceAll(RegExp(r'\s+#\s*$', multiLine: true), '');
+    text = text.replaceAll(RegExp(r'\s+##\s*$', multiLine: true), '');
+    text = text.replaceAll(RegExp(r'\.\s*#\s+'), '. ');
+
+    // PASO 2: Detectar y normalizar títulos específicos de secciones
+    final sectionPatterns = {
+      'Resumen Clínico': 'Resumen Clínico',
+      'Resumen clínico': 'Resumen Clínico',
+      'Desempeño global': 'Desempeño Global',
+      'Desempeño Global': 'Desempeño Global',
+      'Fortaleza\\s*s?': 'Fortalezas',
+      'Áreas de mejor\\s*a': 'Áreas de Mejora',
+      'Areas de mejora': 'Áreas de Mejora',
+      'Recomendaciones accionable\\s*s?': 'Recomendaciones Accionables',
+      'Recomendaciones Accionables': 'Recomendaciones Accionables',
+      'Errores crítico\\s*s?': 'Errores Críticos',
+      'Errores critico\\s*s?': 'Errores Críticos',
+      'Errores Críticos': 'Errores Críticos',
+      'Puntuación': 'Puntuación',
+      'Puntuacion': 'Puntuación',
+      'Referencias': 'Referencias',
+    };
+
+    for (final entry in sectionPatterns.entries) {
+      final pattern = entry.key;
+      final normalized = entry.value;
+
+      // Patrón 1: Título al inicio de línea o después de salto, con o sin #
+      text = text.replaceAllMapped(
+        RegExp(
+          '(?:^|\\n)\\s*#{0,6}\\s*($pattern)\\s*(:|\\b)',
+          caseSensitive: false,
+          multiLine: true,
+        ),
+        (m) => '\n\n## $normalized\n\n',
+      );
+
+      // Patrón 2: Título pegado después de punto
+      text = text.replaceAllMapped(
+        RegExp('([.!?])\\s*#{0,6}\\s*($pattern)\\b', caseSensitive: false),
+        (m) => '${m.group(1)}\n\n## $normalized\n\n',
+      );
+    }
+
+    // PASO 3: Limpiar duplicados como "PuntuaciónPuntuación"
+    text = text.replaceAllMapped(RegExp(r'(\w+)\1', caseSensitive: false), (m) {
+      final word = m.group(1)!;
+      // Solo limpiar si es una palabra larga (título duplicado)
+      return word.length > 5 ? word : m.group(0)!;
+    });
+
+    // PASO 4: Separar items numerados largos
+    text = text.replaceAllMapped(
+      RegExp(r'([.!?])\s*(\d+[\).])\s+'),
+      (m) => '${m.group(1)}\n\n${m.group(2)} ',
+    );
+
+    // PASO 5: Limpiar headers markdown genéricos mal formateados
+    // Asegurar espacio después de #
     text = text.replaceAllMapped(
       RegExp(r'^(\s*#{1,6})([^#\s])', multiLine: true),
-      (m) {
-        return '${m.group(1)} ${m.group(2)}';
-      },
+      (m) => '${m.group(1)} ${m.group(2)}',
     );
+
+    // PASO 6: Limpiar excesos
+    // Múltiples saltos de línea
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    // Saltos al inicio
+    text = text.replaceAll(RegExp(r'^\n+'), '');
+    // Espacios al final de líneas
+    text = text.replaceAll(RegExp(r' +$', multiLine: true), '');
+
+    // PASO 7: Convertir listas numeradas 1) a 1.
     final lines = text.split('\n');
     final out = <String>[];
     final reNumParen = RegExp(r'^\s*(\d+)\)\s+');
     for (final line in lines) {
+      var processedLine = line;
       final m = reNumParen.firstMatch(line);
       if (m != null) {
         final num = m.group(1);
-        out.add(line.replaceFirst(reNumParen, '$num. '));
-      } else {
-        out.add(line);
+        processedLine = line.replaceFirst(reNumParen, '$num. ');
       }
+      out.add(processedLine);
     }
-    return out.join('\n');
+
+    return out.join('\n').trim();
   }
 
   ThemeData _markdownTheme(BuildContext context, Color? baseColor) {

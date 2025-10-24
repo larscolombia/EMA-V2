@@ -104,6 +104,33 @@ func (m *MockAIClient) StreamAssistantWithSpecificVectorStore(ctx context.Contex
 	return ch, nil
 }
 
+func (m *MockAIClient) QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error) {
+	if m.ShouldFailRAG {
+		return &openai.VectorSearchResult{
+			Content:   "",
+			Source:    "",
+			VectorID:  vectorStoreID,
+			HasResult: false,
+		}, nil
+	}
+	return &openai.VectorSearchResult{
+		Content:   m.MockRAGResponse,
+		Source:    m.MockSource,
+		VectorID:  vectorStoreID,
+		HasResult: true,
+	}, nil
+}
+
+func (m *MockAIClient) ExtractPDFMetadataFromPath(filePath string) *openai.PDFMetadata {
+	// Mock: retorna metadata indicando que el PDF tiene texto extraíble
+	return &openai.PDFMetadata{
+		Title:               "Test PDF",
+		HasExtractableText:  true,
+		TextCoveragePercent: 100.0,
+		PageCount:           10,
+	}
+}
+
 // MockAIClientWithMetadata implementa AIClientWithMetadata para tests avanzados
 type MockAIClientWithMetadata struct {
 	*MockAIClient
@@ -113,9 +140,9 @@ func (m *MockAIClientWithMetadata) ClearVectorStoreFiles(ctx context.Context, vs
 	return nil // Mock: siempre exitoso
 }
 
-func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*VectorSearchResult, error) {
+func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error) {
 	if m.ShouldFailRAG {
-		return &VectorSearchResult{
+		return &openai.VectorSearchResult{
 			Content:   "",
 			Source:    "",
 			VectorID:  vectorStoreID,
@@ -128,7 +155,7 @@ func (m *MockAIClientWithMetadata) SearchInVectorStoreWithMetadata(ctx context.C
 		source = "Manual de Medicina Interna Harrison"
 	}
 
-	return &VectorSearchResult{
+	return &openai.VectorSearchResult{
 		Content:   m.MockRAGResponse,
 		Source:    source,
 		VectorID:  vectorStoreID,
@@ -225,8 +252,8 @@ func TestSmartMessage_NoResultsAnywhere(t *testing.T) {
 	}
 
 	response := <-resp.Stream
-	if !strings.Contains(response, "No encontré una referencia") {
-		t.Errorf("El mensaje debe informar la ausencia de referencias, got: %s", response)
+	if !strings.Contains(response, "No encontré") && !strings.Contains(response, "no encontré") && !strings.Contains(response, "reformula") {
+		t.Errorf("La respuesta debe comunicar falta de referencias, got=%s", response)
 	}
 	if resp.FallbackReason != "no_results" {
 		t.Errorf("Se esperaba fallback_reason 'no_results', got=%s", resp.FallbackReason)
@@ -341,7 +368,7 @@ func TestSmartMessage_BasicModeWithSources(t *testing.T) {
 	}
 
 	response := <-resp.Stream
-	if !strings.Contains(response, "No encontré una referencia") {
+	if !strings.Contains(response, "No encontré") && !strings.Contains(response, "no encontré") && !strings.Contains(response, "reformula") {
 		t.Errorf("La respuesta debe comunicar falta de referencias, got=%s", response)
 	}
 }

@@ -365,17 +365,18 @@ IMPORTANTE:
       // Prefijo especial para poder filtrar fácilmente en UI sin cambiar schema
       text:
           '[[HIDDEN_EVAL_PROMPT]] Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
-          'Usa SOLO las intervenciones listadas (no inventes nuevas). Devuelve en Markdown con EXACTAS estas secciones y encabezados:'
-          '\n# Resumen Clínico (2-4 frases concisas)'
-          '\n## Desempeño global (2-3 frases evaluando razonamiento clínico, estructura y priorización)'
-          '\n## Fortalezas\n- (bullets)'
-          '\n## Áreas de mejora\n- (bullets específicas, accionables)'
-          '\n## Recomendaciones accionables\n- (bullets concretas de estudio / práctica)'
-          '\n## Errores críticos\n- (o "Ninguno identificado")'
-          '\n## Puntuación\nFormato: "Puntuación: NN/100 – breve justificación"'
-          '\n## Referencias\n- 2-4 fuentes abreviadas (año, autor o institución, guía)'
-          '\nAL FINAL: No formules preguntas, no abras nuevas líneas de conversación.'
-          '\nIntervenciones del usuario para evaluar:'
+          'Usa SOLO las intervenciones listadas (no inventes nuevas). '
+          '\n\nDEVUELVE EN MARKDOWN con EXACTAMENTE estas secciones (CADA encabezado debe tener línea en blanco ANTES y DESPUÉS):'
+          '\n\n# Resumen Clínico\n\n(2-4 frases concisas sobre el caso y cómo lo abordó el usuario)'
+          '\n\n## Desempeño global\n\n(2-3 frases evaluando razonamiento clínico, estructura y priorización)'
+          '\n\n## Fortalezas\n\n- (bullet points de fortalezas observadas)'
+          '\n\n## Áreas de mejora\n\n- (bullet points específicas y accionables)'
+          '\n\n## Recomendaciones accionables\n\n- (bullet points concretas de estudio o práctica)'
+          '\n\n## Errores críticos\n\n- (detallar errores graves, o escribir "Ninguno identificado")'
+          '\n\n## Puntuación\n\n(Formato: "Puntuación: NN/100 – breve justificación de 1-2 líneas")'
+          '\n\n## Referencias\n\n- (2-4 fuentes abreviadas: año, autor/institución, guía o artículo)'
+          '\n\nIMPORTANTE: Separa CADA sección con línea en blanco. NO formules preguntas ni abras nuevas conversaciones al final.'
+          '\n\nIntervenciones del usuario para evaluar:'
           '\n${buffer.toString()}',
     );
     // Guardar el prompt de evaluación como intervención de usuario

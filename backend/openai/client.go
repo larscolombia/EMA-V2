@@ -24,6 +24,7 @@ import (
 	"unicode"
 
 	openai "github.com/sashabaranov/go-openai"
+	"rsc.io/pdf"
 )
 
 type Client struct {
@@ -64,14 +65,17 @@ type LastFileInfo struct {
 
 // PDFMetadata contiene información bibliográfica extraída de un PDF
 type PDFMetadata struct {
-	Title    string `json:"title,omitempty"`
-	Author   string `json:"author,omitempty"`
-	Subject  string `json:"subject,omitempty"`
-	Keywords string `json:"keywords,omitempty"`
-	Creator  string `json:"creator,omitempty"`
-	Producer string `json:"producer,omitempty"`
-	Created  string `json:"created,omitempty"`  // Fecha de creación
-	Modified string `json:"modified,omitempty"` // Fecha de modificación
+	Title            string `json:"title,omitempty"`
+	Author           string `json:"author,omitempty"`
+	Subject          string `json:"subject,omitempty"`
+	Keywords         string `json:"keywords,omitempty"`
+	Creator          string `json:"creator,omitempty"`
+	Producer         string `json:"producer,omitempty"`
+	Created          string `json:"created,omitempty"`           // Fecha de creación
+	Modified         string `json:"modified,omitempty"`          // Fecha de modificación
+	HasExtractableText bool   `json:"has_extractable_text"`      // Si el PDF tiene texto extraíble (no es solo imagen)
+	TextCoveragePercent float64 `json:"text_coverage_percent"`  // Porcentaje estimado de contenido con texto
+	PageCount        int    `json:"page_count,omitempty"`        // Número de páginas
 }
 
 // sanitizeEnv limpia espacios y elimina comillas simples o dobles rodeando todo el valor.
@@ -748,7 +752,7 @@ func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath str
 
 func encoding_hex(b []byte) string { return hex.EncodeToString(b) }
 
-// extractPDFMetadata extrae metadatos de un archivo PDF
+// extractPDFMetadata extrae metadatos de un archivo PDF y detecta si tiene texto extraíble
 // Retorna nil si no es PDF o si falla la extracción (no crítico)
 func extractPDFMetadata(filePath string) *PDFMetadata {
 	// Solo procesar archivos .pdf
@@ -757,7 +761,8 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	}
 
 	// Validar que el archivo existe y es accesible
-	if _, err := os.Stat(filePath); err != nil {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
 		log.Printf("[pdf][metadata][warning] file not accessible %s: %v", filePath, err)
 		return nil
 	}
@@ -765,9 +770,6 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	meta := &PDFMetadata{}
 
 	// Extraer título del nombre de archivo
-	// Nota: rsc.io/pdf es una librería muy simple que no expone metadatos fácilmente
-	// Para extracción real de metadatos (Author, CreationDate, etc.) se necesitaría
-	// una librería más completa como github.com/pdfcpu/pdfcpu
 	baseName := filepath.Base(filePath)
 	nameWithoutExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
@@ -776,10 +778,140 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	cleaned = strings.ReplaceAll(cleaned, "-", " ")
 	meta.Title = cleanPDFString(cleaned)
 
-	log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename)",
-		filepath.Base(filePath), meta.Title)
+	// Intentar abrir y analizar el PDF para detectar texto
+	f, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("[pdf][metadata][warning] cannot open for text analysis %s: %v", filePath, err)
+		// Aún retornamos metadata básica
+		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, text_check=failed)",
+			filepath.Base(filePath), meta.Title)
+		return meta
+	}
+	defer f.Close()
+
+	// Analizar PDF con rsc.io/pdf para detectar texto
+	pdfReader, err := pdf.NewReader(f, fileInfo.Size())
+	if err != nil {
+		log.Printf("[pdf][metadata][warning] cannot parse PDF %s: %v", filePath, err)
+		log.Printf("[pdf][metadata][extracted] file=%s title=%q (from filename, parse_failed)",
+			filepath.Base(filePath), meta.Title)
+		return meta
+	}
+
+	meta.PageCount = pdfReader.NumPage()
+	
+	// Muestrear páginas para detectar texto extraíble
+	// Estrategia: revisar primeras 3 páginas, página media y últimas 2
+	totalPages := pdfReader.NumPage()
+	if totalPages == 0 {
+		log.Printf("[pdf][metadata][warning] PDF has 0 pages: %s", filePath)
+		meta.HasExtractableText = false
+		meta.TextCoveragePercent = 0
+		return meta
+	}
+
+	samplesToCheck := []int{}
+	// Primeras 3 páginas
+	for i := 1; i <= min(3, totalPages); i++ {
+		samplesToCheck = append(samplesToCheck, i)
+	}
+	// Página media
+	if totalPages > 6 {
+		midPage := totalPages / 2
+		samplesToCheck = append(samplesToCheck, midPage)
+	}
+	// Últimas 2 páginas
+	if totalPages > 3 {
+		for i := max(totalPages-1, 4); i <= totalPages; i++ {
+			if !contains(samplesToCheck, i) {
+				samplesToCheck = append(samplesToCheck, i)
+			}
+		}
+	}
+
+	pagesWithText := 0
+	totalTextLength := 0
+
+	for _, pageNum := range samplesToCheck {
+		page := pdfReader.Page(pageNum)
+		if page.V.IsNull() {
+			continue
+		}
+		
+		content := page.Content()
+		
+		// Extraer texto de la página
+		textContent := extractTextFromContent(&content)
+		textLen := len(strings.TrimSpace(textContent))
+		
+		if textLen > 50 { // Umbral mínimo: al menos 50 caracteres de texto real
+			pagesWithText++
+			totalTextLength += textLen
+		}
+	}
+
+	// Calcular cobertura de texto
+	sampledPages := len(samplesToCheck)
+	if sampledPages == 0 {
+		meta.HasExtractableText = false
+		meta.TextCoveragePercent = 0
+	} else {
+		coveragePercent := (float64(pagesWithText) / float64(sampledPages)) * 100
+		meta.TextCoveragePercent = coveragePercent
+		
+		// Considerar que tiene texto extraíble si >= 70% de páginas muestreadas tienen texto
+		meta.HasExtractableText = coveragePercent >= 70.0
+	}
+
+	avgTextPerPage := 0
+	if pagesWithText > 0 {
+		avgTextPerPage = totalTextLength / pagesWithText
+	}
+
+	log.Printf("[pdf][metadata][extracted] file=%s title=%q pages=%d sampled=%d with_text=%d coverage=%.1f%% avg_chars=%d has_text=%v",
+		filepath.Base(filePath), meta.Title, totalPages, sampledPages, pagesWithText, 
+		meta.TextCoveragePercent, avgTextPerPage, meta.HasExtractableText)
 
 	return meta
+}
+
+// extractTextFromContent extrae texto de un Content de PDF
+func extractTextFromContent(content *pdf.Content) string {
+	var buf strings.Builder
+	for _, text := range content.Text {
+		s := cleanPDFString(text.S)
+		if s != "" {
+			buf.WriteString(s)
+			buf.WriteString(" ")
+		}
+	}
+	return buf.String()
+}
+
+// min retorna el mínimo de dos enteros
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// max retorna el máximo de dos enteros
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// contains verifica si un slice de enteros contiene un valor
+func contains(slice []int, val int) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanPDFString limpia strings extraídos de PDFs (elimina caracteres de control, etc.)
@@ -1588,6 +1720,22 @@ func (c *Client) GetVectorStoreID(threadID string) string {
 	c.vsMu.RLock()
 	defer c.vsMu.RUnlock()
 	return c.vectorStore[threadID]
+}
+
+// GetLastFileMetadata returns PDF metadata for the last file uploaded to a thread
+func (c *Client) GetLastFileMetadata(threadID string) *PDFMetadata {
+	c.lastMu.RLock()
+	defer c.lastMu.RUnlock()
+	if lf, ok := c.lastFile[threadID]; ok {
+		return lf.Metadata
+	}
+	return nil
+}
+
+// ExtractPDFMetadataFromPath analyzes a PDF file and extracts metadata including text detection
+// Returns nil if file is not a PDF or cannot be read
+func (c *Client) ExtractPDFMetadataFromPath(filePath string) *PDFMetadata {
+	return extractPDFMetadata(filePath)
 }
 
 // touchVectorStore updates last access for TTL logic.

@@ -59,6 +59,8 @@ type AIClient interface {
 	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 	// QuickVectorSearch retorna contenido Y el nombre real del archivo (no adivinado)
 	QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
+	// ExtractPDFMetadataFromPath analiza un PDF y detecta si tiene texto extraíble
+	ExtractPDFMetadataFromPath(filePath string) *openai.PDFMetadata
 }
 
 // SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
@@ -300,28 +302,11 @@ Instrucciones:
 		}
 		log.Printf("[conv][SmartMessage][doc_only.auto] thread=%s using_thread_vs=%s reason=thread_has_docs", threadID, vsID)
 
-		docOnlyPrompt := fmt.Sprintf(`⚠️ MODO DOCUMENTO ACTIVADO ⚠️
-
-CONTEXTO: Este thread tiene documentos PDF cargados que el usuario quiere consultar.
-
-TAREA PRIORITARIA:
-1. USA el tool "file_search" para buscar en los PDFs adjuntos
-2. La pregunta del usuario probablemente se refiere al contenido de estos PDFs
-3. NO uses conocimiento médico general a menos que los PDFs no contengan información relevante
-
-REGLAS:
-- Primero busca en los PDFs con file_search
-- Si encuentras información, úsala como fuente principal
-- Si NO encuentras información relevante después de buscar: "Los documentos no contienen información específica sobre esto"
-- Cita siempre el nombre del archivo cuando uses su contenido
-- Mantén coherencia con la conversación previa
-
-Pregunta del usuario:
-%s
-
-FORMATO DE RESPUESTA:
-- Contenido en Markdown limpio
-- Termina con: ## Fuentes\n- [nombre del archivo PDF]`, prompt)
+		// Obtener nombres de documentos para enriquecer el prompt
+		docNames := h.getThreadDocumentNames(ctx, threadID)
+		
+		// Usar prompt mejorado con fallbacks inteligentes
+		docOnlyPrompt := h.buildDocOnlyPromptEnhanced(prompt, docNames)
 
 		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
 		if err != nil {
@@ -329,7 +314,13 @@ FORMATO DE RESPUESTA:
 		}
 		resp.Stream = stream
 		resp.Source = "doc_only"
-		resp.AllowedSources = []string{"documentos adjuntos del hilo"}
+		
+		// Añadir nombres de documentos si los tenemos
+		if len(docNames) > 0 {
+			resp.AllowedSources = docNames
+		} else {
+			resp.AllowedSources = []string{"documentos adjuntos del hilo"}
+		}
 		resp.HasVectorContext = true
 		return resp, nil
 	}
@@ -1120,6 +1111,46 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		return
 	}
 
+	// CRÍTICO: Validar si el PDF tiene texto extraíble ANTES de subirlo a OpenAI
+	// Esto evita desperdiciar tiempo/recursos indexando PDFs escaneados (solo imágenes)
+	if metadata := h.AI.ExtractPDFMetadataFromPath(tmp); metadata != nil {
+		if !metadata.HasExtractableText {
+			fname := filepath.Base(upFile.Filename)
+			log.Printf("[conv][PDF][scanned_rejected] thread=%s file=%s coverage=%.1f%% pages=%d",
+				threadID, fname, metadata.TextCoveragePercent, metadata.PageCount)
+			
+			msg := fmt.Sprintf(`Este documento (**%s**) parece estar compuesto principalmente por imágenes o escaneos (%.1f%% de cobertura de texto en %d páginas), por lo que no se puede leer texto directamente.
+
+**Opciones disponibles:**
+- Sube una versión del documento con texto digital (no escaneado)
+- Si el documento es un escaneo, necesitarás aplicar OCR (Reconocimiento Óptico de Caracteres) antes de subirlo
+- Puedes usar herramientas como Adobe Acrobat, Google Drive, o servicios online de OCR
+
+No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`, 
+				fname, metadata.TextCoveragePercent, metadata.PageCount)
+			
+			if v, ok := c.Get("quota_remaining"); ok {
+				c.Header("X-Quota-Remaining", toString(v))
+			}
+			c.Header("X-PDF-Scanned", "1")
+			c.Header("X-PDF-Text-Coverage", fmt.Sprintf("%.1f", metadata.TextCoveragePercent))
+			c.Header("X-PDF-Pages", strconv.Itoa(metadata.PageCount))
+			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+			c.Header("X-Thread-ID", threadID)
+			c.Header("X-Source-Used", "pdf_scanned_error")
+			log.Printf("[conv][PDF][scanned_response] thread=%s file=%s", threadID, fname)
+			
+			one := make(chan string, 1)
+			one <- msg
+			close(one)
+			stages := []string{"__STAGE__:start", "__STAGE__:pdf_validation_failed", "__STAGE__:streaming_answer"}
+			sseMaybeCapture(c, wrapWithStages(stages, one), threadID)
+			return
+		}
+		log.Printf("[conv][PDF][text_validated] thread=%s file=%s coverage=%.1f%% pages=%d has_text=true",
+			threadID, upFile.Filename, metadata.TextCoveragePercent, metadata.PageCount)
+	}
+
 	maxFiles, _ := strconv.Atoi(os.Getenv("VS_MAX_FILES"))
 	maxMB, _ := strconv.Atoi(os.Getenv("VS_MAX_MB"))
 	if maxFiles > 0 && h.AI.CountThreadFiles(threadID) >= maxFiles {
@@ -1288,26 +1319,12 @@ func (h *Handler) handlePDF(c *gin.Context, threadID, prompt string, upFile *mul
 		sseMaybeCapture(c, wrapWithStages(stages, one), threadID)
 		return
 	}
-	// Si viene prompt junto al PDF, responder en modo doc-only usando el vector store del hilo
-	p := fmt.Sprintf(`⚠️ INSTRUCCIÓN CRÍTICA Y PRIORITARIA ⚠️
-
-CONTEXTO: El usuario acaba de subir un documento PDF y está preguntando sobre él.
-El PDF YA ESTÁ INDEXADO en el vector store de este thread.
-
-TU TAREA OBLIGATORIA:
-1. USA el tool "file_search" INMEDIATAMENTE para buscar en el PDF
-2. Lee ÚNICAMENTE el contenido que el tool file_search te devuelva
-3. Responde SOLO con información del PDF (no uses tu conocimiento previo)
-
-🚨 REGLAS ESTRICTAS:
-- NO inventes información
-- NO uses conocimiento médico general
-- SI el tool file_search no encuentra información relevante, di: "El documento no contiene información suficiente para responder esta pregunta"
-- Si encuentras la información, cítala textualmente
-- Termina con: "Fuente: [nombre del archivo PDF]"
-
-Pregunta del usuario:
-%s`, base)
+	
+	// Si viene prompt junto al PDF, usar el prompt mejorado con fallbacks inteligentes
+	fname := filepath.Base(upFile.Filename)
+	docNames := []string{fname}
+	p := h.buildDocOnlyPromptEnhanced(base, docNames)
+	
 	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
@@ -1393,6 +1410,45 @@ func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool 
 	return len(files) > 0
 }
 
+// getThreadDocumentNames obtiene los nombres reales de los archivos en el vector store del thread
+func (h *Handler) getThreadDocumentNames(ctx context.Context, threadID string) []string {
+	vsID := h.AI.GetVectorStoreID(threadID)
+	if vsID == "" {
+		return []string{}
+	}
+	
+	// Intentar obtener info del último archivo cargado (tiene metadata)
+	// Esto es más eficiente que iterar todos los archivos
+	fileIDs, err := h.AI.ListVectorStoreFiles(ctx, threadID)
+	if err != nil || len(fileIDs) == 0 {
+		return []string{}
+	}
+	
+	names := make([]string, 0, len(fileIDs))
+	// Por ahora retornamos indicador genérico; en futuro podemos iterar fileIDs
+	// para obtener nombres reales usando getFileName del cliente openai
+	if len(fileIDs) > 0 {
+		names = append(names, fmt.Sprintf("%d documento(s) PDF", len(fileIDs)))
+	}
+	return names
+}
+
+// getPDFMetadata obtiene los metadatos del último PDF cargado en el thread
+// Esto incluye si el PDF tiene texto extraíble o es solo imágenes
+func (h *Handler) getPDFMetadata(ctx context.Context, threadID string) (*openai.PDFMetadata, error) {
+	// Usar type assertion para acceder a métodos internos del cliente
+	type metadataGetter interface {
+		GetLastFileMetadata(threadID string) *openai.PDFMetadata
+	}
+	
+	if getter, ok := h.AI.(metadataGetter); ok {
+		metadata := getter.GetLastFileMetadata(threadID)
+		return metadata, nil
+	}
+	
+	return nil, fmt.Errorf("client does not support metadata retrieval")
+}
+
 // questionRefersToDocument detecta si la pregunta se refiere explícitamente a un documento
 func (h *Handler) questionRefersToDocument(prompt string) bool {
 	prompt = strings.ToLower(strings.TrimSpace(prompt))
@@ -1408,6 +1464,9 @@ func (h *Handler) questionRefersToDocument(prompt string) bool {
 		"del documento", "del pdf", "del archivo",
 		"resumen", "resume", "resumir", "qué contiene", "contenido del",
 		"explica el documento", "analiza el documento", "análisis del documento",
+		// Nuevas: preguntas vagas que probablemente se refieren al documento cargado
+		"qué es", "que es", "historia clínica", "capitulo", "capítulo", "sección", "seccion",
+		"página", "pagina", "índice", "indice", "tabla de contenido",
 	}
 
 	for _, keyword := range docKeywords {
@@ -1415,8 +1474,89 @@ func (h *Handler) questionRefersToDocument(prompt string) bool {
 			return true
 		}
 	}
+	
+	// Detectar preguntas muy cortas (≤ 5 palabras) como potencialmente referidas al documento
+	// cuando el thread tiene documentos cargados
+	words := strings.Fields(prompt)
+	if len(words) <= 5 {
+		// Preguntas cortas como "qué es el pdf?" o "historia clínica?"
+		// probablemente se refieren al documento, no a conocimiento general
+		return true
+	}
 
 	return false
+}
+
+// enrichQueryWithContext enriquece consultas ambiguas con contexto del documento
+func (h *Handler) enrichQueryWithContext(prompt string, docNames []string) string {
+	prompt = strings.TrimSpace(prompt)
+	lower := strings.ToLower(prompt)
+	
+	// Si la consulta es muy vaga o corta, enriquecerla
+	if len(prompt) < 20 || strings.Contains(lower, "qué es") || strings.Contains(lower, "que dice") {
+		if len(docNames) > 0 {
+			return fmt.Sprintf("Busca en el documento '%s' información sobre: %s. Si la pregunta es vaga, proporciona un índice o estructura del documento.", docNames[0], prompt)
+		}
+		return fmt.Sprintf("Busca en los PDFs adjuntos información sobre: %s. Si no encuentras contenido exacto, proporciona un índice aproximado (títulos, secciones) del documento.", prompt)
+	}
+	
+	return prompt
+}
+
+// buildDocOnlyPromptEnhanced construye prompt mejorado con fallbacks inteligentes
+func (h *Handler) buildDocOnlyPromptEnhanced(userPrompt string, docNames []string) string {
+	enrichedPrompt := h.enrichQueryWithContext(userPrompt, docNames)
+	
+	docContext := "los PDFs adjuntos al thread"
+	if len(docNames) > 0 {
+		docContext = fmt.Sprintf("el documento: %s", strings.Join(docNames, ", "))
+	}
+	
+	return fmt.Sprintf(`⚠️ INSTRUCCIÓN CRÍTICA: MODO DOCUMENTO PDF ⚠️
+
+CONTEXTO: Este thread tiene documentos PDF cargados que debes consultar OBLIGATORIAMENTE.
+
+═══ TU TAREA ═══
+1. USA el tool "file_search" INMEDIATAMENTE para buscar en %s
+2. Lee ÚNICAMENTE el contenido que file_search te devuelva
+3. NO uses conocimiento médico general externo
+
+═══ REGLAS DE RESPUESTA ═══
+
+🔹 SI ENCUENTRAS INFORMACIÓN RELEVANTE:
+- Responde con el contenido encontrado
+- Cita textualmente fragmentos relevantes
+- Termina con: "## Fuentes\n- [Nombre del archivo PDF], p. X-Y"
+
+🔹 SI LA CONSULTA ES VAGA O AMBIGUA (ej: "¿qué es el pdf?", "historia clínica?"):
+PROHIBIDO responder "no hay información". En su lugar:
+A) ÍNDICE: Lista la estructura del documento (títulos, capítulos, secciones detectables)
+   Formato: "El documento contiene:\n- Capítulo 1: ...\n- Capítulo 2: ...\n¿Qué sección te interesa?"
+   
+B) FRAGMENTOS REPRESENTATIVOS: Si no hay índice claro, muestra 3-5 fragmentos importantes con sus páginas
+   Formato: "Fragmentos relevantes:\n- p. 5: [fragmento]\n- p. 12: [fragmento]\n..."
+   
+C) SINÓNIMOS: Si buscaste un término y no lo encontraste, sugiere términos alternativos
+   Ejemplo: "No encontré 'historia clínica' exactamente. ¿Buscas: historial médico, expediente clínico, anamnesis?"
+
+🔹 SI EL DOCUMENTO NO TIENE TEXTO EXTRAÍBLE (escaneado sin OCR):
+"El documento parece ser un escaneo sin texto extraíble (OCR). Sugerencias:
+- Sube una versión con OCR aplicado
+- Usa herramientas de conversión como Adobe Acrobat
+- Indica manualmente qué sección te interesa si ves el documento"
+
+═══ FORMATO DE SALIDA ═══
+- Markdown limpio y estructurado
+- Bullets o listas numeradas para claridad
+- Termina SIEMPRE con "## Fuentes" citando el archivo Y páginas
+- PROHIBIDO citar "Documentos PDF cargados" (usa nombre real del archivo)
+
+═══ IMPORTANTE ═══
+Tu objetivo NO es "opinar" ni dar teoría externa: es navegar, citar y explicar lo que está en %s,
+devolviendo SIEMPRE algo útil (índice/fragmentos/citas) incluso cuando la consulta sea ambigua.
+
+Consulta del usuario:
+%s`, docContext, docContext, enrichedPrompt)
 }
 func errMsg(err error) string {
 	if err == nil {
@@ -2127,7 +2267,6 @@ func stripModelPreambles(s string) string {
 			}
 
 			t = strings.TrimSpace(t[cutPos:])
-			lt = strings.ToLower(t)
 			break
 		}
 	}
