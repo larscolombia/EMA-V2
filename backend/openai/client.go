@@ -780,16 +780,31 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 
 	// Proteger contra panics de la librería rsc.io/pdf
 	// Algunos PDFs usan codificaciones no soportadas que causan panic
+	fileSizeKB := fileInfo.Size() / 1024
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[pdf][metadata][panic] recovered from PDF parsing panic %s: %v", filePath, r)
-			// Asumimos que el PDF tiene texto si no podemos parsearlo
-			// Es mejor procesar y dejar que OpenAI lo maneje
-			meta.HasExtractableText = true
-			meta.TextCoveragePercent = 100.0
-			meta.PageCount = 0
-			log.Printf("[pdf][metadata][extracted] file=%s title=%q (parse_panic, assumed_text=true)",
-				filepath.Base(filePath), meta.Title)
+			
+			// Heurística: PDFs muy pequeños (< 10KB) con panic probablemente son de prueba/vacíos
+			// OpenAI puede "alucinar" contenido con estos archivos
+			if fileSizeKB < 10 {
+				log.Printf("[pdf][metadata][small_file_panic] file=%s size_kb=%d - rejecting as likely empty/test PDF",
+					filepath.Base(filePath), fileSizeKB)
+				meta.HasExtractableText = false
+				meta.TextCoveragePercent = 0
+				meta.PageCount = 0
+				log.Printf("[pdf][metadata][extracted] file=%s title=%q size_kb=%d (parse_panic, too_small, assumed_text=false)",
+					filepath.Base(filePath), meta.Title, fileSizeKB)
+			} else {
+				// PDF grande con encoding raro → confiar en OpenAI
+				log.Printf("[pdf][metadata][large_file_panic] file=%s size_kb=%d - assuming text (OpenAI can handle)",
+					filepath.Base(filePath), fileSizeKB)
+				meta.HasExtractableText = true
+				meta.TextCoveragePercent = 100.0
+				meta.PageCount = 0
+				log.Printf("[pdf][metadata][extracted] file=%s title=%q size_kb=%d (parse_panic, assumed_text=true)",
+					filepath.Base(filePath), meta.Title, fileSizeKB)
+			}
 		}
 	}()
 
