@@ -521,6 +521,12 @@ func (c *Client) ClearVectorStoreFiles(ctx context.Context, vsID string) error {
 		if clearedCount > 0 {
 			log.Printf("[vector_store][clear] vs=%s thread=%s invalidated_file_cache_entries=%d", vsID, threadID, clearedCount)
 		}
+		
+		// Resetear contador de archivos para este thread
+		c.sessMu.Lock()
+		c.sessFiles[threadID] = 0
+		c.sessMu.Unlock()
+		log.Printf("[vector_store][clear] vs=%s thread=%s reset_file_count", vsID, threadID)
 	}
 
 	log.Printf("[vector_store][clear] vs=%s cleared_successfully", vsID)

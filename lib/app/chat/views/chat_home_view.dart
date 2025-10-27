@@ -86,8 +86,8 @@ class _ChatHomeViewState extends State<ChatHomeView>
     }
 
     return message.aiMessage
-        ? ChatMessageAi(message: message)
-        : ChatMessageUser(message: message);
+        ? ChatMessageAi(key: ValueKey(message.uid), message: message)
+        : ChatMessageUser(key: ValueKey(message.uid), message: message);
   }
 
   Widget _buildChatList() {
@@ -100,13 +100,15 @@ class _ChatHomeViewState extends State<ChatHomeView>
         padding: const EdgeInsets.only(left: 12, right: 12, top: 16),
         itemBuilder: (context, index) {
           if (index < msgs.length) {
+            final message = msgs[index];
             return AnimatedSize(
+              key: ValueKey('animated_${message.uid}'), // Key única para AnimatedSize
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutCubic,
               child: AnimatedOpacity(
                 duration: const Duration(milliseconds: 300),
                 opacity: 1.0,
-                child: _buildMessageWidget(msgs[index]),
+                child: _buildMessageWidget(message),
               ),
             );
           } else {

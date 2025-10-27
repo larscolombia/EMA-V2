@@ -192,6 +192,9 @@ class ApiChatData implements IApiChatData {
           responseType: ResponseType.stream,
           // No lanzar excepción automática; manejamos estados manualmente
           validateStatus: (code) => true,
+          // Timeout específico para PDFs grandes (3 minutos)
+          receiveTimeout: const Duration(minutes: 3),
+          sendTimeout: const Duration(minutes: 2),
         ),
       );
 
@@ -239,32 +242,46 @@ class ApiChatData implements IApiChatData {
       }
       final stream = utf8.decoder.bind(body.stream);
       final buffer = StringBuffer();
+      var tokenCount = 0;
+      print('📡 [PDF-UPLOAD] Starting SSE stream processing...');
+      
       await for (final chunk in stream) {
+        print('📡 [PDF-UPLOAD] Raw chunk received: ${chunk.length} bytes');
         for (final line in const LineSplitter().convert(chunk)) {
+          print('📡 [PDF-UPLOAD] Processing line: "${line.substring(0, line.length > 100 ? 100 : line.length)}"');
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
             if (content.startsWith('__STAGE__:')) {
+              print('📡 [PDF-UPLOAD] Stage marker: $content');
               onStream?.call(content);
               continue;
             }
             print(
-              '📡 [API2] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
+              '📡 [PDF-UPLOAD] SSE token #${++tokenCount}: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
             );
             if (content == '[DONE]') {
-              print('📡 [API2] Received DONE marker, ending stream');
+              print('📡 [PDF-UPLOAD] Received DONE marker, ending stream');
               break;
             }
             buffer.write(content);
+            print('📡 [PDF-UPLOAD] Calling onStream callback with token #$tokenCount');
             onStream?.call(content);
+            print('📡 [PDF-UPLOAD] onStream callback completed');
           }
         }
       }
       final finalText = buffer.toString();
-      print('📡 [API2] Final buffer length: ${finalText.length} characters');
+      print('📡 [PDF-UPLOAD] Stream ended. Total tokens: $tokenCount');
+      print('📡 [PDF-UPLOAD] Final buffer length: ${finalText.length} characters');
       print(
-        '📡 [API2] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"',
+        '📡 [PDF-UPLOAD] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"',
       );
+      
+      if (finalText.isEmpty) {
+        print('⚠️ [PDF-UPLOAD] WARNING: Empty buffer after stream processing!');
+      }
+      
       return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {

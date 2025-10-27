@@ -14,6 +14,10 @@ class ApiService extends GetxService {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
+      // Timeouts generosos para procesamiento de PDFs grandes y operaciones IA
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(minutes: 3), // 180s: permite PDFs grandes
+      sendTimeout: const Duration(minutes: 2), // 120s: permite uploads grandes
     );
     _dio = Dio(options);
     _addTokenInterceptor(_dio);

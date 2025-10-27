@@ -517,7 +517,21 @@ class ChatController extends GetxService {
               '🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}',
             );
           }
-          chatsService.chatMessagesLocalData.insertOne(aiMessage);
+          
+          // Debug: Verificar que no estamos mutando mensajes anteriores
+          print('🔍 [Controller] Total messages in list: ${messages.length}');
+          if (messages.length >= 2) {
+            print('🔍 [Controller] Last AI message length: ${aiMessage.text.length}');
+            print('🔍 [Controller] Previous message (index ${messages.length - 2}) length: ${messages[messages.length - 2].text.length}');
+          }
+          
+          // CRÍTICO: Crear un nuevo objeto para persistencia para evitar mutaciones compartidas
+          // El objeto aiMessage puede estar siendo referenciado en múltiples lugares
+          final persistedMessage = ChatMessageModel.ai(
+            chatId: aiMessage.chatId,
+            text: aiMessage.text,
+          );
+          chatsService.chatMessagesLocalData.insertOne(persistedMessage);
           pendingPdf.value = null;
           // Descontar cuota de archivo si se usó
           // File quota consumed on backend
@@ -691,8 +705,15 @@ class ChatController extends GetxService {
               hasFirstToken = true;
               aiMessage.text = token;
               messages.add(aiMessage);
+              print(
+                '🎯 [Controller-R2] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)',
+              );
+              print('🎯 [Controller-R2] Message added to list. Total messages: ${messages.length}');
             } else {
               aiMessage.text += token;
+              print(
+                '🎯 [Controller-R2] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}',
+              );
             }
             messages.refresh();
             scrollToBottom();
@@ -745,6 +766,22 @@ class ChatController extends GetxService {
           // aiMessage.text = response.text;
         }
         Logger.debug('server response ok');
+
+        // CRÍTICO: Crear un nuevo objeto para persistencia para evitar mutaciones compartidas
+        final persistedMessage = ChatMessageModel.ai(
+          chatId: aiMessage.chatId,
+          text: aiMessage.text,
+        );
+        chatsService.chatMessagesLocalData.insertOne(persistedMessage);
+        pendingPdf.value = null;
+        
+        // Debug: Verificar estado de mensajes después de persistencia
+        print('🔍 [Controller-R2] After persist - Total messages: ${messages.length}');
+        print('🔍 [Controller-R2] After persist - AI message length: ${aiMessage.text.length}');
+        print('🔍 [Controller-R2] After persist - Persisted message length: ${persistedMessage.text.length}');
+        for (int i = 0; i < messages.length; i++) {
+          print('🔍 [Controller-R2] Message[$i]: uid=${messages[i].uid.substring(0, 8)}, length=${messages[i].text.length}, aiMsg=${messages[i].aiMessage}');
+        }
 
         // Ensure proper scrolling for structured content with multiple delayed attempts
         scrollToBottom();

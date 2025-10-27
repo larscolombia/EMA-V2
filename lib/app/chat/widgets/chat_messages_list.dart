@@ -27,40 +27,27 @@ class ChatMessagesList extends GetView<ChatController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-
-      List<Widget> children() {
-        return controller.messages.map((message) {
-          if (message.aiMessage) {
-            return ChatMessageAi(message: message);
-          } else {
-            return ChatMessageUser(message: message);
-          }
-        }).toList();
-      }
-
-      return Container(
+      return ListView.builder(
+        itemCount: controller.messages.length,
+        shrinkWrap: true,
         padding: EdgeInsets.only(top: 16, left: 12, right: 12, bottom: 120),
-        child: Column(
-          mainAxisSize: MainAxisSize.max,
-          mainAxisAlignment: MainAxisAlignment.end,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children(),
-        ),
+        physics: NeverScrollableScrollPhysics(), // Parent scroll handles scrolling
+        itemBuilder: (context, index) {
+          final message = controller.messages[index];
+          
+          if (message.aiMessage) {
+            return ChatMessageAi(
+              key: ValueKey(message.uid), // CRÍTICO: Key única para evitar reutilización de widget state
+              message: message,
+            );
+          } else {
+            return ChatMessageUser(
+              key: ValueKey(message.uid), // CRÍTICO: Key única para evitar reutilización de widget state
+              message: message,
+            );
+          }
+        },
       );
-      // return ListView.builder(
-      //   itemCount: controller.messages.length,
-      //   shrinkWrap: true,
-      //   padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      //   itemBuilder: (context, index) {
-      //     final message = controller.messages[index];
-
-      //     if (message.type == ChatMessageType.ai) {
-      //       return ChatMessageAi(message: message);
-      //     } else {
-      //       return ChatMessageUser(message: message);
-      //     }
-      //   },
-      // );
     });
   }
 }

@@ -1222,10 +1222,15 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	indexTimeout := 30 * time.Second // Default mínimo
 	fileSizeMB := float64(upFile.Size) / (1024 * 1024)
 	if fileSizeMB > 5 {
-		// Para PDFs grandes, calcular timeout dinámico: 3s por MB con mínimo de 45s
-		calculatedTimeout := time.Duration(fileSizeMB*3) * time.Second
+		// Para PDFs grandes, calcular timeout dinámico: 2s por MB (reducido de 3s)
+		// Máximo 60s para evitar que exceda timeouts de cliente
+		calculatedTimeout := time.Duration(fileSizeMB*2) * time.Second
 		if calculatedTimeout > indexTimeout {
 			indexTimeout = calculatedTimeout
+		}
+		// Cap máximo de 60s para prevenir timeouts del cliente
+		if indexTimeout > 60*time.Second {
+			indexTimeout = 60 * time.Second
 		}
 		log.Printf("[conv][PDF][large_file] size_mb=%.2f calculated_timeout=%s", fileSizeMB, indexTimeout)
 	}
@@ -1241,36 +1246,80 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	indexStart := time.Now()
 	log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s size_mb=%.2f",
 		threadID, vsID, fileID, indexTimeout, fileSizeMB)
-	if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
-		log.Printf("[conv][PDF][indexing.error] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
-			threadID, vsID, fileID, err, time.Since(indexStart))
-
-		// Diferenciar entre timeout (puede completarse después) y failed (error permanente)
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "status=failed") || strings.Contains(errMsg, "status=cancelled") {
-			// Error PERMANENTE: el archivo NO se indexará nunca
-			// Retornar error al usuario en lugar de confirmar
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "PDF indexing failed",
-				"details": "OpenAI failed to process the PDF. This may be due to file corruption, unsupported format, or size limits. Please try with a different file.",
-			})
-			return
+	
+	// Para PDFs muy grandes (>10MB), NO esperar a que termine la indexación completa.
+	// Iniciar indexación en background y confirmar inmediatamente.
+	// Esto previene timeouts del cliente mientras OpenAI procesa el archivo.
+	if fileSizeMB > 10 {
+		log.Printf("[conv][PDF][large_file_async] thread=%s vs=%s file_id=%s size_mb=%.2f indexing_in_background",
+			threadID, vsID, fileID, fileSizeMB)
+		// Espera corta (5s) para verificar que la indexación arrancó sin errores
+		shortTimeout := 5 * time.Second
+		if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, shortTimeout); err != nil {
+			errMsg := err.Error()
+			// Solo fallar si es error permanente, no si es timeout
+			if strings.Contains(errMsg, "status=failed") || strings.Contains(errMsg, "status=cancelled") {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "PDF indexing failed",
+					"details": "OpenAI failed to start processing the PDF. Please try with a different file.",
+				})
+				return
+			}
+			// Timeout esperado en 5s - continuar con indexación en background
+			log.Printf("[conv][PDF][large_file_async] thread=%s vs=%s indexing_started, continuing_async",
+				threadID, vsID)
+		} else {
+			log.Printf("[conv][PDF][large_file_async] thread=%s vs=%s indexed_quickly elapsed=%s",
+				threadID, vsID, time.Since(indexStart))
 		}
-
-		// Si es timeout, continuar (puede completarse en background)
-		// El usuario verá la confirmación pero las primeras preguntas pueden tardar
-		log.Printf("[conv][PDF][indexing.timeout.continuing] thread=%s vs=%s file_id=%s", threadID, vsID, fileID)
 	} else {
-		log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
-			threadID, vsID, fileID, time.Since(indexStart))
+		// PDFs pequeños/medianos (<10MB): esperar a que termine la indexación
+		if err := h.AI.PollVectorStoreFileIndexed(c.Request.Context(), vsID, fileID, indexTimeout); err != nil {
+			log.Printf("[conv][PDF][indexing.error] thread=%s vs=%s file_id=%s err=%v elapsed=%s",
+				threadID, vsID, fileID, err, time.Since(indexStart))
+
+			// Diferenciar entre timeout (puede completarse después) y failed (error permanente)
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "status=failed") || strings.Contains(errMsg, "status=cancelled") {
+				// Error PERMANENTE: el archivo NO se indexará nunca
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "PDF indexing failed",
+					"details": "OpenAI failed to process the PDF. This may be due to file corruption, unsupported format, or size limits. Please try with a different file.",
+				})
+				return
+			}
+
+			// Si es timeout, continuar (puede completarse en background)
+			log.Printf("[conv][PDF][indexing.timeout.continuing] thread=%s vs=%s file_id=%s", threadID, vsID, fileID)
+		} else {
+			log.Printf("[conv][PDF][indexing.ready] thread=%s vs=%s file_id=%s elapsed=%s",
+				threadID, vsID, fileID, time.Since(indexStart))
+		}
 	}
 
-	// CRÍTICO: Esperar unos segundos adicionales después de indexing=completed
-	// OpenAI tiene un retraso interno entre status=completed y archivo "visible" para file_search
-	// Sin esto, las primeras preguntas pueden fallar con "no encuentro el archivo"
-	// AUMENTADO: De 5s a 15s para asegurar propagación completa del índice en la red de OpenAI
-	log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_15s reason=openai_search_propagation", threadID)
-	time.Sleep(15 * time.Second)
+	// CRÍTICO: Esperar propagación del índice en la red de OpenAI
+	// Ajustar según tamaño: PDFs grandes en background no esperan, otros esperan proporcionalmente
+	var postIndexWait time.Duration
+	if fileSizeMB > 10 {
+		// PDFs grandes: espera mínima (2s) porque indexación sigue en background
+		postIndexWait = 2 * time.Second
+		log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_%ds reason=minimal_wait_for_large_file",
+			threadID, int(postIndexWait.Seconds()))
+	} else if fileSizeMB > 1 {
+		// PDFs medianos: espera moderada (5-10s)
+		postIndexWait = time.Duration(5+fileSizeMB) * time.Second
+		if postIndexWait > 10*time.Second {
+			postIndexWait = 10 * time.Second
+		}
+		log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_%ds reason=openai_search_propagation",
+			threadID, int(postIndexWait.Seconds()))
+	} else {
+		// PDFs pequeños: espera corta (3s)
+		postIndexWait = 3 * time.Second
+		log.Printf("[conv][PDF][post_index_wait] thread=%s waiting_%ds reason=small_file_propagation",
+			threadID, int(postIndexWait.Seconds()))
+	}
+	time.Sleep(postIndexWait)
 	log.Printf("[conv][PDF][post_index_wait] thread=%s wait_complete", threadID)
 
 	h.AI.AddSessionBytes(threadID, upFile.Size)
@@ -1299,7 +1348,20 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	if base == "" {
 		// No generar resumen automático. Solo confirmación y listo para preguntas.
 		fname := filepath.Base(upFile.Filename)
-		msg := "Documento '" + fname + "' cargado y procesado correctamente. No se generará resumen automático. Puedes hacer preguntas específicas sobre este PDF.\n\nFuente: " + fname
+		
+		// Mensaje diferente según si indexación está completa o en background
+		var msg string
+		if fileSizeMB > 10 {
+			msg = fmt.Sprintf("✅ Documento '%s' (%.1f MB, %d páginas) cargado correctamente.\n\n"+
+				"⏳ La indexación está finalizando en segundo plano. "+
+				"Puedes hacer preguntas ahora mismo, y el documento estará completamente disponible en 1-2 minutos.\n\n"+
+				"Fuente: %s", fname, fileSizeMB, int(fileSizeMB*100), fname)
+		} else {
+			msg = fmt.Sprintf("✅ Documento '%s' cargado y procesado correctamente.\n\n"+
+				"Puedes hacer preguntas específicas sobre este PDF.\n\n"+
+				"Fuente: %s", fname, fname)
+		}
+		
 		if v, ok := c.Get("quota_remaining"); ok {
 			c.Header("X-Quota-Remaining", toString(v))
 		}
@@ -1311,7 +1373,14 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 		c.Header("X-Thread-ID", threadID)
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", "doc_only")
-		log.Printf("[conv][PDF][confirm] thread=%s file=%s doc_only=1 elapsed_ms=%d", threadID, upFile.Filename, time.Since(start).Milliseconds())
+		c.Header("X-PDF-Size-MB", fmt.Sprintf("%.2f", fileSizeMB))
+		if fileSizeMB > 10 {
+			c.Header("X-PDF-Indexing-Status", "background")
+		} else {
+			c.Header("X-PDF-Indexing-Status", "complete")
+		}
+		log.Printf("[conv][PDF][confirm] thread=%s file=%s size_mb=%.2f doc_only=1 elapsed_ms=%d",
+			threadID, upFile.Filename, fileSizeMB, time.Since(start).Milliseconds())
 		one := make(chan string, 1)
 		one <- msg
 		close(one)
@@ -1403,11 +1472,24 @@ func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool 
 	if strings.TrimSpace(threadID) == "" {
 		return false
 	}
+	
+	// Primero verificar contador local (actualizado inmediatamente al añadir archivo)
+	// Esto evita el delay de propagación de OpenAI API (10-30s)
+	localCount := h.AI.CountThreadFiles(threadID)
+	if localCount > 0 {
+		fmt.Printf("[threadHasDocuments] threadID=%s localCount=%d using_cache=true\n", threadID, localCount)
+		return true
+	}
+	
+	// Fallback a API si contador local es 0 (ej: thread creado en sesión anterior)
 	files, err := h.AI.ListVectorStoreFiles(ctx, threadID)
 	if err != nil {
+		fmt.Printf("[threadHasDocuments] threadID=%s api_error=%v\n", threadID, err)
 		return false
 	}
-	return len(files) > 0
+	hasFiles := len(files) > 0
+	fmt.Printf("[threadHasDocuments] threadID=%s api_files=%d using_cache=false\n", threadID, len(files))
+	return hasFiles
 }
 
 // getThreadDocumentNames obtiene los nombres reales de los archivos en el vector store del thread

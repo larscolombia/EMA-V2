@@ -109,7 +109,8 @@ class ChatsService extends GetxService {
     void Function(String token)? onStream,
     String? focusDocId,
   }) async {
-    // Persisting of the user message is handled by the controller to avoid duplicates.
+    // Persisting of both user and AI messages is handled by the controller to avoid duplicates
+    // and to ensure that streamed content is not overwritten.
 
     if (file != null) {
       final apiMessage = await apiChatService.sendPdfUpload(
@@ -119,12 +120,12 @@ class ChatsService extends GetxService {
         onStream: onStream,
         focusDocId: focusDocId,
       );
-      final aiPdfMessage = ChatMessageModel.ai(
+      // Return the API response but DO NOT persist here.
+      // The controller handles persistence after streaming completes.
+      return ChatMessageModel.ai(
         chatId: userMessage.chatId,
         text: apiMessage.text,
       );
-      chatMessagesLocalData.insertOne(aiPdfMessage);
-      return aiPdfMessage;
     }
 
     final apiMessage = await apiChatService.sendMessage(
@@ -133,13 +134,12 @@ class ChatsService extends GetxService {
       onStream: onStream,
       focusDocId: focusDocId,
     );
-    final aiMessage = ChatMessageModel.ai(
+    // Return the API response but DO NOT persist here.
+    // The controller handles persistence after streaming completes.
+    return ChatMessageModel.ai(
       chatId: userMessage.chatId,
       text: apiMessage.text,
     );
-    chatMessagesLocalData.insertOne(aiMessage);
-
-    return aiMessage;
   }
 
   /// Delete a chat and all its local messages by chatId (uid).
