@@ -1166,23 +1166,20 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 			return
 		}
 	}
-	vsID, err := h.AI.EnsureVectorStore(c.Request.Context(), threadID)
+
+	// CRÍTICO: Forzar creación de nuevo vector store en cada upload.
+	// Esto garantiza que OpenAI no mezcle contenido de PDFs antiguos debido a:
+	// 1. Cache/propagación de OpenAI donde ClearVectorStoreFiles reporta "vacío" pero archivos siguen indexados
+	// 2. Archivos residuales de sesiones anteriores que no fueron eliminados correctamente
+	// ForceNewVectorStore elimina el vector store anterior y crea uno completamente limpio.
+	log.Printf("[conv][PDF][forcing_new_vs] thread=%s reason=prevent_file_mixing", threadID)
+	vsID, err := h.AI.ForceNewVectorStore(c.Request.Context(), threadID)
 	if err != nil {
-		log.Printf("[conv][PDF][error] ensure_vector err=%v", err)
+		log.Printf("[conv][PDF][error] force_new_vector err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
 		return
 	}
-	log.Printf("[conv][PDF][vs.ready] thread=%s vs=%s", threadID, vsID)
-
-	// CRÍTICO: Limpiar archivos anteriores del vector store antes de agregar el nuevo.
-	// Esto previene que OpenAI mezcle contenido de PDFs diferentes al responder.
-	// Sin esto, el vector store acumula todos los PDFs que se han subido alguna vez,
-	// causando respuestas incorrectas con contenido de PDFs anteriores.
-	log.Printf("[conv][PDF][clearing_old_files] thread=%s vs=%s", threadID, vsID)
-	if err := h.AI.ClearVectorStoreFiles(c.Request.Context(), vsID); err != nil {
-		// No fallar si la limpieza falla (best-effort), pero loggearlo
-		log.Printf("[conv][PDF][warn] clear_failed thread=%s vs=%s err=%v", threadID, vsID, err)
-	}
+	log.Printf("[conv][PDF][vs.ready] thread=%s vs=%s new=true", threadID, vsID)
 
 	fileID, err := h.AI.UploadAssistantFile(c.Request.Context(), threadID, tmp)
 	if err != nil {

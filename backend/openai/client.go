@@ -1706,7 +1706,14 @@ func (c *Client) ForceNewVectorStore(ctx context.Context, threadID string) (stri
 	delete(c.vectorStore, threadID)
 	delete(c.vsLastAccess, threadID)
 	c.vsMu.Unlock()
+
+	// Resetear contador de archivos ya que estamos eliminando el vector store
+	c.sessMu.Lock()
+	c.sessFiles[threadID] = 0
+	c.sessMu.Unlock()
+
 	if old != "" {
+		log.Printf("[vector_store][force_new] thread=%s deleting_old_vs=%s", threadID, old)
 		_ = c.deleteVectorStore(ctx, old)
 	}
 	return c.ensureVectorStore(ctx, threadID)
