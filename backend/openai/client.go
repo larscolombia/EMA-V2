@@ -754,7 +754,7 @@ func encoding_hex(b []byte) string { return hex.EncodeToString(b) }
 
 // extractPDFMetadata extrae metadatos de un archivo PDF y detecta si tiene texto extraíble
 // Retorna nil si no es PDF o si falla la extracción (no crítico)
-func extractPDFMetadata(filePath string) *PDFMetadata {
+func extractPDFMetadata(filePath string) (meta *PDFMetadata) {
 	// Solo procesar archivos .pdf
 	if !strings.HasSuffix(strings.ToLower(filePath), ".pdf") {
 		return nil
@@ -767,7 +767,7 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 		return nil
 	}
 
-	meta := &PDFMetadata{}
+	meta = &PDFMetadata{}
 
 	// Extraer título del nombre de archivo
 	baseName := filepath.Base(filePath)
@@ -778,33 +778,23 @@ func extractPDFMetadata(filePath string) *PDFMetadata {
 	cleaned = strings.ReplaceAll(cleaned, "-", " ")
 	meta.Title = cleanPDFString(cleaned)
 
+	// Validar tamaño del archivo para calcular métricas
+	fileSizeKB := fileInfo.Size() / 1024
+
 	// Proteger contra panics de la librería rsc.io/pdf
 	// Algunos PDFs usan codificaciones no soportadas que causan panic
-	fileSizeKB := fileInfo.Size() / 1024
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[pdf][metadata][panic] recovered from PDF parsing panic %s: %v", filePath, r)
-			
-			// Heurística: PDFs muy pequeños (< 10KB) con panic probablemente son de prueba/vacíos
-			// OpenAI puede "alucinar" contenido con estos archivos
-			if fileSizeKB < 10 {
-				log.Printf("[pdf][metadata][small_file_panic] file=%s size_kb=%d - rejecting as likely empty/test PDF",
-					filepath.Base(filePath), fileSizeKB)
-				meta.HasExtractableText = false
-				meta.TextCoveragePercent = 0
-				meta.PageCount = 0
-				log.Printf("[pdf][metadata][extracted] file=%s title=%q size_kb=%d (parse_panic, too_small, assumed_text=false)",
-					filepath.Base(filePath), meta.Title, fileSizeKB)
-			} else {
-				// PDF grande con encoding raro → confiar en OpenAI
-				log.Printf("[pdf][metadata][large_file_panic] file=%s size_kb=%d - assuming text (OpenAI can handle)",
-					filepath.Base(filePath), fileSizeKB)
-				meta.HasExtractableText = true
-				meta.TextCoveragePercent = 100.0
-				meta.PageCount = 0
-				log.Printf("[pdf][metadata][extracted] file=%s title=%q size_kb=%d (parse_panic, assumed_text=true)",
-					filepath.Base(filePath), meta.Title, fileSizeKB)
-			}
+			// Cuando rsc.io/pdf falla, confiamos en OpenAI
+			// OpenAI tiene parsers más robustos que pueden manejar encodings raros (ASCII85, etc.)
+			log.Printf("[pdf][metadata][parse_panic] file=%s size_kb=%d - trusting OpenAI (has better parsers)",
+				filepath.Base(filePath), fileSizeKB)
+			meta.HasExtractableText = true
+			meta.TextCoveragePercent = 100.0
+			meta.PageCount = 0
+			log.Printf("[pdf][metadata][extracted] file=%s title=%q size_kb=%d (parse_panic, assumed_text=true)",
+				filepath.Base(filePath), meta.Title, fileSizeKB)
 		}
 	}()
 
