@@ -517,14 +517,18 @@ class ChatController extends GetxService {
               '🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}',
             );
           }
-          
+
           // Debug: Verificar que no estamos mutando mensajes anteriores
           print('🔍 [Controller] Total messages in list: ${messages.length}');
           if (messages.length >= 2) {
-            print('🔍 [Controller] Last AI message length: ${aiMessage.text.length}');
-            print('🔍 [Controller] Previous message (index ${messages.length - 2}) length: ${messages[messages.length - 2].text.length}');
+            print(
+              '🔍 [Controller] Last AI message length: ${aiMessage.text.length}',
+            );
+            print(
+              '🔍 [Controller] Previous message (index ${messages.length - 2}) length: ${messages[messages.length - 2].text.length}',
+            );
           }
-          
+
           // CRÍTICO: Crear un nuevo objeto para persistencia para evitar mutaciones compartidas
           // El objeto aiMessage puede estar siendo referenciado en múltiples lugares
           final persistedMessage = ChatMessageModel.ai(
@@ -708,7 +712,9 @@ class ChatController extends GetxService {
               print(
                 '🎯 [Controller-R2] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)',
               );
-              print('🎯 [Controller-R2] Message added to list. Total messages: ${messages.length}');
+              print(
+                '🎯 [Controller-R2] Message added to list. Total messages: ${messages.length}',
+              );
             } else {
               aiMessage.text += token;
               print(
@@ -774,13 +780,21 @@ class ChatController extends GetxService {
         );
         chatsService.chatMessagesLocalData.insertOne(persistedMessage);
         pendingPdf.value = null;
-        
+
         // Debug: Verificar estado de mensajes después de persistencia
-        print('🔍 [Controller-R2] After persist - Total messages: ${messages.length}');
-        print('🔍 [Controller-R2] After persist - AI message length: ${aiMessage.text.length}');
-        print('🔍 [Controller-R2] After persist - Persisted message length: ${persistedMessage.text.length}');
+        print(
+          '🔍 [Controller-R2] After persist - Total messages: ${messages.length}',
+        );
+        print(
+          '🔍 [Controller-R2] After persist - AI message length: ${aiMessage.text.length}',
+        );
+        print(
+          '🔍 [Controller-R2] After persist - Persisted message length: ${persistedMessage.text.length}',
+        );
         for (int i = 0; i < messages.length; i++) {
-          print('🔍 [Controller-R2] Message[$i]: uid=${messages[i].uid.substring(0, 8)}, length=${messages[i].text.length}, aiMsg=${messages[i].aiMessage}');
+          print(
+            '🔍 [Controller-R2] Message[$i]: uid=${messages[i].uid.substring(0, 8)}, length=${messages[i].text.length}, aiMsg=${messages[i].aiMessage}',
+          );
         }
 
         // Ensure proper scrolling for structured content with multiple delayed attempts

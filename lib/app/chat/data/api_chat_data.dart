@@ -244,11 +244,13 @@ class ApiChatData implements IApiChatData {
       final buffer = StringBuffer();
       var tokenCount = 0;
       print('📡 [PDF-UPLOAD] Starting SSE stream processing...');
-      
+
       await for (final chunk in stream) {
         print('📡 [PDF-UPLOAD] Raw chunk received: ${chunk.length} bytes');
         for (final line in const LineSplitter().convert(chunk)) {
-          print('📡 [PDF-UPLOAD] Processing line: "${line.substring(0, line.length > 100 ? 100 : line.length)}"');
+          print(
+            '📡 [PDF-UPLOAD] Processing line: "${line.substring(0, line.length > 100 ? 100 : line.length)}"',
+          );
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
@@ -265,7 +267,9 @@ class ApiChatData implements IApiChatData {
               break;
             }
             buffer.write(content);
-            print('📡 [PDF-UPLOAD] Calling onStream callback with token #$tokenCount');
+            print(
+              '📡 [PDF-UPLOAD] Calling onStream callback with token #$tokenCount',
+            );
             onStream?.call(content);
             print('📡 [PDF-UPLOAD] onStream callback completed');
           }
@@ -273,15 +277,17 @@ class ApiChatData implements IApiChatData {
       }
       final finalText = buffer.toString();
       print('📡 [PDF-UPLOAD] Stream ended. Total tokens: $tokenCount');
-      print('📡 [PDF-UPLOAD] Final buffer length: ${finalText.length} characters');
+      print(
+        '📡 [PDF-UPLOAD] Final buffer length: ${finalText.length} characters',
+      );
       print(
         '📡 [PDF-UPLOAD] Final buffer preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}${finalText.length > 200 ? "..." : ""}"',
       );
-      
+
       if (finalText.isEmpty) {
         print('⚠️ [PDF-UPLOAD] WARNING: Empty buffer after stream processing!');
       }
-      
+
       return ChatMessageModel.ai(chatId: threadId, text: finalText);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {

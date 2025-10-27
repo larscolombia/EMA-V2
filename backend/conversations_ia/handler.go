@@ -1246,7 +1246,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	indexStart := time.Now()
 	log.Printf("[conv][PDF][indexing.poll] thread=%s vs=%s file_id=%s timeout=%s size_mb=%.2f",
 		threadID, vsID, fileID, indexTimeout, fileSizeMB)
-	
+
 	// Para PDFs muy grandes (>10MB), NO esperar a que termine la indexación completa.
 	// Iniciar indexación en background y confirmar inmediatamente.
 	// Esto previene timeouts del cliente mientras OpenAI procesa el archivo.
@@ -1348,7 +1348,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	if base == "" {
 		// No generar resumen automático. Solo confirmación y listo para preguntas.
 		fname := filepath.Base(upFile.Filename)
-		
+
 		// Mensaje diferente según si indexación está completa o en background
 		var msg string
 		if fileSizeMB > 10 {
@@ -1361,7 +1361,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 				"Puedes hacer preguntas específicas sobre este PDF.\n\n"+
 				"Fuente: %s", fname, fname)
 		}
-		
+
 		if v, ok := c.Get("quota_remaining"); ok {
 			c.Header("X-Quota-Remaining", toString(v))
 		}
@@ -1472,7 +1472,7 @@ func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool 
 	if strings.TrimSpace(threadID) == "" {
 		return false
 	}
-	
+
 	// Primero verificar contador local (actualizado inmediatamente al añadir archivo)
 	// Esto evita el delay de propagación de OpenAI API (10-30s)
 	localCount := h.AI.CountThreadFiles(threadID)
@@ -1480,7 +1480,7 @@ func (h *Handler) threadHasDocuments(ctx context.Context, threadID string) bool 
 		fmt.Printf("[threadHasDocuments] threadID=%s localCount=%d using_cache=true\n", threadID, localCount)
 		return true
 	}
-	
+
 	// Fallback a API si contador local es 0 (ej: thread creado en sesión anterior)
 	files, err := h.AI.ListVectorStoreFiles(ctx, threadID)
 	if err != nil {
