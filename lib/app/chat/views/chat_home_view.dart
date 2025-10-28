@@ -10,6 +10,7 @@ import 'package:get/get.dart';
 import '../models/chat_message_model.dart';
 import '../widgets/animations/chat_typing_indicator.dart';
 import '../widgets/animations/pending_pdf_preview.dart';
+import '../widgets/animations/pending_image_preview.dart';
 import '../widgets/chat_error_message.dart';
 
 class ChatHomeView extends StatefulWidget {
@@ -280,8 +281,15 @@ class _ChatHomeViewState extends State<ChatHomeView>
           ),
           Obx(() {
             final pendingPdf = chatController.pendingPdf.value;
+            final pendingImage = chatController.pendingImage.value;
             return Column(
               children: [
+                if (pendingImage != null)
+                  PendingImagePreview(
+                    image: pendingImage,
+                    onRemove: () => chatController.pendingImage.value = null,
+                    isUploading: chatController.isUploadingImage.value,
+                  ),
                 if (pendingPdf != null)
                   PendingPdfPreview(
                     pdf: pendingPdf,

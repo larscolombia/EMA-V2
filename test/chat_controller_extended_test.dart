@@ -8,6 +8,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/interfaces/chat_interface
 import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/attachment_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/ui/ui_observer_service.dart';
 import 'package:ema_educacion_medica_avanzada/app/profiles/controllers/profile_controller.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
@@ -90,6 +91,28 @@ class FakeApiChatData implements IApiChatData {
     return ChatMessageModel.ai(
       chatId: 'chat-id',
       text: 'PDF procesado ${file.fileName}',
+    );
+  }
+
+  @override
+  Future<ChatMessageModel> sendImageUpload({
+    required String threadId,
+    required String prompt,
+    required ImageAttachment image,
+    cancelToken,
+    String? focusDocId,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
+  }) async {
+    if (throwOnSend) throw Exception('send failed');
+    if (simulateStream && onStream != null) {
+      for (final t in ('Image ok ' + image.fileName).split(' ')) {
+        onStream('$t ');
+      }
+    }
+    return ChatMessageModel.ai(
+      chatId: 'chat-id',
+      text: 'Imagen procesada ${image.fileName}',
     );
   }
 

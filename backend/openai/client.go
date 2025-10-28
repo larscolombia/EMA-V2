@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -928,6 +929,75 @@ func min(a, b int) int {
 	return b
 }
 
+// UploadImageFile uploads an image file with purpose=vision for GPT-4o vision capabilities
+// Supports: jpg, jpeg, png, gif, webp
+// Max size: 20MB (OpenAI limit for vision)
+// Returns the file_id that can be used in messages with image_file content type
+func (c *Client) UploadImageFile(ctx context.Context, imagePath string) (string, error) {
+	if c.key == "" {
+		return "", fmt.Errorf("OpenAI API key not set")
+	}
+
+	// Validar que el archivo existe
+	fileInfo, err := os.Stat(imagePath)
+	if os.IsNotExist(err) {
+		return "", fmt.Errorf("image file not found: %s", imagePath)
+	}
+
+	// Validar tamaño (OpenAI vision limit es 20MB)
+	const maxSize = 20 * 1024 * 1024 // 20MB
+	if fileInfo.Size() > maxSize {
+		sizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+		return "", fmt.Errorf("image too large: %.1fMB (max 20MB)", sizeMB)
+	}
+
+	// Validar extensión
+	ext := strings.ToLower(filepath.Ext(imagePath))
+	validExts := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true,
+		".gif": true, ".webp": true,
+	}
+	if !validExts[ext] {
+		return "", fmt.Errorf("unsupported image format: %s (supported: jpg, jpeg, png, gif, webp)", ext)
+	}
+
+	log.Printf("[image][upload] file=%s size_kb=%.1f", filepath.Base(imagePath), float64(fileInfo.Size())/1024)
+
+	// Abrir archivo para upload
+	file, err := os.Open(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open image: %v", err)
+	}
+	defer file.Close()
+
+	// Upload a OpenAI con purpose=vision
+	resp, err := c.doMultipart(ctx, http.MethodPost, "/files", map[string]io.Reader{
+		"file":    file,
+		"purpose": bytes.NewBufferString("vision"),
+	})
+	if err != nil {
+		log.Printf("[image][upload][error] file=%s err=%v", filepath.Base(imagePath), err)
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[image][upload][failed] file=%s status=%d body=%s", filepath.Base(imagePath), resp.StatusCode, string(body))
+		return "", fmt.Errorf("image upload failed: %s", string(body))
+	}
+
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", fmt.Errorf("failed to decode upload response: %v", err)
+	}
+
+	log.Printf("[image][upload][ok] file=%s file_id=%s", filepath.Base(imagePath), data.ID)
+	return data.ID, nil
+}
+
 // max retorna el máximo de dos enteros
 func max(a, b int) int {
 	if a > b {
@@ -1109,6 +1179,63 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 	return lastErr
 }
 
+// addMessageWithImage posts a user message with an image attachment using GPT-4o vision
+// The image must be already uploaded to OpenAI files with purpose=vision
+func (c *Client) addMessageWithImage(ctx context.Context, threadID, prompt, imageFileID string) error {
+	// Construir contenido mixto: texto + imagen
+	content := []map[string]any{
+		{
+			"type": "text",
+			"text": prompt,
+		},
+		{
+			"type": "image_file",
+			"image_file": map[string]string{
+				"file_id": imageFileID,
+			},
+		},
+	}
+
+	payload := map[string]any{
+		"role":    "user",
+		"content": content,
+	}
+
+	log.Printf("[addMessageWithImage][DEBUG] thread=%s image_file=%s prompt_preview=%q",
+		threadID, imageFileID, truncateString(prompt, 200))
+
+	// Intentar hasta 2 veces si falla por timeout
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
+		if err != nil {
+			lastErr = err
+			if attempt < 2 && (strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "timeout")) {
+				log.Printf("[addMessageWithImage][retry] thread=%s attempt=%d err=%v", threadID, attempt, err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			log.Printf("[addMessageWithImage][error] thread=%s status=%d body=%s", threadID, resp.StatusCode, string(b))
+			return fmt.Errorf("add message with image failed: %s", string(b))
+		}
+		log.Printf("[addMessageWithImage][ok] thread=%s image_file=%s", threadID, imageFileID)
+		return nil
+	}
+	return lastErr
+}
+
+func truncateString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
 // addMessageWithAttachment posts a user message with a file attachment (for file_search tool).
 
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
@@ -1288,6 +1415,225 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		}
 	}
 	return "", nil
+}
+
+// runVisionAndWait uses Chat Completions API directly (not Assistants API) for vision analysis.
+// This bypasses assistant configuration issues (reasoning_effort, o3-mini incompatibility with images).
+// It encodes the local image as base64 and sends it with the prompt to gpt-4o.
+func (c *Client) runVisionAndWait(ctx context.Context, threadID string, systemInstructions string, imagePath string) (string, error) {
+	log.Printf("[runVisionAndWait][start] thread=%s image=%s using_chat_completions_api", threadID, filepath.Base(imagePath))
+
+	// 1. Read and encode image as base64
+	imageData, err := os.ReadFile(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read image: %v", err)
+	}
+
+	// Detect MIME type
+	mimeType := "image/jpeg"
+	ext := strings.ToLower(filepath.Ext(imagePath))
+	switch ext {
+	case ".png":
+		mimeType = "image/png"
+	case ".gif":
+		mimeType = "image/gif"
+	case ".webp":
+		mimeType = "image/webp"
+	}
+
+	base64Image := base64.StdEncoding.EncodeToString(imageData)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Image)
+
+	log.Printf("[runVisionAndWait][DEBUG] thread=%s image_size_kb=%.1f mime=%s",
+		threadID, float64(len(imageData))/1024, mimeType)
+
+	// 2. Get latest prompt from thread (the one with the image)
+	latestPrompt, err := c.getLatestUserMessage(ctx, threadID)
+	if err != nil || latestPrompt == "" {
+		latestPrompt = "Analiza esta imagen"
+	}
+
+	// 3. Build Chat Completions payload with system + current image
+	chatMessages := []map[string]any{
+		{
+			"role":    "system",
+			"content": systemInstructions,
+		},
+		{
+			"role": "user",
+			"content": []map[string]any{
+				{
+					"type": "text",
+					"text": latestPrompt,
+				},
+				{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": dataURI,
+					},
+				},
+			},
+		},
+	}
+
+	payload := map[string]any{
+		"model":       "gpt-4o",
+		"messages":    chatMessages,
+		"max_tokens":  4096,
+		"temperature": 0.7,
+	}
+
+	// Log payload (truncate base64 for readability)
+	log.Printf("[runVisionAndWait][DEBUG] model=gpt-4o messages=2 (system+user_with_image) prompt=%q", latestPrompt)
+
+	// 4. Call /v1/chat/completions
+	resp, err := c.doJSON(ctx, http.MethodPost, "/chat/completions", payload)
+	if err != nil {
+		return "", fmt.Errorf("chat completions request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("chat completions failed: %s", string(b))
+	}
+
+	// 5. Parse response
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("failed to decode chat response: %v", err)
+	}
+
+	if len(chatResp.Choices) == 0 || chatResp.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("empty response from chat completions")
+	}
+
+	text := chatResp.Choices[0].Message.Content
+	log.Printf("[runVisionAndWait][done] thread=%s chars=%d", threadID, len(text))
+
+	// 6. Add assistant response back to thread for history continuity
+	if err := c.addAssistantMessageToThread(ctx, threadID, text); err != nil {
+		log.Printf("[runVisionAndWait][warn] failed to add response to thread: %v", err)
+		// No fallar - la respuesta ya está generada
+	}
+
+	return text, nil
+}
+
+// getLatestUserMessage retrieves the most recent user message text from thread
+func (c *Client) getLatestUserMessage(ctx context.Context, threadID string) (string, error) {
+	path := fmt.Sprintf("/threads/%s/messages?limit=5&order=desc", threadID)
+	resp, err := c.doJSON(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var ml struct {
+		Data []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text *struct {
+					Value string `json:"value"`
+				} `json:"text,omitempty"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&ml); err != nil {
+		return "", err
+	}
+
+	// Find latest user message
+	for _, msg := range ml.Data {
+		if msg.Role == "user" {
+			for _, c := range msg.Content {
+				if c.Type == "text" && c.Text != nil && c.Text.Value != "" {
+					return c.Text.Value, nil
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no user message found")
+}
+
+// addAssistantMessageToThread adds an assistant message to the thread for history continuity
+func (c *Client) addAssistantMessageToThread(ctx context.Context, threadID, content string) error {
+	payload := map[string]any{
+		"role":    "assistant",
+		"content": content,
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("add assistant message failed: %s", string(b))
+	}
+
+	return nil
+}
+
+// getLatestAssistantMessage retrieves the most recent assistant message from thread
+func (c *Client) getLatestAssistantMessage(ctx context.Context, threadID string) (string, error) {
+	mresp, err := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/messages?limit=1&order=desc", nil)
+	if err != nil {
+		return "", err
+	}
+	defer mresp.Body.Close()
+
+	var ml struct {
+		Data []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text struct {
+					Value string `json:"value"`
+				} `json:"text"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(mresp.Body).Decode(&ml); err != nil {
+		return "", err
+	}
+
+	if len(ml.Data) == 0 {
+		return "", fmt.Errorf("no messages found")
+	}
+
+	msg := ml.Data[0]
+	if msg.Role != "assistant" {
+		return "", fmt.Errorf("latest message is not from assistant")
+	}
+
+	var buf bytes.Buffer
+	for _, c := range msg.Content {
+		if c.Type == "text" && c.Text.Value != "" {
+			buf.WriteString(c.Text.Value)
+		}
+	}
+
+	text := buf.String()
+	if text == "" {
+		return "", fmt.Errorf("assistant message is empty")
+	}
+
+	log.Printf("[getLatestAssistantMessage] thread=%s chars=%d", threadID, len(text))
+	return text, nil
 }
 
 // ThreadMessage representa un mensaje del historial del thread
@@ -1513,6 +1859,71 @@ func (c *Client) StreamAssistantMessageWithFile(ctx context.Context, threadID, p
 		}
 		if err != nil {
 			log.Printf("[assist][StreamAssistantMessageWithFile][error] thread=%s file=%s err=%v", threadID, filepath.Base(filePath), err)
+		}
+	}()
+	return out, nil
+}
+
+// StreamAssistantMessageWithImage uploads an image and creates a message with vision,
+// then runs the assistant (GPT-4o/GPT-4o-mini with vision) and streams the response.
+// The prompt should ask about the image content.
+func (c *Client) StreamAssistantMessageWithImage(ctx context.Context, threadID, prompt, imagePath string) (<-chan string, error) {
+	if c.key == "" || c.AssistantID == "" {
+		return nil, errors.New("assistants not configured")
+	}
+
+	log.Printf("[image][stream][start] thread=%s file=%s", threadID, filepath.Base(imagePath))
+
+	// 1. Upload image to OpenAI
+	imageFileID, err := c.UploadImageFile(ctx, imagePath)
+	if err != nil {
+		log.Printf("[image][stream][upload_error] thread=%s file=%s err=%v", threadID, filepath.Base(imagePath), err)
+		return nil, fmt.Errorf("failed to upload image: %v", err)
+	}
+
+	// 2. Add message with image to thread
+	addMsgCtx, cancelAddMsg := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelAddMsg()
+
+	if err := c.addMessageWithImage(addMsgCtx, threadID, prompt, imageFileID); err != nil {
+		log.Printf("[image][stream][add_message_error] thread=%s err=%v", threadID, err)
+		return nil, fmt.Errorf("failed to add message with image: %v", err)
+	}
+
+	// 3. Create run and stream response
+	out := make(chan string, 1)
+	go func() {
+		defer close(out)
+
+		// Instrucciones específicas para análisis de imágenes médicas
+		instructions := `Eres un asistente médico experto analizando una imagen clínica.
+
+REGLAS CRÍTICAS:
+1. Analiza ÚNICAMENTE lo que ves en la imagen proporcionada
+2. NO inventes información que no sea visible
+3. Sé específico sobre hallazgos visuales
+4. Si la imagen no es clara o no es médica, indícalo
+
+FORMATO DE RESPUESTA:
+- Descripción de lo observado en la imagen
+- Hallazgos relevantes (si aplica)
+- Consideraciones clínicas basadas en la imagen
+- Limitaciones de tu análisis (calidad de imagen, ángulo, etc.)
+
+Si la pregunta del usuario es específica (ej: "¿hay fractura?"), responde esa pregunta directamente basándote en la imagen.
+
+Mantén un tono profesional pero accesible.`
+
+		// Run con Chat Completions API (no Assistants) para evitar conflictos con reasoning_effort
+		text, err := c.runVisionAndWait(ctx, threadID, instructions, imagePath)
+		if err == nil && text != "" {
+			log.Printf("[image][stream][done] thread=%s file=%s chars=%d",
+				threadID, filepath.Base(imagePath), len(text))
+			out <- text
+		}
+		if err != nil {
+			log.Printf("[image][stream][error] thread=%s file=%s err=%v",
+				threadID, filepath.Base(imagePath), err)
 		}
 	}()
 	return out, nil

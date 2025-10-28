@@ -5,6 +5,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/attachment_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/logger/logger.dart';
 import 'package:ema_educacion_medica_avanzada/core/notify/notify.dart';
 import 'package:ema_educacion_medica_avanzada/core/ui/ui_observer_service.dart';
@@ -46,7 +47,9 @@ class ChatController extends GetxService {
   );
 
   final Rx<PdfAttachment?> pendingPdf = Rx<PdfAttachment?>(null);
+  final Rx<ImageAttachment?> pendingImage = Rx<ImageAttachment?>(null);
   final isUploadingPdf = false.obs;
+  final isUploadingImage = false.obs;
   final userScrolling = false.obs;
 
   // Control para modo focus en PDF específico
@@ -150,6 +153,7 @@ class ChatController extends GetxService {
     currentChat.value = ChatModel.empty();
     messages.value = [];
     pendingPdf.value = null;
+    pendingImage.value = null;
     error.value = '';
     threadId = '';
     threadPref.setValue('');
@@ -215,6 +219,10 @@ class ChatController extends GetxService {
     // Cuando se adjunta un PDF, activar automáticamente el modo focus
     focusOnPdfMode.value = true;
     focusedPdfId = pdf.uid;
+  }
+
+  void attachImage(ImageAttachment image) {
+    pendingImage.value = image;
   }
 
   void toggleFocusOnPdf() {
@@ -305,8 +313,10 @@ class ChatController extends GetxService {
   Future<void> sendMessage([String? userText]) async {
     final String cleanUserText = userText != null ? userText.trim() : '';
     final PdfAttachment? currentPdf = pendingPdf.value;
+    final ImageAttachment? currentImage = pendingImage.value;
 
-    if (cleanUserText.isEmpty && currentPdf == null) return;
+    if (cleanUserText.isEmpty && currentPdf == null && currentImage == null)
+      return;
     if (isSending.value) {
       // Check if we're stuck before rejecting
       _checkForStuckState();
@@ -480,6 +490,7 @@ class ChatController extends GetxService {
               attach: userMessage.attach,
             ),
             file: currentPdf,
+            image: currentImage,
             focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
             onStream: (token) {
               if (token.startsWith('__STAGE__:')) {
@@ -537,6 +548,7 @@ class ChatController extends GetxService {
           );
           chatsService.chatMessagesLocalData.insertOne(persistedMessage);
           pendingPdf.value = null;
+          pendingImage.value = null;
           // Descontar cuota de archivo si se usó
           // File quota consumed on backend
           return;
@@ -592,6 +604,7 @@ class ChatController extends GetxService {
 
           messages.add(userMessage);
           pendingPdf.value = null;
+          pendingImage.value = null;
           scrollToBottom();
 
           // Mostrar burbuja de AI y transmitir tokens
@@ -669,6 +682,7 @@ class ChatController extends GetxService {
 
       messages.add(userMessage);
       pendingPdf.value = null;
+      pendingImage.value = null;
       scrollToBottom();
       Logger.debug('user message added');
 
@@ -780,6 +794,7 @@ class ChatController extends GetxService {
         );
         chatsService.chatMessagesLocalData.insertOne(persistedMessage);
         pendingPdf.value = null;
+        pendingImage.value = null;
 
         // Debug: Verificar estado de mensajes después de persistencia
         print(

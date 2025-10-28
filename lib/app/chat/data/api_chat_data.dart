@@ -10,6 +10,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_start_response.dart';
 import 'package:ema_educacion_medica_avanzada/core/api/api_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:get/get.dart';
 
@@ -294,6 +295,140 @@ class ApiChatData implements IApiChatData {
         rethrow; // Let the controller handle cancellation
       }
       // Mejorar diagnóstico: incluir status y body si disponible
+      if (e.response?.data is dio.ResponseBody) {
+        try {
+          final rb = e.response!.data as dio.ResponseBody;
+          final text = await _readResponseBody(rb);
+          throw Exception(
+            'Error en la comunicación (${e.response?.statusCode}): ${text.isNotEmpty ? text : e.message}',
+          );
+        } catch (_) {
+          throw Exception(
+            'Error en la comunicación (${e.response?.statusCode}): ${e.message}',
+          );
+        }
+      }
+      throw Exception('Error en la comunicación: ${e.message}');
+    } catch (e) {
+      throw Exception('Error inesperado: $e');
+    }
+  }
+
+  Future<ChatMessageModel> sendImageUpload({
+    required String threadId,
+    required String prompt,
+    required ImageAttachment image,
+    CancelToken? cancelToken,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
+  }) async {
+    const endpoint = '/conversations/message';
+    try {
+      // Verificamos que el archivo existe
+      final imageFile = File(image.filePath);
+      if (!await imageFile.exists()) {
+        throw Exception('La imagen no existe en la ruta especificada');
+      }
+
+      // Preparamos el FormData para la carga de la imagen
+      final formData = dio.FormData.fromMap({
+        'file': await dio.MultipartFile.fromFile(
+          image.filePath,
+          filename: image.fileName,
+        ),
+        'prompt': prompt,
+        'thread_id': threadId,
+      });
+
+      _cancelTokens[threadId] ??= CancelToken();
+      final token = cancelToken ?? _cancelTokens[threadId]!;
+
+      final response = await _dio.post<dio.ResponseBody>(
+        endpoint,
+        data: formData,
+        cancelToken: token,
+        onSendProgress: onSendProgress,
+        options: dio.Options(
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Accept': 'text/event-stream',
+          },
+          responseType: ResponseType.stream,
+          validateStatus: (code) => true,
+          receiveTimeout: const Duration(minutes: 2),
+          sendTimeout: const Duration(minutes: 1),
+        ),
+      );
+
+      _cancelTokens.remove(threadId);
+      final body = response.data;
+      if (body == null) {
+        throw Exception('Respuesta del servidor vacía');
+      }
+
+      if (response.statusCode != 200) {
+        final text = await _readResponseBody(body);
+        dynamic jsonMap;
+        try {
+          jsonMap = json.decode(text);
+        } catch (_) {}
+
+        if (response.statusCode == 413) {
+          throw Exception('La imagen es demasiado grande. Límite: 20 MB');
+        }
+        if (response.statusCode == 403 &&
+            (jsonMap?['error']?.toString().contains('quota') ?? false)) {
+          throw Exception(
+            'QUOTA_EXCEEDED: Límite alcanzado para subir imágenes en tu plan actual',
+          );
+        }
+        throw Exception(
+          'Error del servidor (${response.statusCode}): ${jsonMap?['error'] ?? (text.isNotEmpty ? text : 'sin detalle')}',
+        );
+      }
+
+      final stream = utf8.decoder.bind(body.stream);
+      final buffer = StringBuffer();
+      var tokenCount = 0;
+      print('📡 [IMAGE-UPLOAD] Starting SSE stream processing...');
+
+      await for (final chunk in stream) {
+        print('📡 [IMAGE-UPLOAD] Raw chunk received: ${chunk.length} bytes');
+        final lines = chunk.split('\n');
+        for (final line in lines) {
+          if (line.isEmpty) continue;
+          if (line.startsWith('data: ')) {
+            final data = line.substring(6).trim();
+            if (data == '[DONE]') {
+              print('📡 [IMAGE-UPLOAD] Received [DONE] signal');
+              break;
+            }
+            if (data.isNotEmpty) {
+              tokenCount++;
+              buffer.write(data);
+              onStream?.call(data);
+            }
+          }
+        }
+      }
+
+      final finalText = buffer.toString();
+      print('📡 [IMAGE-UPLOAD] Stream ended. Total tokens: $tokenCount');
+      print(
+        '📡 [IMAGE-UPLOAD] Final buffer length: ${finalText.length} characters',
+      );
+
+      if (finalText.isEmpty) {
+        print(
+          '⚠️ [IMAGE-UPLOAD] WARNING: Empty buffer after stream processing!',
+        );
+      }
+
+      return ChatMessageModel.ai(chatId: threadId, text: finalText);
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) {
+        rethrow;
+      }
       if (e.response?.data is dio.ResponseBody) {
         try {
           final rb = e.response!.data as dio.ResponseBody;

@@ -55,6 +55,8 @@ type AIClient interface {
 	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
 	SearchPubMed(ctx context.Context, query string) (string, error)
 	StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
+	// Análisis de imágenes médicas con GPT-4o Vision
+	StreamAssistantMessageWithImage(ctx context.Context, threadID, prompt, imagePath string) (<-chan string, error)
 	// Obtener historial conversacional para enriquecer búsquedas
 	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 	// QuickVectorSearch retorna contenido Y el nombre real del archivo (no adivinado)
@@ -1027,6 +1029,13 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 		sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 		return
 	}
+
+	// Imagen -> análisis con vision (GPT-4o)
+	if isImageExt(ext) {
+		h.handleImage(c, threadID, prompt, upFile, tmp, start)
+		return
+	}
+
 	if ext == ".pdf" {
 		h.handlePDF(c, threadID, prompt, upFile, tmp, start)
 		return
@@ -1413,10 +1422,103 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
 }
 
+// handleImage procesa imágenes médicas con GPT-4o Vision (sin vector stores).
+// Valida tamaño (20MB max OpenAI), sube la imagen, y hace streaming de análisis vision.
+func (h *Handler) handleImage(c *gin.Context, threadID, prompt string, upFile *multipart.FileHeader, tmp string, start time.Time) {
+	if upFile.Size <= 0 {
+		log.Printf("[conv][IMAGE][error] empty_file thread=%s", threadID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "archivo vacío"})
+		return
+	}
+
+	// Verificar tamaño (OpenAI Vision: max 20MB)
+	maxFileSizeBytes := int64(20 * 1024 * 1024) // 20MB
+	if upFile.Size > maxFileSizeBytes {
+		sizeMB := float64(upFile.Size) / (1024 * 1024)
+		log.Printf("[conv][IMAGE][error] file_too_large thread=%s size_mb=%.1f max_mb=20", threadID, sizeMB)
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error":       "imagen demasiado grande",
+			"code":        "file_too_large",
+			"detail":      fmt.Sprintf("La imagen pesa %.1f MB. El límite máximo para análisis de imágenes es 20 MB.", sizeMB),
+			"max_size_mb": 20,
+		})
+		return
+	}
+
+	// Consumir cuota antes de subir la imagen
+	if h.quotaValidator != nil {
+		if err := h.quotaValidator(c.Request.Context(), c, "file_upload"); err != nil {
+			field, _ := c.Get("quota_error_field")
+			reason, _ := c.Get("quota_error_reason")
+			resp := gin.H{"error": "image quota exceeded"}
+			if f, ok := field.(string); ok && f != "" {
+				resp["field"] = f
+			}
+			if r, ok := reason.(string); ok && r != "" {
+				resp["reason"] = r
+			}
+			log.Printf("[conv][IMAGE][quota][denied] field=%v reason=%v", field, reason)
+			c.JSON(http.StatusForbidden, resp)
+			return
+		}
+	}
+
+	// Validar que haya prompt (las imágenes requieren descripción/pregunta)
+	base := strings.TrimSpace(prompt)
+	if base == "" {
+		log.Printf("[conv][IMAGE][error] empty_prompt thread=%s", threadID)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":  "prompt requerido",
+			"detail": "Para analizar una imagen debes incluir una pregunta o descripción de qué necesitas.",
+		})
+		return
+	}
+
+	fname := filepath.Base(upFile.Filename)
+	sizeMB := float64(upFile.Size) / (1024 * 1024)
+	log.Printf("[conv][IMAGE][start] thread=%s file=%s size_mb=%.2f prompt_len=%d",
+		threadID, fname, sizeMB, len(base))
+
+	// Llamar al método de vision streaming (sube imagen + crea mensaje + hace stream)
+	stream, err := h.AI.StreamAssistantMessageWithImage(c.Request.Context(), threadID, base, tmp)
+	if err != nil {
+		log.Printf("[conv][IMAGE][error] stream err=%v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
+		return
+	}
+
+	// Headers para tracking
+	if v, ok := c.Get("quota_remaining"); ok {
+		c.Header("X-Quota-Remaining", toString(v))
+	}
+	c.Header("X-File-Type", "image")
+	c.Header("X-Image-Size-MB", fmt.Sprintf("%.2f", sizeMB))
+	c.Header("X-Image-Name", fname)
+	c.Header("X-Vision-Model", "gpt-4o")
+	c.Header("X-Assistant-Start-Ms", time.Since(start).String())
+	c.Header("X-Thread-ID", threadID)
+	c.Header("X-Source-Used", "vision_analysis")
+
+	log.Printf("[conv][IMAGE][streaming] thread=%s file=%s elapsed_ms=%d",
+		threadID, fname, time.Since(start).Milliseconds())
+
+	// Stages para el frontend
+	stages := []string{"__STAGE__:start", "__STAGE__:image_upload", "__STAGE__:vision_analysis", "__STAGE__:streaming_answer"}
+	sseMaybeCapture(c, wrapWithStages(stages, stream), threadID)
+}
+
 // Utilidades
 func isAudioExt(ext string) bool {
 	switch ext {
 	case ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".webm":
+		return true
+	}
+	return false
+}
+
+func isImageExt(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
 		return true
 	}
 	return false

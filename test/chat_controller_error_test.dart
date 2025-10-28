@@ -7,6 +7,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model
 import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/attachment_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/ui/ui_observer_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_model.dart';
@@ -172,6 +173,7 @@ class FakeChatsService extends ChatsService {
     required String threadId,
     required ChatMessageModel userMessage,
     PdfAttachment? file,
+    ImageAttachment? image,
     String? focusDocId,
     void Function(String token)? onStream,
   }) async {
@@ -219,6 +221,20 @@ class FakeApiChatData implements IApiChatData {
     required String threadId,
     required String prompt,
     required PdfAttachment file,
+    CancelToken? cancelToken,
+    String? focusDocId,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
+  }) async {
+    onStream?.call('Respuesta ');
+    return ChatMessageModel.ai(chatId: 'chat1', text: 'Respuesta completa');
+  }
+
+  @override
+  Future<ChatMessageModel> sendImageUpload({
+    required String threadId,
+    required String prompt,
+    required ImageAttachment image,
     CancelToken? cancelToken,
     String? focusDocId,
     Function(int, int)? onSendProgress,

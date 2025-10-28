@@ -58,8 +58,10 @@ class _MessageFieldBoxState extends State<MessageFieldBox> {
     return Obx(() {
       final sending = widget.chatController.isSending.value;
       final pendingPdf = widget.chatController.pendingPdf.value;
+      final pendingImage = widget.chatController.pendingImage.value;
       final hasText = _textController.text.trim().isNotEmpty;
-      final canSend = !sending && (hasText || pendingPdf != null);
+      final canSend =
+          !sending && (hasText || pendingPdf != null || pendingImage != null);
 
       final buttons = Padding(
         padding: const EdgeInsets.only(right: 6),

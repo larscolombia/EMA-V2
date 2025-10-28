@@ -1,14 +1,11 @@
 // import 'package:ema_educacion_medica_avanzada/common/bindings.dart';
 import 'package:ema_educacion_medica_avanzada/app/categories/categories.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
-import 'package:ema_educacion_medica_avanzada/app/pdf/views/pdf_uploader_widget.dart';
+import 'package:ema_educacion_medica_avanzada/app/pdf/views/file_uploader_tabs.dart';
 import 'package:ema_educacion_medica_avanzada/app/quizzes/quizzes.dart';
 import 'package:ema_educacion_medica_avanzada/common/widgets.dart';
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:flutter/widgets.dart';
-import 'package:get/get.dart';
-
-import '../../app/chat/controllers/chat_controller.dart';
 
 part 'overlay_routes.dart';
 
@@ -17,20 +14,24 @@ class AppOverlays {
     // clinicalCaseAnlytical - OK
     EmaOverlayRoute(
       name: OverlayRoutes.clinicalCaseAnlytical.name,
-      topArea: () => OverlayTitle(
-        title: 'Casos Clínicos Analíticos',
-        subtitle: 'Explora casos clínicos completos con información detallada para análisis del procedimiento.',
-      ),
+      topArea:
+          () => OverlayTitle(
+            title: 'Casos Clínicos Analíticos',
+            subtitle:
+                'Explora casos clínicos completos con información detallada para análisis del procedimiento.',
+          ),
       bottomArea: () => ClinicalCaseOptions(type: ClinicalCaseType.analytical),
     ),
 
     // clinicalCaseInteractive - OK
     EmaOverlayRoute(
       name: OverlayRoutes.clinicalCaseInteractive.name,
-      topArea: () => OverlayTitle(
-        title: 'Casos Clínicos Interactivos',
-        subtitle: 'Interactúa con casos clínicos simulados, toma decisiones y recibe retroalimentación en tiempo real.',
-      ),
+      topArea:
+          () => OverlayTitle(
+            title: 'Casos Clínicos Interactivos',
+            subtitle:
+                'Interactúa con casos clínicos simulados, toma decisiones y recibe retroalimentación en tiempo real.',
+          ),
       bottomArea: () => ClinicalCaseOptions(type: ClinicalCaseType.interactive),
     ),
 
@@ -58,22 +59,24 @@ class AppOverlays {
     // homeClinicalCasesMenu
     EmaOverlayRoute(
       name: OverlayRoutes.homeClinicalCasesMenu.name,
-      topArea: () => OverlayTitle(
-        title: 'Casos Clínicos',
-        subtitle:
-            'Por a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
-      ),
+      topArea:
+          () => OverlayTitle(
+            title: 'Casos Clínicos',
+            subtitle:
+                'Por a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
+          ),
       bottomArea: () => ClinicalCasesMenu(),
     ),
 
     // homeQuizzesMenu
     EmaOverlayRoute(
       name: OverlayRoutes.homeQuizzesMenu.name,
-      topArea: () => OverlayTitle(
-        title: 'Cuestionarios Médicos',
-        subtitle:
-            'Pon a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
-      ),
+      topArea:
+          () => OverlayTitle(
+            title: 'Cuestionarios Médicos',
+            subtitle:
+                'Pon a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
+          ),
       bottomArea: () => QuizzesMenu(),
     ),
 
@@ -87,23 +90,18 @@ class AppOverlays {
     // pdfUpdloader
     EmaOverlayRoute(
       name: OverlayRoutes.pdfUpdloader.name,
-      bottomArea: () => PdfUploaderWidget(
-        onPdfSelected: (pdfAttachment) {
-          final chatController = Get.find<ChatController>();
-          chatController.attachPdf(pdfAttachment);
-          Get.back(); // Cerrar el overlay después de seleccionar
-        },
-      ),
+      bottomArea: () => const FileUploaderTabs(),
     ),
 
     // quizzesGeneral - OK
     EmaOverlayRoute(
       name: OverlayRoutes.quizzesGeneral.name,
-      topArea: () => OverlayTitle(
-        title: 'Cuestionarios Médicos',
-        subtitle:
-            'Pon a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
-      ),
+      topArea:
+          () => OverlayTitle(
+            title: 'Cuestionarios Médicos',
+            subtitle:
+                'Pon a prueba tus conocimientos médicos con evaluaciones diseñadas para mejorar tus habilidades clínicas.',
+          ),
       bottomArea: () => QuizzesOptions(withCategory: false),
     ),
 

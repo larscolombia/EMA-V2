@@ -3,6 +3,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_start_response.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/db/i_local_data.dart';
 
 abstract class IChatLocalData implements ILocalData<ChatModel> {}
@@ -34,5 +35,14 @@ abstract class IApiChatData {
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
     String? focusDocId,
+  });
+
+  Future<ChatMessageModel> sendImageUpload({
+    required String threadId,
+    required String prompt,
+    required ImageAttachment image,
+    CancelToken? cancelToken,
+    Function(int, int)? onSendProgress,
+    void Function(String token)? onStream,
   });
 }

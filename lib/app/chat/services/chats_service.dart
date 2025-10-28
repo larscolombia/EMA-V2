@@ -10,6 +10,7 @@ import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_start_response.dart';
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'package:get/get.dart';
 
@@ -106,11 +107,25 @@ class ChatsService extends GetxService {
     required String threadId,
     required ChatMessageModel userMessage,
     PdfAttachment? file,
+    ImageAttachment? image,
     void Function(String token)? onStream,
     String? focusDocId,
   }) async {
     // Persisting of both user and AI messages is handled by the controller to avoid duplicates
     // and to ensure that streamed content is not overwritten.
+
+    if (image != null) {
+      final apiMessage = await apiChatService.sendImageUpload(
+        threadId: threadId,
+        prompt: userMessage.text,
+        image: image,
+        onStream: onStream,
+      );
+      return ChatMessageModel.ai(
+        chatId: userMessage.chatId,
+        text: apiMessage.text,
+      );
+    }
 
     if (file != null) {
       final apiMessage = await apiChatService.sendPdfUpload(
