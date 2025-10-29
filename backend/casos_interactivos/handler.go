@@ -2,6 +2,8 @@ package casos_interactivos
 
 import (
 	"context"
+	cryptoRand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -1487,6 +1489,21 @@ func rebuildFeedbackWithEvaluation(original string, isCorrect bool) string {
 		}
 	}
 
+	// Limpieza adicional: patrones regex para eliminar menciones evaluativas incrustadas
+	regexPatterns := []string{
+		`(?i)pregunta\s*\d+\s*[:\-]?\s*(correcto|incorrecto|correcta|incorrecta)`,
+		`(?i)evaluaci[oó]n\s*[:\-]?\s*(correcto|incorrecto|correcta|incorrecta)`,
+		`(?i)(tu|su)\s+respuesta\s+(no\s+)?(es|fue)\s+(correcto|incorrecto|correcta|incorrecta)`,
+		`(?i)[\(\[]\s*(correcto|incorrecto|correcta|incorrecta)\s*[\)\]]`,
+		`(?i)\bno\s+es\s+(acertad[oa]|correct[oa])\b`,
+	}
+	for _, rp := range regexPatterns {
+		re := regexp.MustCompile(rp)
+		text = re.ReplaceAllString(text, "")
+	}
+	// Compactar saltos de línea y espacios residuales
+	text = strings.TrimSpace(regexp.MustCompile(`(?m)\n{2,}`).ReplaceAllString(text, "\n"))
+
 	// Segundo: eliminar líneas completas con marcadores de evaluación
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	var cleaned []string
@@ -1994,12 +2011,11 @@ func shuffleOptionsWithCorrectIndex(options []string, correctIndex int) ([]strin
 	// Recordar cuál es la opción correcta
 	correctOption := options[correctIndex]
 
-	// Usar seed basado en tiempo para randomización
-	rand.Seed(time.Now().UnixNano())
-
-	// Algoritmo Fisher-Yates para shuffle
+	// Usar crypto/rand para verdadera aleatoriedad
+	// Fisher-Yates shuffle con entropia criptográfica
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
+		// Generar número aleatorio criptográficamente seguro
+		j := secureRandomInt(i + 1)
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 
@@ -2012,7 +2028,26 @@ func shuffleOptionsWithCorrectIndex(options []string, correctIndex int) ([]strin
 		}
 	}
 
+	// Log para debug: verificar distribución
+	log.Printf("[SHUFFLE_DEBUG] correctIdx changed: %d -> %d (option: '%s')", correctIndex, newCorrectIndex, correctOption)
+
 	return shuffled, newCorrectIndex
+}
+
+// secureRandomInt genera un entero aleatorio en [0, max) usando crypto/rand
+func secureRandomInt(max int) int {
+	if max <= 0 {
+		return 0
+	}
+	// Generar bytes aleatorios suficientes
+	var buf [8]byte
+	if _, err := cryptoRand.Read(buf[:]); err != nil {
+		// Fallback a math/rand si crypto falla (no debería pasar)
+		return rand.Intn(max)
+	}
+	// Convertir bytes a uint64 y aplicar módulo
+	n := binary.BigEndian.Uint64(buf[:])
+	return int(n % uint64(max))
 }
 
 // applyOptionShuffle aplica randomización a la estructura de pregunta
