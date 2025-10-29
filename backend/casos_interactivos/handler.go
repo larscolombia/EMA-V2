@@ -102,6 +102,11 @@ func (h *Handler) evaluateLastAnswer(threadID, userAnswer string, explicit *int,
 	}
 	idx, okIdx := mapUserAnswerToIndex(userAns, explicit, opts)
 	isCorrect := okIdx && idx == ci
+	
+	// DEBUG: Log detallado de evaluación
+	log.Printf("[EVAL_DEBUG] thread=%s userAnswer='%s' explicit=%v mappedIdx=%d correctIdx=%d options=%v isCorrect=%v", 
+		threadID, userAns, explicit, idx, ci, opts, isCorrect)
+	
 	fb, _ := data["feedback"].(string)
 	data["feedback"] = rebuildFeedbackWithEvaluation(fb, isCorrect)
 	h.mu.Lock()
