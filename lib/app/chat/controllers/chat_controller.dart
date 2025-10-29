@@ -472,6 +472,7 @@ class ChatController extends GetxService {
             chatId: currentChat.value.uid,
             text: displayText, // Mostrar texto simple en UI
             attach: currentPdf,
+            imageAttach: currentImage,
           );
           messages.add(userMessage);
 
@@ -488,6 +489,7 @@ class ChatController extends GetxService {
               chatId: userMessage.chatId,
               text: effectiveText, // Enviar texto efectivo al backend
               attach: userMessage.attach,
+              imageAttach: userMessage.imageAttach,
             ),
             file: currentPdf,
             image: currentImage,
@@ -597,6 +599,7 @@ class ChatController extends GetxService {
             chatId: currentChat.value.uid,
             text: displayText, // Mostrar texto simple en UI
             attach: currentPdf,
+            imageAttach: currentImage,
           );
 
           // Reset scroll state to allow auto scrolling
@@ -620,8 +623,10 @@ class ChatController extends GetxService {
               chatId: userMessage.chatId,
               text: effectiveText, // Enviar texto efectivo al backend
               attach: userMessage.attach,
+              imageAttach: userMessage.imageAttach,
             ),
             file: currentPdf,
+            image: currentImage,
             onStream: (token) {
               if (!hasFirstToken) {
                 hasFirstToken = true;
@@ -675,6 +680,7 @@ class ChatController extends GetxService {
         chatId: currentChat.value.uid,
         text: displayText, // Usar displayText en lugar de effectiveText
         attach: currentPdf,
+        imageAttach: currentImage,
       );
 
       // Reset scroll state to allow auto scrolling
@@ -709,8 +715,10 @@ class ChatController extends GetxService {
             text:
                 effectiveText, // Enviar prompt vacío para PDFs, el backend lo manejará
             attach: userMessage.attach,
+            imageAttach: userMessage.imageAttach,
           ),
           file: currentPdf,
+          image: currentImage,
           focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
           onStream: (token) {
             if (token.startsWith('__STAGE__:')) {

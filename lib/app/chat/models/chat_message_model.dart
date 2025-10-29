@@ -3,6 +3,7 @@
 import 'dart:convert';
 
 import 'package:ema_educacion_medica_avanzada/core/attachments/pdf_attachment.dart';
+import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.dart';
 import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
@@ -14,6 +15,7 @@ class ChatMessageModel {
   final DateTime createdAt;
   final DateTime updatedAt;
   final PdfAttachment? attach;
+  final ImageAttachment? imageAttach;
   final Widget? widget; // Widget personalizado para renderizar el mensaje
 
   ChatMessageModel._({
@@ -24,6 +26,7 @@ class ChatMessageModel {
     required this.createdAt,
     required this.updatedAt,
     this.attach,
+    this.imageAttach,
     this.widget,
   });
 
@@ -40,6 +43,7 @@ class ChatMessageModel {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       attach: null,
+      imageAttach: null,
       widget: widget,
     );
   }
@@ -56,6 +60,7 @@ class ChatMessageModel {
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['createdAt'] as int),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(map['updatedAt'] as int),
       attach: null,
+      imageAttach: null,
     );
   }
 
@@ -68,6 +73,7 @@ class ChatMessageModel {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       attach: null,
+      imageAttach: null,
     );
   }
 
@@ -75,6 +81,7 @@ class ChatMessageModel {
     required String chatId,
     required String text,
     PdfAttachment? attach,
+    ImageAttachment? imageAttach,
   }) {
     return ChatMessageModel._(
       uid: const Uuid().v4(),
@@ -84,6 +91,7 @@ class ChatMessageModel {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       attach: attach,
+      imageAttach: imageAttach,
     );
   }
 
@@ -98,7 +106,11 @@ class ChatMessageModel {
       attach:
           map['attach'] != null
               ? PdfAttachment.fromJson(map['attach'] as String)
-              : null, // Todo: desde json string
+              : null,
+      imageAttach:
+          map['imageAttach'] != null
+              ? ImageAttachment.fromJson(map['imageAttach'] as String)
+              : null,
     );
   }
 
@@ -116,6 +128,12 @@ class ChatMessageModel {
           'mimeType': attach!.mimeType,
           'filePath': attach!.filePath,
         },
+      if (imageAttach != null)
+        'imageAttachment': {
+          'fileName': imageAttach!.fileName,
+          'mimeType': imageAttach!.mimeType,
+          'filePath': imageAttach!.filePath,
+        },
     };
   }
 
@@ -127,7 +145,8 @@ class ChatMessageModel {
       'aiMessage': aiMessage ? 1 : 0,
       'createdAt': createdAt.millisecondsSinceEpoch,
       'updatedAt': updatedAt.millisecondsSinceEpoch,
-      'attach': attach?.toJson(), // Todo: almacenar como json string
+      'attach': attach?.toJson(),
+      'imageAttach': imageAttach?.toJson(),
     };
   }
 

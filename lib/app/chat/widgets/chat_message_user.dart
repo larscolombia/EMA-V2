@@ -4,15 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../widgets/chat_message_pdf.dart';
+import '../widgets/chat_message_image.dart';
 import 'animations/slide_in_left.dart';
 
 class ChatMessageUser extends StatelessWidget {
   final ChatMessageModel message;
 
-  const ChatMessageUser({
-    super.key,
-    required this.message,
-  });
+  const ChatMessageUser({super.key, required this.message});
 
   @override
   Widget build(BuildContext context) {
@@ -35,16 +33,15 @@ class ChatMessageUser extends StatelessWidget {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: AppStyles.whiteColor,
-                    border: Border.all(
-                      color: AppStyles.primary900,
-                      width: 1,
-                    ),
+                    border: Border.all(color: AppStyles.primary900, width: 1),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
-                    message.text,
-                    style: AppStyles.chatMessageUser,
-                  ),
+                  child: Text(message.text, style: AppStyles.chatMessageUser),
+                ),
+              if (message.imageAttach != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: ChatMessageImage(attachment: message.imageAttach!),
                 ),
               if (message.attach != null)
                 Padding(
