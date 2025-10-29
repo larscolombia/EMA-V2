@@ -807,13 +807,13 @@ func (h *Handler) Message(c *gin.Context) {
 
 		var feedbackFormat string
 		// Forzar formato single-choice siempre
-		feedbackFormat = "- Pregunta anterior era 'single-choice': SÍ usa 'Evaluación: CORRECTO' o 'Evaluación: INCORRECTO' como primera línea, seguido de explicación académica (120-220 palabras)."
+		feedbackFormat = "- Pregunta anterior era 'single-choice': NO evalúes si la respuesta es correcta o incorrecta (el sistema lo hará). Proporciona SOLO explicación académica NEUTRAL sobre el concepto médico (120-220 palabras), sin juzgar la elección del usuario."
 
 		instr = strings.Join([]string{
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
 			"FORMATO FEEDBACK según tipo de pregunta anterior:",
 			feedbackFormat,
-			"CRÍTICO: Basa tu evaluación y explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
+			"CRÍTICO: NO uses frases como 'tu respuesta es incorrecta', 'no es acertado', 'es correcta', etc. SOLO explica el concepto médico de forma neutral y educativa. El sistema agregará la evaluación automáticamente. Basa tu explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
@@ -1272,30 +1272,14 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	}
 	tier := performanceTier(pct)
 	fbOriginal, _ := data["feedback"].(string)
-	// Eliminar cualquier línea de Evaluación previa para no duplicar semántica en el resumen final
-	// CRÍTICO: También eliminar líneas como "Pregunta X: Incorrecta/Correcta"
+	// Eliminar líneas de "Evaluación:" del feedback para evitar duplicados en resumen final
 	if fbOriginal != "" {
 		lines := strings.Split(fbOriginal, "\n")
 		var cleaned []string
 		for _, ln := range lines {
 			ul := strings.ToUpper(strings.TrimSpace(ln))
-			// Eliminar líneas de evaluación
 			if strings.HasPrefix(ul, "EVALUACIÓN:") || strings.HasPrefix(ul, "EVALUACION:") {
 				continue
-			}
-			// Eliminar líneas con "PREGUNTA X: INCORRECTA/CORRECTA"
-			if strings.Contains(ul, ": INCORRECTA") || strings.Contains(ul, ": CORRECTA") {
-				continue
-			}
-			if strings.Contains(ul, ": INCORRECTO") || strings.Contains(ul, ": CORRECTO") {
-				continue
-			}
-			// Eliminar líneas que son solo "PREGUNTA N:" sin contenido adicional
-			if strings.HasPrefix(ul, "PREGUNTA ") && strings.Contains(ul, ":") {
-				parts := strings.Split(ul, ":")
-				if len(parts) == 2 && strings.TrimSpace(parts[1]) == "" {
-					continue
-				}
 			}
 			cleaned = append(cleaned, ln)
 		}
