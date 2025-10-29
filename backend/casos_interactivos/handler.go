@@ -1433,13 +1433,21 @@ func extractCoreSummary(fb string) string {
 }
 
 // rebuildFeedbackWithEvaluation injects a first line 'Evaluación: CORRECTO/INCORRECTO'
-// overriding any existing evaluation marker.
+// and removes ALL existing evaluation markers from the feedback to avoid duplicates.
 func rebuildFeedbackWithEvaluation(original string, isCorrect bool) string {
 	lines := strings.Split(strings.TrimSpace(original), "\n")
 	var cleaned []string
 	for _, ln := range lines {
 		ul := strings.ToUpper(strings.TrimSpace(ln))
+		// Eliminar TODAS las líneas que contengan marcadores de evaluación
 		if strings.HasPrefix(ul, "EVALUACIÓN:") || strings.HasPrefix(ul, "EVALUACION:") {
+			continue
+		}
+		// También eliminar líneas con "PREGUNTA X: INCORRECTA/CORRECTA"
+		if strings.Contains(ul, ": INCORRECTA") || strings.Contains(ul, ": CORRECTA") {
+			continue
+		}
+		if strings.Contains(ul, ": INCORRECTO") || strings.Contains(ul, ": CORRECTO") {
 			continue
 		}
 		cleaned = append(cleaned, ln)
