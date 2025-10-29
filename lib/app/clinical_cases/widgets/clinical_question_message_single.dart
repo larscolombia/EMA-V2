@@ -72,13 +72,35 @@ class ClinicalQuestionMessageSingle extends StatelessWidget {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: AppStyles.whiteColor,
-                border: Border.all(color: AppStyles.primary900, width: 1),
+                border: Border.all(
+                  color: question.isCorrect == true
+                      ? Colors.green
+                      : (question.isCorrect == false ? Colors.red : AppStyles.primary900),
+                  width: 2,
+                ),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text(
-                question.answerdString,
-                style: AppStyles.chatMessageUser,
-                textAlign: TextAlign.left,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (question.isCorrect == true)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8.0),
+                      child: Icon(Icons.check_circle, color: Colors.green, size: 20),
+                    )
+                  else if (question.isCorrect == false)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8.0),
+                      child: Icon(Icons.cancel, color: Colors.red, size: 20),
+                    ),
+                  Expanded(
+                    child: Text(
+                      question.answerdString,
+                      style: AppStyles.chatMessageUser,
+                      textAlign: TextAlign.left,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

@@ -820,7 +820,7 @@ func (h *Handler) Message(c *gin.Context) {
 			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
 			"FORMATO FEEDBACK según tipo de pregunta anterior:",
 			feedbackFormat,
-			"CRÍTICO: NO uses frases como 'tu respuesta es incorrecta', 'no es acertado', 'es correcta', etc. SOLO explica el concepto médico de forma neutral y educativa. El sistema agregará la evaluación automáticamente. Basa tu explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
+			"⚠️ CRÍTICO - PROHIBIDO ABSOLUTAMENTE: NO escribas 'Evaluación:', 'Evaluación: CORRECTO', 'Evaluación: INCORRECTO', 'Tu respuesta es correcta/incorrecta', ni frases de juicio sobre la respuesta. NUNCA uses estas palabras: 'correcto', 'incorrecto', 'acertado', 'desacertado' en contexto de evaluar la respuesta del usuario. El sistema agregará automáticamente la evaluación binaria. TÚ SOLO proporciona explicación neutral del concepto médico sin evaluar la elección del usuario. Basa tu explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
 			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
 			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
 			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
@@ -863,6 +863,12 @@ func (h *Handler) Message(c *gin.Context) {
 	}
 	if !validInteractiveTurn(data) {
 		data = h.minTurn()
+	}
+
+	// Sanitize AI feedback immediately after parsing to remove any "Evaluación:" lines
+	// that the AI may have incorrectly included despite explicit instructions
+	if fb, ok := data["feedback"].(string); ok && strings.TrimSpace(fb) != "" {
+		data["feedback"] = sanitizeAIFeedback(fb)
 	}
 
 	// If not closing: handle validation / repair of premature closure & ensure a question exists
@@ -1437,6 +1443,34 @@ func extractCoreSummary(fb string) string {
 		} // keep it brief
 	}
 	return strings.Join(kept, " ")
+}
+
+// sanitizeAIFeedback removes any "Evaluación: CORRECTO/INCORRECTO" lines that the AI
+// may have incorrectly added despite explicit instructions to NOT include them.
+// This is a defensive layer to ensure clean feedback even if the AI ignores instructions.
+func sanitizeAIFeedback(original string) string {
+	lines := strings.Split(strings.TrimSpace(original), "\n")
+	var cleaned []string
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		upper := strings.ToUpper(trimmed)
+		// Skip lines that start with "Evaluación: CORRECTO" or "Evaluación: INCORRECTO"
+		if strings.HasPrefix(upper, "EVALUACIÓN:") || strings.HasPrefix(upper, "EVALUACION:") {
+			// Log that we're removing an evaluation line
+			log.Printf("[FEEDBACK_SANITIZE] Removing AI evaluation line: %s", trimmed)
+			continue
+		}
+		// Also skip empty lines at the beginning
+		if strings.TrimSpace(ln) != "" {
+			cleaned = append(cleaned, ln)
+		}
+	}
+	// Join back and return
+	result := strings.TrimSpace(strings.Join(cleaned, "\n"))
+	if result != strings.TrimSpace(original) {
+		log.Printf("[FEEDBACK_SANITIZE] Original: %q -> Sanitized: %q", original, result)
+	}
+	return result
 }
 
 // rebuildFeedbackWithEvaluation injects a first line 'Evaluación: CORRECTO/INCORRECTO'

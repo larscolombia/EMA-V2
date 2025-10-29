@@ -386,86 +386,19 @@ IMPORTANTE:
     return aiEvaluation;
   }
 
-  /// Genera un resumen/evaluación final local para casos interactivos (tipo cuestionario secuencial)
-  /// sin necesidad de llamar a la IA. Usa las preguntas almacenadas y sus respuestas.
+  /// DEPRECATED: La evaluación final es generada por el backend.
+  /// Este método se mantiene solo por compatibilidad hacia atrás.
+  /// No llamar desde nuevo código.
+  @Deprecated('Use backend evaluation instead')
   Future<ChatMessageModel> generateInteractiveEvaluation(
     ClinicalCaseModel clinicalCase,
     List<QuestionResponseModel> questions,
   ) async {
-    // Filtrar preguntas respondidas válidas
-    final answered =
-        questions
-            .where((q) => (q.userAnswer != null && q.userAnswer!.isNotEmpty))
-            .toList();
-    final total = answered.length;
-    int correct = 0;
-    for (final q in answered) {
-      final ans = (q.answer ?? '').trim().toLowerCase();
-      final user = (q.userAnswer ?? '').trim().toLowerCase();
-      if (ans.isNotEmpty && ans == user) correct++;
-    }
-    final scorePct = total == 0 ? 0 : ((correct * 100) / total).round();
-
-    String bulletLines = '';
-    int idx = 1;
-    for (final q in answered) {
-      final ans = (q.answer ?? '').trim();
-      final user = (q.userAnswer ?? '').trim();
-      final isOk = ans.isNotEmpty && ans.toLowerCase() == user.toLowerCase();
-      final feedback = (q.fit ?? '').trim();
-      final truncatedFb =
-          feedback.length > 220 ? feedback.substring(0, 220) + '…' : feedback;
-      bulletLines +=
-          '\n${idx}. ${q.question}\n  Tu respuesta: ${user.isEmpty ? '(vacía)' : user}'
-          '  |  Correcta: ${ans.isEmpty ? 'N/D' : ans}'
-          '  => ${isOk ? '✅' : '❌'}';
-      if (truncatedFb.isNotEmpty) {
-        bulletLines += '\n  Feedback: $truncatedFb';
-      }
-      idx++;
-    }
-
-    // Heurística simple de fortalezas / mejoras
-    final fortalezas = <String>[];
-    final mejoras = <String>[];
-    if (scorePct >= 80) {
-      fortalezas.add('Buen dominio general de los conceptos evaluados');
-    } else if (scorePct >= 50) {
-      fortalezas.add('Identificas parcialmente los conceptos clave');
-    } else {
-      mejoras.add('Repasar fundamentos teóricos antes de un nuevo intento');
-    }
-    if (correct < total) {
-      mejoras.add('Revisar las preguntas marcadas con ❌');
-    }
-    if (fortalezas.isEmpty) fortalezas.add('Participación activa en el caso');
-    if (mejoras.isEmpty)
-      mejoras.add(
-        'Profundizar en bibliografía recomendada para consolidar conocimiento',
-      );
-
-    final resumen =
-        StringBuffer()
-          ..writeln('Evaluación final interactiva')
-          ..writeln('Puntuación: $correct / $total ($scorePct%)')
-          ..writeln('\nFortalezas:')
-          ..writeln(fortalezas.map((e) => '- $e').join('\n'))
-          ..writeln('\nÁreas de mejora:')
-          ..writeln(mejoras.map((e) => '- $e').join('\n'))
-          ..writeln('\nDetalle de preguntas:')
-          ..writeln(bulletLines)
-          ..writeln('\nReferencias sugeridas (genéricas):')
-          ..writeln('- Guías clínicas actualizadas de la especialidad')
-          ..writeln(
-            '- Revisión sistemática reciente en base de datos reconocida',
-          );
-
-    final evaluation = ChatMessageModel.ai(
+    // Solo retorna un mensaje placeholder
+    return ChatMessageModel.ai(
       chatId: clinicalCase.uid,
-      text: resumen.toString(),
+      text: 'Evaluación generada por el servidor.',
     );
-    await insertMessage(evaluation);
-    return evaluation;
   }
 
   Future<QuestionResponseModel> startInteractive(

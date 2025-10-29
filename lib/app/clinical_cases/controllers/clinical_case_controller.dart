@@ -277,8 +277,21 @@ class ClinicalCaseController extends GetxController
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _insertMessages(loadedMessages);
         _insertQuestions(loadedQuestions);
-        currentQuestion.value =
-            loadedQuestions.isNotEmpty ? loadedQuestions.first : null;
+        
+        // Cargar la última pregunta sin responder, o la última si todas están respondidas
+        QuestionResponseModel? currentQ;
+        if (loadedQuestions.isNotEmpty) {
+          // Buscar la primera pregunta no respondida
+          for (final q in loadedQuestions) {
+            if (!q.isAnswered) {
+              currentQ = q;
+              break;
+            }
+          }
+          // Si todas fueron respondidas, usar la última
+          currentQ ??= loadedQuestions.last;
+        }
+        currentQuestion.value = currentQ;
       });
     }
   }

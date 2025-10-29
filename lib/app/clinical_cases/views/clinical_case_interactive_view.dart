@@ -73,13 +73,6 @@ class _ClinicalCaseInteractiveViewState
                   controller: controller.scrollController,
                   padding: const EdgeInsets.only(left: 8, right: 8, top: 16),
                   child: Obx(() {
-                    // IDs de preguntas respondidas (para no duplicar sus respuestas)
-                    final answeredQuestionIds =
-                        controller.questions
-                            .where((q) => q.isAnswered && q.options.isNotEmpty)
-                            .map((q) => q.id)
-                            .toSet();
-
                     List<Widget> items = [];
 
                     for (var message in controller.messages) {
@@ -107,17 +100,25 @@ class _ClinicalCaseInteractiveViewState
                         items.add(ChatMessageAi(message: message));
                       } else {
                         // Es mensaje de usuario
-                        // Verificar si es una respuesta a una pregunta que ya se muestra en el widget
-                        // Las respuestas a preguntas tienen el texto que coincide con answerdString
-                        bool isQuestionResponse = answeredQuestionIds.any((
-                          qId,
-                        ) {
-                          final q =
-                              controller.questions
-                                  .where((quest) => quest.id == qId)
-                                  .firstOrNull;
-                          return q != null && q.answerdString == message.text;
-                        });
+                        // Verificar si es una respuesta a una pregunta ya mostrada en el widget
+                        // Para esto, intentamos mapear al ID de la pregunta de la que es respuesta
+                        // Buscamos si el UID anterior a este mensaje es de una pregunta respondida
+                        final messageIndex = controller.messages.indexOf(message);
+                        bool isQuestionResponse = false;
+                        
+                        // Buscar hacia atrás: si el mensaje anterior es una pregunta respondida, este es su respuesta
+                        if (messageIndex > 0) {
+                          final prevMessage = controller.messages[messageIndex - 1];
+                          if (prevMessage.aiMessage) {
+                            // Verificar si el mensaje anterior es una pregunta
+                            final associatedQuestion = controller.questions
+                                .where((q) => q.id == prevMessage.uid && q.isAnswered)
+                                .firstOrNull;
+                            if (associatedQuestion != null) {
+                              isQuestionResponse = true;
+                            }
+                          }
+                        }
 
                         // Solo mostrar si NO es una respuesta de pregunta (ya incluida en el widget)
                         if (!isQuestionResponse) {

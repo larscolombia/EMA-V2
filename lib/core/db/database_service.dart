@@ -25,7 +25,7 @@ class DatabaseService extends GetxService {
 
     db = await openDatabase(
       'ema_db_v1_19.db',
-      version: 19,
+      version: 20,
       onCreate: _createTables
     );
   }

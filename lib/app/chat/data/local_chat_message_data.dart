@@ -35,7 +35,8 @@ class LocalChatMessageData extends ILocalData<ChatMessageModel> implements IChat
         aiMessage INTEGER NOT NULL,
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
-        attach TEXT
+        attach TEXT,
+        imageAttach TEXT
       );
     ''';
   }
