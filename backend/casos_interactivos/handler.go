@@ -1440,28 +1440,81 @@ func extractCoreSummary(fb string) string {
 // rebuildFeedbackWithEvaluation injects a first line 'Evaluación: CORRECTO/INCORRECTO'
 // and removes ALL existing evaluation markers from the feedback to avoid duplicates.
 func rebuildFeedbackWithEvaluation(original string, isCorrect bool) string {
-	lines := strings.Split(strings.TrimSpace(original), "\n")
+	// Primero: eliminar frases de evaluación incrustadas en el texto
+	text := original
+
+	// Patrones comunes que el AI usa para evaluar
+	evaluationPhrases := []string{
+		"tu respuesta es correcta",
+		"tu respuesta es incorrecta",
+		"tu respuesta no es correcta",
+		"tu respuesta no es acertada",
+		"la respuesta es correcta",
+		"la respuesta es incorrecta",
+		"la respuesta no es correcta",
+		"la respuesta no es acertada",
+		"es correcta",
+		"es incorrecta",
+		"no es correcta",
+		"no es acertada",
+		"respuesta acertada",
+		"respuesta no acertada",
+		"has acertado",
+		"no has acertado",
+		"acertaste",
+		"no acertaste",
+	}
+
+	// Eliminar frases de evaluación (case-insensitive)
+	textUpper := strings.ToUpper(text)
+	for _, phrase := range evaluationPhrases {
+		upperPhrase := strings.ToUpper(phrase)
+		if strings.Contains(textUpper, upperPhrase) {
+			// Encontrar todas las posiciones y eliminar
+			for {
+				idx := strings.Index(textUpper, upperPhrase)
+				if idx == -1 {
+					break
+				}
+				// Eliminar la frase (manteniendo espacios limpios)
+				before := text[:idx]
+				after := text[idx+len(phrase):]
+				// Limpiar puntuación residual
+				after = strings.TrimLeft(after, ".,;: ")
+				text = strings.TrimSpace(before + " " + after)
+				textUpper = strings.ToUpper(text)
+			}
+		}
+	}
+
+	// Segundo: eliminar líneas completas con marcadores de evaluación
+	lines := strings.Split(strings.TrimSpace(text), "\n")
 	var cleaned []string
 	for _, ln := range lines {
 		ul := strings.ToUpper(strings.TrimSpace(ln))
-		// Eliminar TODAS las líneas que contengan marcadores de evaluación
+		// Eliminar líneas que empiezan con evaluación
 		if strings.HasPrefix(ul, "EVALUACIÓN:") || strings.HasPrefix(ul, "EVALUACION:") {
 			continue
 		}
-		// También eliminar líneas con "PREGUNTA X: INCORRECTA/CORRECTA"
+		// Eliminar líneas con "PREGUNTA X: INCORRECTA/CORRECTA"
 		if strings.Contains(ul, ": INCORRECTA") || strings.Contains(ul, ": CORRECTA") {
 			continue
 		}
 		if strings.Contains(ul, ": INCORRECTO") || strings.Contains(ul, ": CORRECTO") {
 			continue
 		}
+		// Eliminar líneas vacías
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
 		cleaned = append(cleaned, ln)
 	}
+
 	eval := "Evaluación: INCORRECTO"
 	if isCorrect {
 		eval = "Evaluación: CORRECTO"
 	}
-	return eval + "\n" + strings.Join(cleaned, "\n")
+	return eval + "\n\n" + strings.Join(cleaned, "\n")
 }
 
 // --- Answer normalization & matching --- //
