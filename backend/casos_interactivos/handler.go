@@ -1273,13 +1273,29 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	tier := performanceTier(pct)
 	fbOriginal, _ := data["feedback"].(string)
 	// Eliminar cualquier línea de Evaluación previa para no duplicar semántica en el resumen final
+	// CRÍTICO: También eliminar líneas como "Pregunta X: Incorrecta/Correcta"
 	if fbOriginal != "" {
 		lines := strings.Split(fbOriginal, "\n")
 		var cleaned []string
 		for _, ln := range lines {
 			ul := strings.ToUpper(strings.TrimSpace(ln))
+			// Eliminar líneas de evaluación
 			if strings.HasPrefix(ul, "EVALUACIÓN:") || strings.HasPrefix(ul, "EVALUACION:") {
 				continue
+			}
+			// Eliminar líneas con "PREGUNTA X: INCORRECTA/CORRECTA"
+			if strings.Contains(ul, ": INCORRECTA") || strings.Contains(ul, ": CORRECTA") {
+				continue
+			}
+			if strings.Contains(ul, ": INCORRECTO") || strings.Contains(ul, ": CORRECTO") {
+				continue
+			}
+			// Eliminar líneas que son solo "PREGUNTA N:" sin contenido adicional
+			if strings.HasPrefix(ul, "PREGUNTA ") && strings.Contains(ul, ":") {
+				parts := strings.Split(ul, ":")
+				if len(parts) == 2 && strings.TrimSpace(parts[1]) == "" {
+					continue
+				}
 			}
 			cleaned = append(cleaned, ln)
 		}
