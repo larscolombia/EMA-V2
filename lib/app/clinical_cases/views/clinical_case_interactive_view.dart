@@ -103,17 +103,25 @@ class _ClinicalCaseInteractiveViewState
                         // Verificar si es una respuesta a una pregunta ya mostrada en el widget
                         // Para esto, intentamos mapear al ID de la pregunta de la que es respuesta
                         // Buscamos si el UID anterior a este mensaje es de una pregunta respondida
-                        final messageIndex = controller.messages.indexOf(message);
+                        final messageIndex = controller.messages.indexOf(
+                          message,
+                        );
                         bool isQuestionResponse = false;
-                        
+
                         // Buscar hacia atrás: si el mensaje anterior es una pregunta respondida, este es su respuesta
                         if (messageIndex > 0) {
-                          final prevMessage = controller.messages[messageIndex - 1];
+                          final prevMessage =
+                              controller.messages[messageIndex - 1];
                           if (prevMessage.aiMessage) {
                             // Verificar si el mensaje anterior es una pregunta
-                            final associatedQuestion = controller.questions
-                                .where((q) => q.id == prevMessage.uid && q.isAnswered)
-                                .firstOrNull;
+                            final associatedQuestion =
+                                controller.questions
+                                    .where(
+                                      (q) =>
+                                          q.id == prevMessage.uid &&
+                                          q.isAnswered,
+                                    )
+                                    .firstOrNull;
                             if (associatedQuestion != null) {
                               isQuestionResponse = true;
                             }

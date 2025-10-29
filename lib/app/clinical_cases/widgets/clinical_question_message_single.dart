@@ -73,9 +73,12 @@ class ClinicalQuestionMessageSingle extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppStyles.whiteColor,
                 border: Border.all(
-                  color: question.isCorrect == true
-                      ? Colors.green
-                      : (question.isCorrect == false ? Colors.red : AppStyles.primary900),
+                  color:
+                      question.isCorrect == true
+                          ? Colors.green
+                          : (question.isCorrect == false
+                              ? Colors.red
+                              : AppStyles.primary900),
                   width: 2,
                 ),
                 borderRadius: BorderRadius.circular(8),
@@ -86,7 +89,11 @@ class ClinicalQuestionMessageSingle extends StatelessWidget {
                   if (question.isCorrect == true)
                     const Padding(
                       padding: EdgeInsets.only(right: 8.0),
-                      child: Icon(Icons.check_circle, color: Colors.green, size: 20),
+                      child: Icon(
+                        Icons.check_circle,
+                        color: Colors.green,
+                        size: 20,
+                      ),
                     )
                   else if (question.isCorrect == false)
                     const Padding(

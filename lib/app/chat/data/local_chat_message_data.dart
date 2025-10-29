@@ -4,12 +4,16 @@ import 'package:ema_educacion_medica_avanzada/app/chat/interfaces/chat_interface
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/core/db/i_local_data.dart';
 
-class LocalChatMessageData extends ILocalData<ChatMessageModel> implements IChatMessageLocalData {
+class LocalChatMessageData extends ILocalData<ChatMessageModel>
+    implements IChatMessageLocalData {
   static final String _tableName = 'chat_messages_v1';
-  @override String get tableName => _tableName;
-  @override String get singular => 'el mensaje';
-  @override String get plural => 'los mensajes';
-  
+  @override
+  String get tableName => _tableName;
+  @override
+  String get singular => 'el mensaje';
+  @override
+  String get plural => 'los mensajes';
+
   @override
   ChatMessageModel fromApi(Map<String, dynamic> map) {
     return ChatMessageModel.fromApi(map);

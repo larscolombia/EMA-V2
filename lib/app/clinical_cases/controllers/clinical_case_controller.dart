@@ -277,7 +277,7 @@ class ClinicalCaseController extends GetxController
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _insertMessages(loadedMessages);
         _insertQuestions(loadedQuestions);
-        
+
         // Cargar la última pregunta sin responder, o la última si todas están respondidas
         QuestionResponseModel? currentQ;
         if (loadedQuestions.isNotEmpty) {

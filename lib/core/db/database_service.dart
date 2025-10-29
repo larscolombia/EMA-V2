@@ -7,7 +7,6 @@ import 'package:ema_educacion_medica_avanzada/core/core.dart';
 import 'package:get/get.dart';
 import 'package:sqflite/sqflite.dart';
 
-
 class DatabaseService extends GetxService {
   late final Database db;
 
@@ -26,7 +25,7 @@ class DatabaseService extends GetxService {
     db = await openDatabase(
       'ema_db_v1_19.db',
       version: 20,
-      onCreate: _createTables
+      onCreate: _createTables,
     );
   }
 }
