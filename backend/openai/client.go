@@ -1336,7 +1336,7 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 								buf.WriteString(cpart.Text.Value)
 							}
 						}
-						text := buf.String()
+						text := cleanAssistantAnnotations(buf.String()) // Limpiar anotaciones de OpenAI
 						if strings.TrimSpace(text) != "" {
 							// Devolver respuesta parcial sin nota de timeout
 							// El usuario no necesita saber detalles técnicos internos
@@ -1402,7 +1402,7 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 					buf.WriteString(c.Text.Value)
 				}
 			}
-			finalText := buf.String()
+			finalText := cleanAssistantAnnotations(buf.String()) // Limpiar anotaciones de OpenAI
 			log.Printf("DEBUG: Final assistant message length: %d characters", len(finalText))
 			if len(finalText) > 200 {
 				log.Printf("DEBUG: First 200 chars: %s...", finalText[:200])
@@ -1627,7 +1627,7 @@ func (c *Client) getLatestAssistantMessage(ctx context.Context, threadID string)
 		}
 	}
 
-	text := buf.String()
+	text := cleanAssistantAnnotations(buf.String()) // Limpiar anotaciones de OpenAI
 	if text == "" {
 		return "", fmt.Errorf("assistant message is empty")
 	}
@@ -1680,7 +1680,7 @@ func (c *Client) GetThreadMessages(ctx context.Context, threadID string, limit i
 				content.WriteString(c.Text.Value)
 			}
 		}
-		if text := content.String(); text != "" {
+		if text := cleanAssistantAnnotations(content.String()); text != "" { // Limpiar anotaciones de OpenAI
 			messages = append(messages, ThreadMessage{
 				Role:    m.Role,
 				Content: text,
@@ -3049,6 +3049,42 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 	return out, nil
 }
 
+// StreamAssistantWithInstructions separa el mensaje del usuario (que se guarda en el thread)
+// de las instrucciones del sistema (que solo se usan en el run).
+// Esto evita contaminar el historial del thread con prompts gigantes del sistema.
+func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, userMessage, instructions, vectorStoreID string) (<-chan string, error) {
+	if c.key == "" || c.AssistantID == "" {
+		return nil, errors.New("assistants not configured")
+	}
+
+	// Crear contexto nuevo con timeout específico para addMessage (desacoplado del request HTTP)
+	addMsgCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// CRÍTICO: Guardar solo el mensaje del usuario (pregunta limpia), NO las instrucciones completas
+	if err := c.addMessage(addMsgCtx, threadID, userMessage); err != nil {
+		return nil, err
+	}
+
+	log.Printf("[assist][StreamWithInstructions][start] thread=%s vs=%s user_msg_len=%d instructions_len=%d", 
+		threadID, vectorStoreID, len(userMessage), len(instructions))
+	
+	out := make(chan string, 1)
+	go func() {
+		defer close(out)
+		// Usar las instrucciones completas solo para el run, no se guardan en el thread
+		text, err := c.runAndWaitWithVectorStore(ctx, threadID, instructions, vectorStoreID)
+		if err == nil && text != "" {
+			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
+			out <- text
+		}
+		if err != nil {
+			log.Printf("[assist][StreamWithInstructions][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
+		}
+	}()
+	return out, nil
+}
+
 // runAndWaitWithVectorStore ejecuta un run del assistant con un vector store específico
 func (c *Client) runAndWaitWithVectorStore(ctx context.Context, threadID, instructions, vectorStoreID string) (string, error) {
 	// Usar el método existente que ya maneja todo el polling y la lógica de run
@@ -3070,6 +3106,29 @@ func sanitizePreview(s string) string {
 		s = s[:80] + "..."
 	}
 	return strings.TrimSpace(s)
+}
+
+// cleanAssistantAnnotations elimina anotaciones internas de OpenAI Assistants API
+// que aparecen como 【0†source】 o fileciteturn0fileN en las respuestas.
+// Estas son markers de citación que OpenAI inserta pero no queremos mostrar al usuario.
+func cleanAssistantAnnotations(text string) string {
+	// Patrón 1: 【número†source】 (brackets Unicode + número + dagger + source)
+	re1 := regexp.MustCompile(`【\d+†[^】]*】`)
+	text = re1.ReplaceAllString(text, "")
+
+	// Patrón 2: fileciteturnNfileM (donde N y M son números)
+	re2 := regexp.MustCompile(`fileciteturn\d+file\d+`)
+	text = re2.ReplaceAllString(text, "")
+
+	// Patrón 3: Otros markers comunes de OpenAI
+	re3 := regexp.MustCompile(`\[citation:\d+\]`)
+	text = re3.ReplaceAllString(text, "")
+
+	// Limpiar espacios extras que puedan haber quedado
+	re4 := regexp.MustCompile(`\s{2,}`)
+	text = re4.ReplaceAllString(text, " ")
+
+	return strings.TrimSpace(text)
 }
 
 // translateMedicalQuery traduce queries médicas del español al inglés usando OpenAI

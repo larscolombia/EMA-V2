@@ -55,6 +55,8 @@ type AIClient interface {
 	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
 	SearchPubMed(ctx context.Context, query string) (string, error)
 	StreamAssistantWithSpecificVectorStore(ctx context.Context, threadID, prompt, vectorStoreID string) (<-chan string, error)
+	// Nueva versión que separa userMessage (se guarda en thread) de instructions (temporal para el run)
+	StreamAssistantWithInstructions(ctx context.Context, threadID, userMessage, instructions, vectorStoreID string) (<-chan string, error)
 	// Análisis de imágenes médicas con GPT-4o Vision
 	StreamAssistantMessageWithImage(ctx context.Context, threadID, prompt, imagePath string) (<-chan string, error)
 	// Obtener historial conversacional para enriquecer búsquedas
@@ -248,6 +250,60 @@ func (h *Handler) buildContextualizedQuery(ctx context.Context, threadID, curren
 	return enrichedQuery
 }
 
+// buildConversationContext obtiene los últimos N mensajes del historial como contexto
+// para que el Assistant mantenga coherencia temática sin contaminar las búsquedas vectoriales
+func (h *Handler) buildConversationContext(ctx context.Context, threadID string, limit int) string {
+	messages, err := h.AI.GetThreadMessages(ctx, threadID, limit)
+	if err != nil || len(messages) == 0 {
+		return ""
+	}
+
+	var contextParts []string
+	// Tomar solo los últimos 2-3 intercambios relevantes para contexto compacto
+	count := 0
+	maxContext := 3
+	for i := len(messages) - 1; i >= 0 && count < maxContext; i-- {
+		msg := messages[i]
+		// Solo incluir mensajes de usuario para contexto temático
+		if msg.Role == "user" {
+			content := strings.TrimSpace(msg.Content)
+
+			// Validación básica: ignorar mensajes vacíos o anormalmente largos (errores)
+			// Con StreamAssistantWithInstructions, los mensajes deben ser preguntas cortas (<500 chars típicamente)
+			if content == "" || len(content) > 500 {
+				log.Printf("[conv][buildContext][skip] thread=%s msg_len=%d (too_long_or_empty)", threadID, len(content))
+				continue
+			}
+
+			// Truncar a 150 caracteres para mantener prompt compacto
+			if len(content) > 150 {
+				content = content[:150] + "..."
+			}
+			contextParts = append([]string{fmt.Sprintf("- %s", content)}, contextParts...)
+			count++
+		}
+	}
+
+	if len(contextParts) == 0 {
+		return ""
+	}
+
+	context := fmt.Sprintf("═══ CONTEXTO CONVERSACIONAL PREVIO ═══\n"+
+		"El usuario ha hablado previamente sobre:\n%s\n\n"+
+		"🔴 REGLA CRÍTICA DE COHERENCIA TEMÁTICA:\n"+
+		"Si la nueva pregunta parece genérica o de seguimiento (ej: 'qué pacientes están exentos?', 'cuál es el tratamiento?', 'cuáles son las indicaciones?'), "+
+		"DEBES ASUMIR que se refiere al ÚLTIMO TEMA específico mencionado arriba.\n\n"+
+		"Ejemplos:\n"+
+		"- Contexto previo: 'tumor de Frantz' → Nueva pregunta: 'qué pacientes están exentos de quimioterapia?' → Responde sobre FRANTZ, no sobre oncología general\n"+
+		"- Contexto previo: 'enfermedad de Crohn' → Nueva pregunta: 'cuál es el tratamiento?' → Responde sobre CROHN, no sobre tratamientos generales\n"+
+		"- Contexto previo: 'apendicitis' → Nueva pregunta: 'qué complicaciones puede tener?' → Responde sobre APENDICITIS\n\n"+
+		"⚠️ SOLO responde de forma genérica si el contexto previo está VACÍO o si la nueva pregunta menciona explícitamente un tema NUEVO Y DIFERENTE.\n\n",
+		strings.Join(contextParts, "\n"))
+
+	log.Printf("[conv][buildContext][ok] thread=%s msgs=%d chars=%d", threadID, len(contextParts), len(context))
+	return context
+}
+
 // SmartMessage implementa el flujo mejorado: 1) RAG específico, 2) PubMed fallback, 3) citar fuente
 func (h *Handler) SmartMessage(ctx context.Context, threadID, prompt, focusDocID string, snap TopicSnapshot) (*SmartResponse, error) {
 	resp := &SmartResponse{
@@ -340,21 +396,21 @@ Instrucciones:
 
 	log.Printf("[conv][SmartMessage][hybrid.start] thread=%s target_vector=%s reason=general_question", threadID, targetVectorID)
 
-	// IMPORTANTE: Enriquecer el prompt con contexto conversacional para búsquedas
-	// Esto resuelve el problema de preguntas de seguimiento como "Y cuál sería el tratamiento?"
-	// que necesitan contexto de la pregunta anterior para buscar contenido relevante.
-	searchQuery := h.buildContextualizedQuery(ctx, threadID, prompt)
+	// CRÍTICO: NO enriquecer la búsqueda vectorial con contexto conversacional.
+	// El vector search funciona mejor con queries limpias y específicas.
+	// El contexto conversacional se añadirá DESPUÉS en el prompt al Assistant.
+	// Usar el prompt original tal cual para búsquedas precisas.
 
 	// Timeout aumentado para permitir búsquedas en PubMed que pueden tardar
 	searchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	searchStart := time.Now()
-	vdocs := h.buscarVector(searchCtx, targetVectorID, searchQuery) // Usar query enriquecida
+	vdocs := h.buscarVector(searchCtx, targetVectorID, prompt) // Usar prompt ORIGINAL sin enriquecer
 	vectorTime := time.Since(searchStart)
 
 	pubmedStart := time.Now()
-	pdocs := h.buscarPubMed(searchCtx, searchQuery) // Usar query enriquecida
+	pdocs := h.buscarPubMed(searchCtx, prompt) // Usar prompt ORIGINAL sin enriquecer
 	pubmedTime := time.Since(pubmedStart)
 
 	log.Printf("[conv][SmartMessage][search.timing] thread=%s vector_ms=%d pubmed_ms=%d total_ms=%d",
@@ -410,6 +466,20 @@ Instrucciones:
 	resp.HasVectorContext = vecHas
 	resp.HasPubMedContext = pubHas
 
+	// DIAGNÓSTICO DE RELEVANCIA: detectar si el contenido vectorizado es irrelevante
+	if vecHas && len(vdocs) > 0 {
+		lowerPrompt := strings.ToLower(prompt)
+		lowerContent := strings.ToLower(ctxVec)
+
+		// Casos conocidos de baja relevancia
+		if (strings.Contains(lowerPrompt, "frantz") || strings.Contains(lowerPrompt, "pseudopapilar")) &&
+			!strings.Contains(lowerContent, "frantz") && !strings.Contains(lowerContent, "pseudopapilar") &&
+			!strings.Contains(lowerContent, "páncreas") {
+			log.Printf("[conv][SmartMessage][WARNING] thread=%s vector_irrelevant: query='%s' got_title='%s' - vector store may lack pancreatic oncology content",
+				threadID, sanitizePreview(prompt), vdocs[0].Titulo)
+		}
+	}
+
 	hasValidSourceBook := false
 	for _, d := range vdocs {
 		if strings.TrimSpace(d.Titulo) != "" {
@@ -446,6 +516,10 @@ Instrucciones:
 		log.Printf("[conv][SmartMessage][force_context] thread=%s generated_ctxVec_len=%d", threadID, len(ctxVec))
 	}
 
+	// Obtener contexto conversacional reciente para mantener coherencia temática
+	// Esto ayuda al Assistant a entender de qué se está hablando sin contaminar las búsquedas
+	conversationContext := h.buildConversationContext(ctx, threadID, 4) // Últimos 2 intercambios
+
 	// Determinar modo de integración: solo vector, solo PubMed, o híbrido
 	var integrationMode string
 	if vecHas && pubHas {
@@ -458,7 +532,7 @@ Instrucciones:
 		integrationMode = "pubmed_only"
 		resp.Source = "pubmed"
 	}
-	log.Printf("[conv][SmartMessage][integration] thread=%s mode=%s vecHas=%v pubHas=%v", threadID, integrationMode, vecHas, pubHas)
+	log.Printf("[conv][SmartMessage][integration] thread=%s mode=%s vecHas=%v pubHas=%v has_context=%v", threadID, integrationMode, vecHas, pubHas, conversationContext != "")
 
 	// Construir prompt adaptado al modo de integración
 	var input string
@@ -466,6 +540,7 @@ Instrucciones:
 		// MODO HÍBRIDO: Integrar vector store y PubMed
 		input = fmt.Sprintf(
 			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
 				"Analiza si la pregunta es:\n"+
 				"A) CONSULTA CLÍNICA (caso de paciente): Incluye edad, síntomas, signos, datos demográficos, o primera persona ('Tengo X', 'Me duele Y')\n"+
@@ -488,7 +563,7 @@ Instrucciones:
 				"6. Hipótesis coherentes con demografía\n"+
 				"7. Si pide 'N hipótesis' o 'N signos' → da EXACTAMENTE ese número\n"+
 				"8. Si pide PMIDs → OBLIGATORIO incluirlos\n"+
-				"9. MANTÉN coherencia del caso: NO cambies de tema sin razón\n\n"+
+				"9. MANTÉN coherencia temática: Si el contexto previo habla de un tema específico (ej: 'tumor de Franz'), esta pregunta probablemente se refiere al MISMO tema. NO cambies de tema sin razón explícita\n\n"+
 				"PASO 2 - RESPUESTA AL USUARIO (ESTO SÍ LO MUESTRA):\n"+
 				"Genera una respuesta natural, profesional y completa que incluya:\n"+
 				"- Análisis del cuadro clínico basado en los datos acumulados\n"+
@@ -500,6 +575,9 @@ Instrucciones:
 				"CRÍTICO: NO incluyas el texto '[STATE]' ni 'Demografía:', 'Síntomas clave:', etc. en la respuesta visible.\n"+
 				"La respuesta debe fluir naturalmente como un médico hablando con un colega o paciente.\n\n"+
 				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
+				"🔴 ANTES DE RESPONDER: Revisa el '═══ CONTEXTO CONVERSACIONAL PREVIO ═══' arriba.\n"+
+				"Si hay temas específicos previos (ej: 'tumor de Frantz', 'enfermedad de Crohn') y la pregunta actual es genérica (ej: 'qué pacientes están exentos?', 'cuál es el tratamiento?'),\n"+
+				"DEBES contextualizar tu respuesta al tema previo (ej: responde sobre exenciones de QT en tumor de Frantz, NO sobre QT general).\n\n"+
 				"Responde DIRECTAMENTE sin razonamiento interno:\n"+
 				"- Definición clara y completa\n"+
 				"- Fisiopatología/etiología si es relevante\n"+
@@ -518,28 +596,47 @@ Instrucciones:
 				"4. Si pide PMIDs específicamente → incluye PMID: ###### en cada cita PubMed\n"+
 				"5. Tono profesional, natural y conversacional\n"+
 				"6. NO uses marcadores artificiales como '[Respuesta...]', '[STATE]', etc.\n\n"+
+				"═══ PRIORIDAD DE FUENTES ═══\n"+
+				"CRÍTICO: Cuando hay TANTO libros de texto COMO estudios PubMed disponibles:\n"+
+				"1. PRIORIZA información de LIBROS (son fuentes consolidadas y validadas)\n"+
+				"2. USA PubMed para COMPLEMENTAR con evidencia reciente\n"+
+				"3. SIEMPRE cita AMBAS fuentes cuando ambas están disponibles\n"+
+				"4. NO ignores los libros solo porque PubMed tenga artículos\n\n"+
+				"Ejemplo CORRECTO cuando tienes ambos:\n"+
+				"'Según el Manual Schwartz... [información del libro]. Estudios recientes en PubMed confirman... (PMID: 12345).'\n\n"+
+				"Ejemplo INCORRECTO:\n"+
+				"'[solo citar PubMed ignorando el libro que sí tiene información relevante]'\n\n"+
 				"═══ FORMATO DE CITAS (al final de la respuesta) ═══\n"+
+				"OBLIGATORIO: Si usaste información de LIBROS en el cuerpo de tu respuesta, DEBES citarlos en esta sección.\n"+
+				"NO omitas libros que consultaste - el usuario necesita saber TODAS las fuentes que usaste.\n\n"+
 				"## Fuentes:\n"+
-				"Libros: Apellido, A. (año). *Título del libro* (ed.). Editorial. Capítulo X, pp. Y-Z.\n"+
-				"PubMed: Apellido, A. et al. (año). Título del artículo. *Revista*, vol(núm), pp. PMID: ######\n\n"+
-				"CRÍTICO:\n"+
-				"- Si usuario pidió 'con PMID reales' → OBLIGATORIO incluir PMID: ######\n"+
-				"- Incluye capítulo Y páginas exactas\n"+
-				"- NO cites estudios pediátricos para casos adultos\n"+
-				"- Si pide 'X fuentes' → da EXACTAMENTE ese número\n"+
+				"Libros: [Lista TODOS los libros que consultaste arriba]\n"+
+				"- Formato: Título del libro. (año si disponible). [Libro de texto médico/PDF].\n"+
+				"- Ejemplo: Maingot's Abdominal Operations, 13th Ed. [Libro de texto médico].\n\n"+
+				"PubMed: [Lista TODOS los artículos PubMed proporcionados arriba]\n"+
+				"- Formato: Título del artículo. — Revista (PMID: ######, año)\n"+
+				"- Ejemplo: Gruber-Frantz tumor: a rare pancreatic neoplasm. — Revista española de enfermedades digestivas (PMID: 34689567, 2022)\n\n"+
+				"CRÍTICO - VERIFICACIÓN FINAL:\n"+
+				"✓ ¿Mencionaste datos específicos del libro arriba? → DEBE aparecer en \"Libros:\"\n"+
+				"✓ ¿Mencionaste estudios PubMed? → DEBEN aparecer en \"PubMed:\"\n"+
+				"✓ Si usaste AMBOS → AMBOS deben estar listados\n"+
+				"✓ NO inventes fuentes que no están arriba\n"+
+				"✓ NO omitas fuentes que SÍ usaste\n"+
 				"%s\n",
-			ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
+			conversationContext, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
 			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
 				"A) CONSULTA CLÍNICA: edad, síntomas, signos, o primera persona ('Tengo X', 'Me duele Y')\n"+
 				"B) CONSULTA TEÓRICA: qué es X, tratamiento de Y, fisiopatología de Z\n\n"+
 				"═══ SI ES CONSULTA CLÍNICA (tipo A) ═══\n"+
 				"RAZONAMIENTO INTERNO (NO MUESTRES AL USUARIO):\n"+
 				"Mentalmente construye: Demografía, Síntomas (TODOS), Duración, Signos alarma, 3 Hipótesis con probabilidad, Decisiones previas\n"+
-				"Reglas: ACUMULA datos de todos los mensajes, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios\n\n"+
+				"Reglas: ACUMULA datos de todos los mensajes, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios\n"+
+				"MANTÉN coherencia temática: si contexto habla de tema específico, probablemente esta pregunta se refiere al MISMO tema\n\n"+
 				"RESPUESTA AL USUARIO:\n"+
 				"Respuesta natural, profesional y completa (250-400 palabras) que incluya análisis clínico, hipótesis justificadas, recomendaciones.\n"+
 				"NO incluyas marcadores '[STATE]', 'Demografía:', etc. Fluye naturalmente como un médico hablando.\n\n"+
@@ -553,21 +650,26 @@ Instrucciones:
 				"3. PROHIBIDO conocimiento general\n"+
 				"4. Tono profesional y natural\n"+
 				"5. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
-				"═══ CITAS (al final) ═══\n"+
+				"═══ FORMATO DE CITAS (al final) ═══\n"+
+				"OBLIGATORIO: Si usaste información de LIBROS arriba, DEBES citarlos aquí.\n\n"+
 				"## Fuentes:\n"+
-				"Apellido, A. (año). *Título* (ed.). Cap. X, pp. Y-Z.\n"+
+				"Libros: [Lista TODOS los libros consultados]\n"+
+				"- Formato: Título del libro. (año si disponible). [Libro de texto médico].\n"+
+				"- NO omitas libros que usaste en tu respuesta\n"+
 				"%s\n",
-			ctxVec, prompt, apaInstructions,
+			conversationContext, ctxVec, prompt, apaInstructions,
 		)
 	} else {
 		// MODO PUBMED ONLY
 		input = fmt.Sprintf(
 			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN ═══\n"+
 				"A) CLÍNICA (caso paciente o 'Tengo X') → razonamiento interno + respuesta natural\n"+
 				"B) TEÓRICA (qué es X, tratamiento Y) → respuesta directa\n\n"+
 				"═══ SI ES CLÍNICA (tipo A) ═══\n"+
 				"INTERNO (no muestres): Demografía, Síntomas (TODOS), Signos alarma, 3 Hipótesis con probabilidad\n"+
+				"MANTÉN coherencia temática: si contexto previo habla de tema específico, esta pregunta probablemente se refiere al MISMO tema\n"+
 				"RESPUESTA VISIBLE: Natural, profesional, completa (250-400 palabras). NO uses '[STATE]' ni marcadores.\n\n"+
 				"═══ SI ES TEÓRICA (tipo B) ═══\n"+
 				"Respuesta directa: definición, clínica, tratamiento (200-350 palabras).\n\n"+
@@ -582,7 +684,7 @@ Instrucciones:
 				"═══ CITAS ═══\n"+
 				"## Fuentes:\n"+
 				"Apellido, A. et al. (año). Título. *Revista*, vol(núm), pp. PMID: ######\n",
-			ctxPub, refsBlock, prompt,
+			conversationContext, ctxPub, refsBlock, prompt,
 		)
 	}
 
@@ -598,7 +700,9 @@ Instrucciones:
 		return resp, nil
 	}
 
-	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, input, targetVectorID)
+	// NUEVO: Separar userMessage (pregunta original) de instructions (contexto completo)
+	// Solo el userMessage se guarda en el thread, instructions se usa solo para el run
+	stream, err := h.AI.StreamAssistantWithInstructions(ctx, threadID, prompt, input, targetVectorID)
 	if err != nil {
 		return nil, err
 	}
@@ -614,6 +718,70 @@ Instrucciones:
 		}
 	}
 	return resp, nil
+}
+
+// appendMissingBookSources añade automáticamente libros que se usaron pero no se citaron
+func appendMissingBookSources(response string, vdocs []Documento) string {
+	if len(vdocs) == 0 {
+		return response
+	}
+
+	// Verificar si hay sección "## Fuentes:"
+	if !strings.Contains(response, "## Fuentes:") {
+		return response
+	}
+
+	// Extraer qué libros se citaron
+	citedBooks := make(map[string]bool)
+	lines := strings.Split(response, "\n")
+	inSourcesSection := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "## Fuentes:") {
+			inSourcesSection = true
+			continue
+		}
+		if inSourcesSection {
+			lower := strings.ToLower(line)
+			for _, doc := range vdocs {
+				titleLower := strings.ToLower(doc.Titulo)
+				if titleLower != "" && strings.Contains(lower, titleLower) {
+					citedBooks[doc.Titulo] = true
+				}
+			}
+		}
+	}
+
+	// Construir lista de libros no citados
+	missingBooks := []string{}
+	for _, doc := range vdocs {
+		if strings.TrimSpace(doc.Titulo) == "" {
+			continue
+		}
+		if !citedBooks[doc.Titulo] {
+			missingBooks = append(missingBooks, doc.Titulo)
+		}
+	}
+
+	// Si hay libros faltantes, añadirlos
+	if len(missingBooks) > 0 {
+		log.Printf("[conv][appendMissing] thread detected %d uncited books: %v", len(missingBooks), missingBooks)
+
+		// Buscar dónde insertar (después de "## Fuentes:" o "Libros:")
+		parts := strings.Split(response, "## Fuentes:")
+		if len(parts) == 2 {
+			sourcesSection := parts[1]
+
+			// Insertar libros al inicio de la sección de fuentes
+			addition := "\nLibros:\n"
+			for _, title := range missingBooks {
+				addition += fmt.Sprintf("- %s. [Libro de texto médico].\n", title)
+			}
+
+			return parts[0] + "## Fuentes:" + addition + sourcesSection
+		}
+	}
+
+	return response
 }
 
 // isSmallTalk detecta saludos breves y cortesía sin contenido médico
@@ -802,6 +970,10 @@ func (h *Handler) Message(c *gin.Context) {
 	}
 	if len(resp.PubMedReferences) > 0 {
 		c.Header("X-PubMed-References", strings.Join(resp.PubMedReferences, " | "))
+	}
+	// Enviar títulos de libros consultados como fallback si Assistant no los cita
+	if resp.HasVectorContext && len(resp.AllowedSources) > 0 {
+		c.Header("X-Vector-Books-Used", strings.Join(resp.AllowedSources, " | "))
 	}
 	if len(resp.Topic.Keywords) > 0 {
 		c.Header("X-Topic-Keywords", strings.Join(resp.Topic.Keywords, ","))
@@ -1941,9 +2113,58 @@ func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query stri
 	return out
 }
 
-// buscarVector mantiene compatibilidad - ahora usa buscarVectorConFuentes
+// expandMedicalQuery expande queries médicas con sinónimos y variantes conocidas
+// para mejorar el recall en búsquedas vectoriales
+func expandMedicalQuery(query string) string {
+	lower := strings.ToLower(query)
+
+	// Diccionario de expansiones médicas conocidas
+	// Formato: "término principal" → [sinónimos, variantes, nombres alternativos]
+	expansions := map[string][]string{
+		// Tumores pancreáticos
+		"frantz":          {"tumor sólido pseudopapilar", "neoplasia de Frantz", "Gruber-Frantz", "solid pseudopapillary neoplasm", "SPN pancreas"},
+		"tumor de frantz": {"tumor sólido pseudopapilar", "neoplasia de Frantz", "Gruber-Frantz", "solid pseudopapillary neoplasm"},
+		"pseudopapilar":   {"Frantz", "solid pseudopapillary", "SPN"},
+
+		// Enfermedades inflamatorias intestinales
+		"crohn":            {"enfermedad de Crohn", "ileítis regional", "enteritis regional", "Crohn disease"},
+		"colitis ulcerosa": {"colitis ulcerativa", "proctocolitis ulcerosa", "ulcerative colitis"},
+		"eii":              {"enfermedad inflamatoria intestinal", "IBD", "Crohn", "colitis ulcerosa"},
+
+		// Síndromes y condiciones con epónimos
+		"whipple":   {"lipodistrofia intestinal", "Whipple disease", "enfermedad de Whipple"},
+		"zollinger": {"síndrome de Zollinger-Ellison", "ZES", "gastrinoma"},
+		"barrett":   {"esófago de Barrett", "metaplasia de Barrett", "Barrett esophagus"},
+		"cushing":   {"síndrome de Cushing", "hipercortisolismo", "Cushing syndrome"},
+
+		// Tumores con nombres alternativos
+		"gist":       {"tumor estromal gastrointestinal", "gastrointestinal stromal tumor", "sarcoma estromal"},
+		"carcinoide": {"tumor neuroendocrino", "NET", "neuroendocrine tumor"},
+
+		// Procedimientos quirúrgicos con epónimos
+		"billroth": {"gastrectomía de Billroth", "Billroth I", "Billroth II", "gastrojejunostomía"},
+		"roux":     {"Roux-en-Y", "anastomosis en Y de Roux", "derivación Roux"},
+		"hartmann": {"procedimiento de Hartmann", "colostomía de Hartmann", "Hartmann procedure"},
+	}
+
+	// Buscar si algún término clave está presente
+	for key, synonyms := range expansions {
+		if strings.Contains(lower, key) {
+			// Expandir con sinónimos para búsqueda más amplia
+			expanded := query + " OR " + strings.Join(synonyms, " OR ")
+			log.Printf("[conv][expandQuery] original=\"%s\" expanded_with=%d_synonyms", query, len(synonyms))
+			return expanded
+		}
+	}
+
+	return query
+}
+
+// buscarVector mantiene compatibilidad - ahora usa buscarVectorConFuentes con expansión automática
 func (h *Handler) buscarVector(ctx context.Context, vectorID, query string) []Documento {
-	return h.buscarVectorConFuentes(ctx, vectorID, query)
+	// Expandir query con sinónimos médicos antes de buscar
+	expandedQuery := expandMedicalQuery(query)
+	return h.buscarVectorConFuentes(ctx, vectorID, expandedQuery)
 }
 
 // truncatePreview helper para logs
