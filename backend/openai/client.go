@@ -3066,9 +3066,9 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 		return nil, err
 	}
 
-	log.Printf("[assist][StreamWithInstructions][start] thread=%s vs=%s user_msg_len=%d instructions_len=%d", 
+	log.Printf("[assist][StreamWithInstructions][start] thread=%s vs=%s user_msg_len=%d instructions_len=%d",
 		threadID, vectorStoreID, len(userMessage), len(instructions))
-	
+
 	out := make(chan string, 1)
 	go func() {
 		defer close(out)
