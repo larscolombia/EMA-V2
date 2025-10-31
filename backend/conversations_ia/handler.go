@@ -565,26 +565,35 @@ Instrucciones:
 				"8. Si pide PMIDs → OBLIGATORIO incluirlos\n"+
 				"9. MANTÉN coherencia temática: Si el contexto previo habla de un tema específico (ej: 'tumor de Franz'), esta pregunta probablemente se refiere al MISMO tema. NO cambies de tema sin razón explícita\n\n"+
 				"PASO 2 - RESPUESTA AL USUARIO (ESTO SÍ LO MUESTRA):\n"+
-				"Genera una respuesta natural, profesional y completa que incluya:\n"+
-				"- Análisis del cuadro clínico basado en los datos acumulados\n"+
-				"- Hipótesis diferenciales con justificación (número solicitado o 3 por defecto)\n"+
-				"- Signos de alarma relevantes (si los piden)\n"+
-				"- Recomendaciones diagnósticas/terapéuticas según corresponda\n"+
-				"- Tono médico profesional pero accesible\n"+
-				"- Extensión adecuada (250-400 palabras, ajustable según complejidad)\n\n"+
-				"CRÍTICO: NO incluyas el texto '[STATE]' ni 'Demografía:', 'Síntomas clave:', etc. en la respuesta visible.\n"+
-				"La respuesta debe fluir naturalmente como un médico hablando con un colega o paciente.\n\n"+
+				"Genera una respuesta MÉDICO-A-MÉDICO con las siguientes características:\n"+
+				"- Lenguaje técnico y preciso (usa terminología médica estándar sin simplificar)\n"+
+				"- Análisis clínico estructurado basado en los datos acumulados\n"+
+				"- Hipótesis diferenciales con justificación fisiopatológica (número solicitado o 3 por defecto)\n"+
+				"- Signos de alarma (banderas rojas) relevantes si los piden\n"+
+				"- Recomendaciones diagnósticas/terapéuticas específicas con nivel de evidencia\n"+
+				"- Tono: PROFESIONAL y TÉCNICO (dirigido a médicos, NO a pacientes)\n"+
+				"- Extensión: 300-500 palabras (ajustable según complejidad)\n\n"+
+				"ESTRUCTURA RECOMENDADA:\n"+
+				"1. **Análisis del Cuadro Clínico**: Síntesis de hallazgos clave\n"+
+				"2. **Diagnósticos Diferenciales**: Lista numerada con justificación\n"+
+				"3. **Recomendaciones**: Estudios complementarios y manejo\n\n"+
+				"CRÍTICO: NO incluyas '[STATE]', 'Demografía:', etc. en respuesta visible. Fluye como discusión entre colegas.\n\n"+
 				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
 				"🔴 ANTES DE RESPONDER: Revisa el '═══ CONTEXTO CONVERSACIONAL PREVIO ═══' arriba.\n"+
 				"Si hay temas específicos previos (ej: 'tumor de Frantz', 'enfermedad de Crohn') y la pregunta actual es genérica (ej: 'qué pacientes están exentos?', 'cuál es el tratamiento?'),\n"+
 				"DEBES contextualizar tu respuesta al tema previo (ej: responde sobre exenciones de QT en tumor de Frantz, NO sobre QT general).\n\n"+
-				"Responde DIRECTAMENTE sin razonamiento interno:\n"+
-				"- Definición clara y completa\n"+
-				"- Fisiopatología/etiología si es relevante\n"+
-				"- Manifestaciones clínicas típicas\n"+
-				"- Diagnóstico y tratamiento estándar\n"+
-				"- Extensión adecuada (200-350 palabras)\n"+
-				"- Tono profesional y educativo\n\n"+
+				"TONO: MÉDICO-A-MÉDICO (técnico, preciso, sin simplificaciones para pacientes)\n\n"+
+				"ESTRUCTURA DE RESPUESTA:\n"+
+				"1. **Definición/Concepto**: Definición precisa con terminología médica estándar\n"+
+				"2. **Fisiopatología**: Mecanismos etiopatogénicos relevantes (si aplica)\n"+
+				"3. **Manifestaciones Clínicas**: Presentación típica, variantes, complicaciones\n"+
+				"4. **Diagnóstico**: Criterios diagnósticos, estudios complementarios con sensibilidad/especificidad\n"+
+				"5. **Tratamiento**: Algoritmos terapéuticos actuales, nivel de evidencia, alternativas\n\n"+
+				"REQUISITOS:\n"+
+				"- Extensión: 300-500 palabras (proporcional a complejidad)\n"+
+				"- Usa nomenclatura médica internacional (ICD, TNM, WHO, etc.)\n"+
+				"- Menciona guías clínicas relevantes (ACC/AHA, NCCN, ESMO, etc.)\n"+
+				"- Cita evidencia con nivel (Ia, Ib, IIa, etc.) cuando sea relevante\n\n"+
 				"Contexto (Biblioteca Médica - Libros de Texto Especializados):\n%s\n\n"+
 				"Contexto (PubMed - Literatura Científica Reciente ≥2020):\n%s\n\n"+
 				"Referencias PubMed:\n%s\n\n"+
@@ -606,22 +615,27 @@ Instrucciones:
 				"'Según el Manual Schwartz... [información del libro]. Estudios recientes en PubMed confirman... (PMID: 12345).'\n\n"+
 				"Ejemplo INCORRECTO:\n"+
 				"'[solo citar PubMed ignorando el libro que sí tiene información relevante]'\n\n"+
-				"═══ FORMATO DE CITAS (al final de la respuesta) ═══\n"+
-				"OBLIGATORIO: Si usaste información de LIBROS en el cuerpo de tu respuesta, DEBES citarlos en esta sección.\n"+
-				"NO omitas libros que consultaste - el usuario necesita saber TODAS las fuentes que usaste.\n\n"+
-				"## Fuentes:\n"+
-				"Libros: [Lista TODOS los libros que consultaste arriba]\n"+
-				"- Formato: Título del libro. (año si disponible). [Libro de texto médico/PDF].\n"+
-				"- Ejemplo: Maingot's Abdominal Operations, 13th Ed. [Libro de texto médico].\n\n"+
-				"PubMed: [Lista TODOS los artículos PubMed proporcionados arriba]\n"+
-				"- Formato: Título del artículo. — Revista (PMID: ######, año)\n"+
-				"- Ejemplo: Gruber-Frantz tumor: a rare pancreatic neoplasm. — Revista española de enfermedades digestivas (PMID: 34689567, 2022)\n\n"+
+				"═══ BIBLIOGRAFÍA (CRÍTICO - FORMATO VISUAL MEJORADO) ═══\n"+
+				"OBLIGATORIO: Si usaste información de LIBROS o PubMed arriba, DEBES citarlos en esta sección.\n"+
+				"NO omitas fuentes que consultaste - el usuario necesita ver TODAS las referencias.\n\n"+
+				"## Fuentes\n\n"+
+				"### 📚 Libros de Texto Médico\n"+
+				"[Si usaste libros arriba, lista TODOS aquí]\n"+
+				"- Formato: **Título del libro.** (año). [Libro de texto médico/PDF].\n"+
+				"- Ejemplo: **Maingot's Abdominal Operations, 13th Ed.** (2019). [Libro de texto médico].\n"+
+				"- Cada libro en una línea separada con viñeta (-).\n\n"+
+				"### 🔬 Literatura Científica (PubMed)\n"+
+				"[Si usaste artículos PubMed arriba, lista TODOS aquí]\n"+
+				"- Formato: **Título del artículo.** — *Revista* (PMID: ######, año).\n"+
+				"- Ejemplo: **Gruber-Frantz tumor: a rare pancreatic neoplasm.** — *Revista española de enfermedades digestivas* (PMID: 34689567, 2022).\n"+
+				"- Cada artículo en una línea separada con viñeta (-).\n\n"+
 				"CRÍTICO - VERIFICACIÓN FINAL:\n"+
-				"✓ ¿Mencionaste datos específicos del libro arriba? → DEBE aparecer en \"Libros:\"\n"+
-				"✓ ¿Mencionaste estudios PubMed? → DEBEN aparecer en \"PubMed:\"\n"+
-				"✓ Si usaste AMBOS → AMBOS deben estar listados\n"+
+				"✓ ¿Mencionaste datos específicos del libro arriba? → DEBE aparecer en \"📚 Libros\"\n"+
+				"✓ ¿Mencionaste estudios PubMed? → DEBEN aparecer en \"🔬 Literatura Científica\"\n"+
+				"✓ Si usaste AMBOS → AMBAS secciones deben existir\n"+
 				"✓ NO inventes fuentes que no están arriba\n"+
 				"✓ NO omitas fuentes que SÍ usaste\n"+
+				"✓ USA formato Markdown con **negritas** para títulos e *itálicas* para revistas\n"+
 				"%s\n",
 			conversationContext, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
@@ -637,25 +651,29 @@ Instrucciones:
 				"Mentalmente construye: Demografía, Síntomas (TODOS), Duración, Signos alarma, 3 Hipótesis con probabilidad, Decisiones previas\n"+
 				"Reglas: ACUMULA datos de todos los mensajes, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios\n"+
 				"MANTÉN coherencia temática: si contexto habla de tema específico, probablemente esta pregunta se refiere al MISMO tema\n\n"+
-				"RESPUESTA AL USUARIO:\n"+
-				"Respuesta natural, profesional y completa (250-400 palabras) que incluya análisis clínico, hipótesis justificadas, recomendaciones.\n"+
-				"NO incluyas marcadores '[STATE]', 'Demografía:', etc. Fluye naturalmente como un médico hablando.\n\n"+
+				"RESPUESTA AL USUARIO (MÉDICO-A-MÉDICO):\n"+
+				"Lenguaje técnico, terminología médica precisa, tono profesional dirigido a médicos.\n"+
+				"Estructura: Análisis clínico + Diagnósticos diferenciales + Recomendaciones (300-500 palabras).\n"+
+				"NO incluyas marcadores '[STATE]', 'Demografía:', etc. Fluye como discusión entre colegas.\n\n"+
 				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
-				"Respuesta directa: definición, fisiopatología, clínica, diagnóstico, tratamiento (200-350 palabras).\n\n"+
+				"TONO: MÉDICO-A-MÉDICO (técnico, preciso, sin simplificaciones).\n"+
+				"Estructura: Definición + Fisiopatología + Manifestaciones + Diagnóstico + Tratamiento (300-500 palabras).\n"+
+				"Usa nomenclatura médica internacional, menciona guías clínicas relevantes.\n\n"+
 				"Contexto (Biblioteca Médica):\n%s\n\n"+
 				"Pregunta del usuario:\n%s\n\n"+
 				"═══ REGLAS GENERALES ═══\n"+
-				"1. Respuestas completas y bien desarrolladas\n"+
+				"1. Respuestas completas y técnicamente precisas\n"+
 				"2. SOLO información de la Biblioteca Médica\n"+
 				"3. PROHIBIDO conocimiento general\n"+
-				"4. Tono profesional y natural\n"+
+				"4. Tono: PROFESIONAL MÉDICO (no para pacientes)\n"+
 				"5. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
-				"═══ FORMATO DE CITAS (al final) ═══\n"+
-				"OBLIGATORIO: Si usaste información de LIBROS arriba, DEBES citarlos aquí.\n\n"+
-				"## Fuentes:\n"+
-				"Libros: [Lista TODOS los libros consultados]\n"+
-				"- Formato: Título del libro. (año si disponible). [Libro de texto médico].\n"+
-				"- NO omitas libros que usaste en tu respuesta\n"+
+				"═══ BIBLIOGRAFÍA ═══\n"+
+				"OBLIGATORIO: Si usaste libros arriba, DEBES citarlos aquí.\n\n"+
+				"## Fuentes\n\n"+
+				"### 📚 Libros de Texto Médico\n"+
+				"- Formato: **Título del libro.** (año). [Libro de texto médico].\n"+
+				"- Lista TODOS los libros que usaste con viñetas (-).\n"+
+				"- USA **negritas** para títulos.\n"+
 				"%s\n",
 			conversationContext, ctxVec, prompt, apaInstructions,
 		)
@@ -665,25 +683,33 @@ Instrucciones:
 			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
 				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN ═══\n"+
-				"A) CLÍNICA (caso paciente o 'Tengo X') → razonamiento interno + respuesta natural\n"+
-				"B) TEÓRICA (qué es X, tratamiento Y) → respuesta directa\n\n"+
+				"A) CLÍNICA (caso paciente o 'Tengo X') → razonamiento interno + respuesta MÉDICO-A-MÉDICO\n"+
+				"B) TEÓRICA (qué es X, tratamiento Y) → respuesta directa TÉCNICA\n\n"+
 				"═══ SI ES CLÍNICA (tipo A) ═══\n"+
 				"INTERNO (no muestres): Demografía, Síntomas (TODOS), Signos alarma, 3 Hipótesis con probabilidad\n"+
 				"MANTÉN coherencia temática: si contexto previo habla de tema específico, esta pregunta probablemente se refiere al MISMO tema\n"+
-				"RESPUESTA VISIBLE: Natural, profesional, completa (250-400 palabras). NO uses '[STATE]' ni marcadores.\n\n"+
+				"RESPUESTA VISIBLE (MÉDICO-A-MÉDICO): Lenguaje técnico, terminología médica precisa, tono profesional.\n"+
+				"Estructura: Análisis clínico + Diagnósticos diferenciales + Recomendaciones (300-500 palabras).\n"+
+				"NO uses '[STATE]' ni marcadores. Fluye como discusión entre colegas.\n\n"+
 				"═══ SI ES TEÓRICA (tipo B) ═══\n"+
-				"Respuesta directa: definición, clínica, tratamiento (200-350 palabras).\n\n"+
+				"TONO: MÉDICO-A-MÉDICO (técnico, preciso, sin simplificaciones).\n"+
+				"Estructura: Definición + Fisiopatología + Manifestaciones + Diagnóstico + Tratamiento (300-500 palabras).\n"+
+				"Usa nomenclatura médica internacional, menciona guías clínicas.\n\n"+
 				"Contexto (PubMed ≥2020):\n%s\n\n"+
 				"Referencias:\n%s\n\n"+
 				"Pregunta:\n%s\n\n"+
 				"═══ REGLAS ═══\n"+
-				"1. Respuestas completas y naturales\n"+
+				"1. Respuestas completas y técnicamente precisas\n"+
 				"2. SOLO evidencia de PubMed\n"+
 				"3. Si pide PMIDs → incluye PMID: ###### en CADA cita\n"+
-				"4. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
-				"═══ CITAS ═══\n"+
-				"## Fuentes:\n"+
-				"Apellido, A. et al. (año). Título. *Revista*, vol(núm), pp. PMID: ######\n",
+				"4. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n"+
+				"5. Tono: PROFESIONAL MÉDICO (no para pacientes)\n\n"+
+				"═══ BIBLIOGRAFÍA ═══\n"+
+				"## Fuentes\n\n"+
+				"### 🔬 Literatura Científica (PubMed)\n"+
+				"- Formato: **Título del artículo.** — *Revista* (PMID: ######, año).\n"+
+				"- Lista TODOS los artículos que usaste con viñetas (-).\n"+
+				"- USA **negritas** para títulos e *itálicas* para revistas.\n",
 			conversationContext, ctxPub, refsBlock, prompt,
 		)
 	}

@@ -208,16 +208,35 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
         caseSensitive: false,
       ),
       (match) => '. *(PMID: ${match.group(1)})* ',
-    ); // 11. Fix missing spaces after ## in headers
-    processed = processed.replaceAll(RegExp(r'##([^\s#])'), '## \$1');
+    );
+
+    // 11. Fix missing spaces after ## in headers
+    processed = processed.replaceAll(RegExp(r'##([^\s#])'), r'## $1');
 
     // 11.1. Also ensure proper line breaks before headers
-    processed = processed.replaceAll(RegExp(r'([^\n])(\n## )'), '\$1\n\n\$2');
+    processed = processed.replaceAll(RegExp(r'([^\n])(\n## )'), r'$1' '\n\n' r'$2');
 
     // 11.2. Ensure proper spacing around all headers
     processed = processed.replaceAllMapped(
       RegExp(r'^(#{1,6})\s*(.+)$', multiLine: true),
       (match) => '${match.group(1)} ${match.group(2)}',
+    );
+
+    // 11.3. Procesar secciones de bibliografía con emojis (nuevo formato backend)
+    // Convertir "### 📚 Libros de Texto Médico" a formato más legible
+    processed = processed.replaceAll(
+      RegExp(r'###\s*📚\s*Libros de Texto Médico', caseSensitive: false),
+      '### 📚 Libros de Texto Médico',
+    );
+    processed = processed.replaceAll(
+      RegExp(r'###\s*🔬\s*Literatura Científica.*?(?:PubMed)?', caseSensitive: false),
+      '### 🔬 Literatura Científica (PubMed)',
+    );
+
+    // 11.4. Asegurar espaciado correcto antes de secciones de bibliografía
+    processed = processed.replaceAll(
+      RegExp(r'([^\n])\n(###\s*[📚🔬])'),
+      r'$1' '\n\n' r'$2',
     );
 
     // 12. Clean up excessive whitespace but preserve paragraph breaks

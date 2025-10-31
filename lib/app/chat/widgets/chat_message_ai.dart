@@ -64,6 +64,26 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     return buf.join(' ');
   }
 
+  // Determina el icono apropiado según el tipo de fuente
+  IconData _getSourceIcon(String source) {
+    final s = source.toLowerCase();
+    if (s.contains('pmid')) {
+      return Icons.science_outlined; // Artículo científico
+    } else if (s.contains('.pdf') || s.contains('[pdf]')) {
+      return Icons.picture_as_pdf_outlined; // PDF
+    } else if (s.contains('libro') ||
+        s.contains('manual') ||
+        s.contains('schwartz') ||
+        s.contains('harrison') ||
+        s.contains('maingot')) {
+      return Icons.menu_book_outlined; // Libro
+    } else if (s.contains('http')) {
+      return Icons.link_outlined; // URL
+    } else {
+      return Icons.article_outlined; // Genérico
+    }
+  }
+
   // Convierte una fuente genérica a un formato APA aproximado, sin inventar autores/revistas.
   // Reglas:
   // - "Título (PMID: 123456, 2023)" -> "Título. (2023). PubMed. https://pubmed.ncbi.nlm.nih.gov/123456/"
@@ -332,71 +352,98 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                   ),
                 ),
 
-                // Mostrar fuentes si están disponibles
+                // Mostrar fuentes si están disponibles con diseño mejorado
                 if (_extractSources(widget.message.text).isNotEmpty)
                   Container(
                     margin: const EdgeInsets.only(
-                      left: 16,
-                      right: 16,
-                      bottom: 8,
+                      left: 12,
+                      right: 12,
+                      bottom: 12,
+                      top: 8,
                     ),
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.15),
+                        width: 1,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Header de fuentes
                         Row(
                           children: [
-                            Icon(Icons.source, color: Colors.white70, size: 16),
-                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(
+                                Icons.menu_book_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
                             Text(
-                              'Fuentes',
+                              'Bibliografía',
                               style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.3,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 12),
+                        // Separador
+                        Container(
+                          height: 1,
+                          color: Colors.white.withOpacity(0.1),
+                        ),
+                        const SizedBox(height: 12),
+                        // Lista de fuentes
                         ..._extractSources(widget.message.text).map(
                           (source) => Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(8),
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(6),
+                              color: Colors.black.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.1),
+                                color: Colors.white.withOpacity(0.08),
                                 width: 0.5,
                               ),
                             ),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // Icono según tipo de fuente
                                 Padding(
                                   padding: const EdgeInsets.only(
                                     top: 2,
-                                    right: 8,
+                                    right: 10,
                                   ),
                                   child: Icon(
-                                    Icons.article_outlined,
-                                    color: Colors.white54,
-                                    size: 14,
+                                    _getSourceIcon(source),
+                                    color: Colors.white60,
+                                    size: 16,
                                   ),
                                 ),
+                                // Contenido de la fuente
                                 Expanded(
                                   child: Text(
                                     _toApa(source),
                                     style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 11.5,
-                                      height: 1.4,
-                                      fontStyle: FontStyle.italic,
+                                      color: Colors.white.withOpacity(0.85),
+                                      fontSize: 12,
+                                      height: 1.5,
+                                      letterSpacing: 0.2,
                                     ),
                                   ),
                                 ),
