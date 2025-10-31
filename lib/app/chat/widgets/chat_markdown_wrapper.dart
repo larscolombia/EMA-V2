@@ -214,7 +214,12 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAll(RegExp(r'##([^\s#])'), r'## $1');
 
     // 11.1. Also ensure proper line breaks before headers
-    processed = processed.replaceAll(RegExp(r'([^\n])(\n## )'), r'$1' '\n\n' r'$2');
+    processed = processed.replaceAll(
+      RegExp(r'([^\n])(\n## )'),
+      r'$1'
+      '\n\n'
+      r'$2',
+    );
 
     // 11.2. Ensure proper spacing around all headers
     processed = processed.replaceAllMapped(
@@ -229,14 +234,19 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
       '### 📚 Libros de Texto Médico',
     );
     processed = processed.replaceAll(
-      RegExp(r'###\s*🔬\s*Literatura Científica.*?(?:PubMed)?', caseSensitive: false),
+      RegExp(
+        r'###\s*🔬\s*Literatura Científica.*?(?:PubMed)?',
+        caseSensitive: false,
+      ),
       '### 🔬 Literatura Científica (PubMed)',
     );
 
     // 11.4. Asegurar espaciado correcto antes de secciones de bibliografía
     processed = processed.replaceAll(
       RegExp(r'([^\n])\n(###\s*[📚🔬])'),
-      r'$1' '\n\n' r'$2',
+      r'$1'
+      '\n\n'
+      r'$2',
     );
 
     // 12. Clean up excessive whitespace but preserve paragraph breaks
