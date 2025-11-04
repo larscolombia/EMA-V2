@@ -657,6 +657,72 @@ func (c *Client) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID st
 	return c.pollVectorStoreFileIndexed(ctx, vsID, fileID, timeout)
 }
 
+// emitMarkdownChunks divide texto largo en chunks lógicos (headers, párrafos)
+// para simular streaming y permitir que normalizeMarkdownToken() procese correctamente.
+// Estrategia: dividir por headers markdown (##, ###) y enviar cada sección como chunk.
+func emitMarkdownChunks(out chan<- string, text string) {
+	if text == "" {
+		return
+	}
+
+	// Regex para detectar headers markdown: lineas que empiezan con # (1-6)
+	// Capturamos el header + contenido hasta el siguiente header o fin de texto
+	headerPattern := regexp.MustCompile(`(?m)(^#{1,6}\s+[^\n]+)`)
+	
+	// Encontrar todas las posiciones de headers
+	matches := headerPattern.FindAllStringIndex(text, -1)
+	
+	if len(matches) == 0 {
+		// Sin headers, enviar todo de una vez
+		out <- text
+		return
+	}
+
+	// Enviar chunks: desde inicio hasta primer header, luego entre headers
+	lastEnd := 0
+	for i, match := range matches {
+		start, end := match[0], match[1]
+		
+		// Contenido antes de este header
+		if start > lastEnd {
+			chunk := text[lastEnd:start]
+			if strings.TrimSpace(chunk) != "" {
+				out <- chunk
+			}
+		}
+		
+		// El header mismo
+		headerLine := text[start:end]
+		out <- headerLine
+		
+		// Contenido después del header hasta el siguiente (o fin)
+		contentStart := end
+		var contentEnd int
+		if i+1 < len(matches) {
+			contentEnd = matches[i+1][0]
+		} else {
+			contentEnd = len(text)
+		}
+		
+		if contentEnd > contentStart {
+			content := text[contentStart:contentEnd]
+			if strings.TrimSpace(content) != "" {
+				out <- content
+			}
+		}
+		
+		lastEnd = contentEnd
+	}
+	
+	// Contenido final si queda algo
+	if lastEnd < len(text) {
+		remaining := text[lastEnd:]
+		if strings.TrimSpace(remaining) != "" {
+			out <- remaining
+		}
+	}
+}
+
 // UploadAssistantFile uploads a file with purpose=assistants; caches per-thread by sha256
 func (c *Client) UploadAssistantFile(ctx context.Context, threadID, filePath string) (string, error) {
 	if c.key == "" {
@@ -1838,7 +1904,9 @@ NO uses razonamiento interno visible.
 				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
 				os.WriteFile(tmpFile, []byte(text), 0644)
 			}
-			out <- text
+			// CRÍTICO: Enviar texto en chunks simulando streaming para que normalizeMarkdownToken()
+			// en sseStream() pueda añadir saltos de línea correctamente entre headers y contenido
+			emitMarkdownChunks(out, text)
 		}
 		if err != nil {
 			log.Printf("[assist][StreamAssistantMessage][error] thread=%s err=%v", threadID, err)
@@ -3100,7 +3168,8 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 		text, err := c.runAndWaitWithVectorStore(ctx, threadID, prompt, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithSpecificVector][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			out <- text
+			// CRÍTICO: Enviar en chunks para normalización markdown correcta
+			emitMarkdownChunks(out, text)
 		}
 		if err != nil {
 			log.Printf("[assist][StreamWithSpecificVector][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
@@ -3143,57 +3212,8 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 		text, err := c.runAndWaitWithVectorStore(runCtx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			// CRÍTICO: Enviar chunks respetando integridad de headers Markdown
-			// NUNCA cortar un header en medio (ej: "## R" + "esumen")
-			lines := strings.Split(text, "\n")
-			currentChunk := ""
-			maxChunkSize := 300 // Aumentado para mejor contexto
-
-			for i := 0; i < len(lines); i++ {
-				line := lines[i]
-				trimmed := strings.TrimSpace(line)
-				isHeader := strings.HasPrefix(trimmed, "#")
-
-				// REGLA 1: Si es header, enviarlo completo como unidad atómica
-				// junto con la línea siguiente (contexto) para evitar "## R" + "esumen"
-				if isHeader {
-					// Enviar chunk acumulado antes del header
-					if currentChunk != "" {
-						out <- currentChunk
-						currentChunk = ""
-					}
-
-					// Header + siguiente línea como bloque indivisible
-					headerChunk := line
-					if i+1 < len(lines) {
-						nextLine := strings.TrimSpace(lines[i+1])
-						// Solo incluir siguiente si no es otro header
-						if !strings.HasPrefix(nextLine, "#") && nextLine != "" {
-							headerChunk += "\n" + lines[i+1]
-							i++ // Saltar línea ya procesada
-						}
-					}
-					out <- headerChunk
-					continue
-				}
-
-				// REGLA 2: Para líneas normales, acumular hasta maxChunkSize
-				if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > maxChunkSize {
-					out <- currentChunk
-					currentChunk = ""
-				}
-
-				// Añadir línea al chunk
-				if currentChunk != "" {
-					currentChunk += "\n"
-				}
-				currentChunk += line
-			}
-
-			// Enviar contenido restante
-			if currentChunk != "" {
-				out <- currentChunk
-			}
+			// CRÍTICO: Enviar en chunks para normalización markdown correcta
+			emitMarkdownChunks(out, text)
 		}
 		if err != nil {
 			log.Printf("[assist][StreamWithInstructions][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
