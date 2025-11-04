@@ -521,8 +521,12 @@ Instrucciones:
 
 	// Obtener contexto conversacional reciente para mantener coherencia temática
 	// Esto ayuda al Assistant a entender de qué se está hablando sin contaminar las búsquedas
+	// CRÍTICO: Usar contexto independiente con timeout generoso para evitar que el contexto HTTP
+	// (que puede tener timeouts más cortos) cancele esta operación
 	contextStart := time.Now()
-	conversationContext := h.buildConversationContext(ctx, threadID, 4) // Últimos 2 intercambios
+	contextFetchCtx, contextCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer contextCancel()
+	conversationContext := h.buildConversationContext(contextFetchCtx, threadID, 4) // Últimos 2 intercambios
 	log.Printf("[conv][SmartMessage][context_timing] thread=%s elapsed_ms=%d", threadID, time.Since(contextStart).Milliseconds())
 
 	// Determinar modo de integración: solo vector, solo PubMed, o híbrido
