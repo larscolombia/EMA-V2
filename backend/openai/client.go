@@ -3076,37 +3076,54 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 		text, err := c.runAndWaitWithVectorStore(ctx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			// CRÍTICO: Enviar el texto en chunks inteligentes respetando Markdown
-			// Dividir por líneas para no romper elementos Markdown
+			// CRÍTICO: Enviar chunks respetando integridad de headers Markdown
+			// NUNCA cortar un header en medio (ej: "## R" + "esumen")
 			lines := strings.Split(text, "\n")
 			currentChunk := ""
-			maxChunkSize := 200 // Caracteres por chunk (más grande para mantener contexto)
+			maxChunkSize := 300 // Aumentado para mejor contexto
 
-			for _, line := range lines {
-				// Si añadir esta línea excede el tamaño, enviar chunk actual
+			for i := 0; i < len(lines); i++ {
+				line := lines[i]
+				trimmed := strings.TrimSpace(line)
+				isHeader := strings.HasPrefix(trimmed, "#")
+
+				// REGLA 1: Si es header, enviarlo completo como unidad atómica
+				// junto con la línea siguiente (contexto) para evitar "## R" + "esumen"
+				if isHeader {
+					// Enviar chunk acumulado antes del header
+					if currentChunk != "" {
+						out <- currentChunk
+						currentChunk = ""
+					}
+
+					// Header + siguiente línea como bloque indivisible
+					headerChunk := line
+					if i+1 < len(lines) {
+						nextLine := strings.TrimSpace(lines[i+1])
+						// Solo incluir siguiente si no es otro header
+						if !strings.HasPrefix(nextLine, "#") && nextLine != "" {
+							headerChunk += "\n" + lines[i+1]
+							i++ // Saltar línea ya procesada
+						}
+					}
+					out <- headerChunk
+					continue
+				}
+
+				// REGLA 2: Para líneas normales, acumular hasta maxChunkSize
 				if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > maxChunkSize {
 					out <- currentChunk
 					currentChunk = ""
 				}
 
-				// Añadir línea al chunk actual
+				// Añadir línea al chunk
 				if currentChunk != "" {
 					currentChunk += "\n"
 				}
 				currentChunk += line
-
-				// Enviar inmediatamente si es un header o elemento importante
-				if strings.HasPrefix(strings.TrimSpace(line), "#") ||
-					strings.HasPrefix(strings.TrimSpace(line), "##") ||
-					strings.HasPrefix(strings.TrimSpace(line), "###") {
-					if currentChunk != "" {
-						out <- currentChunk
-						currentChunk = ""
-					}
-				}
 			}
 
-			// Enviar cualquier contenido restante
+			// Enviar contenido restante
 			if currentChunk != "" {
 				out <- currentChunk
 			}

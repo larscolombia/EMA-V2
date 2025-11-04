@@ -45,6 +45,8 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
   }
 
   /// Processes raw medical content into well-formatted Markdown
+  /// SIMPLIFICADO: La librería flutter_streaming_text_markdown maneja Markdown nativamente.
+  /// Solo limpiamos artefactos y aseguramos formato básico.
   String _processRawContent(String rawContent) {
     if (rawContent.trim().isEmpty) return rawContent;
 
@@ -53,302 +55,52 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // 1. Convert literal \n to actual line breaks
     processed = processed.replaceAll('\\n', '\n');
 
-    // 1.1. CRÍTICO: Separar headers Markdown que lleguen pegados del backend
-    // Patrón: "texto## Header" -> "texto\n\n## Header"
-    // MEJORADO: Aplicar ANTES de cualquier otro procesamiento
+    // 2. Asegurar doble salto ANTES de headers si están pegados al texto
+    // "texto## Header" → "texto\n\n## Header"
     processed = processed.replaceAllMapped(
-      RegExp(r'([^\n])(#{1,6})\s+', multiLine: true),
+      RegExp(r'([^\n])(#{1,6}\s+)', multiLine: true),
       (match) {
         final before = match.group(1)!;
-        final hashes = match.group(2)!;
-        // Si el carácter anterior no es espacio, agregar doble salto
-        if (before.trim().isNotEmpty) {
-          return '$before\n\n$hashes ';
+        final header = match.group(2)!;
+        if (before.trim().isNotEmpty && before != '\n') {
+          return '$before\n\n$header';
         }
-        return '$before$hashes ';
+        return '$before$header';
       },
     );
 
-    // 1.2. Separar listas que lleguen pegadas: "texto- Item" -> "texto\n- Item"
-    processed = processed.replaceAllMapped(
-      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?)])\s*-\s+', multiLine: true),
-      (match) => '${match.group(1)}\n- ',
-    );
-
-    // 1.3. Separar listas numeradas pegadas: "texto1. Item" -> "texto\n1. Item"
-    processed = processed.replaceAllMapped(
-      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*(\d+\.\s+)', multiLine: true),
-      (match) => '${match.group(1)}\n${match.group(2)}',
-    );
-
-    // 2. Ensure paragraphs are properly separated
-    // Replace double line breaks with proper markdown spacing
-    processed = processed.replaceAll(RegExp(r'\n\n+'), '\n\n');
-
-    // 3. Clean up duplicate reference sections and normalize structure
-    processed = _consolidateReferences(processed);
-
-    // 4. Format lists properly (convert numbered lists to markdown)
-    processed = _formatLists(processed);
-
-    // 4.1. Ensure proper spacing between numbered list items
-    processed = processed.replaceAllMapped(
-      RegExp(r'(\d+\.\s+\*\*[^*]+\*\*)\s*(\d+\.\s+\*\*)', multiLine: true),
-      (match) => '${match.group(1)}\n\n${match.group(2)}',
-    );
-
-    // 4.2. Fix any numbered lists that are still stuck together
-    processed = processed.replaceAllMapped(
-      RegExp(r'(\w+\.\s*)(\d+\.\s+)', multiLine: true),
-      (match) => '${match.group(1)}\n\n${match.group(2)}',
-    );
-
-    // 5. Handle source indicators - clean format
-    processed = processed.replaceAllMapped(
-      RegExp(r'\*\(Fuente:\s*([^)]+)\)\*'),
-      (match) => '\n\n*Fuente: ${match.group(1)}*\n',
-    );
-
-    // 5. Ensure paragraph spacing by preserving double line breaks
-    // Replace multiple line breaks (3 or more) with exactly 2 for consistent paragraph spacing
+    // 3. Normalizar múltiples saltos a máximo 2 (Markdown paragraph spacing)
     processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
-    // 6. Ensure there's a blank line after each paragraph ending with a period
-    // This helps separate paragraphs that might be stuck together
-    processed = processed.replaceAllMapped(
-      RegExp(r'([.!?])\s*\n([A-ZÁÉÍÓÚÑ])', multiLine: true),
-      (match) => '${match.group(1)}\n\n${match.group(2)}',
+    // 4. Limpiar artefactos de streaming: ## sueltos, espacios extras
+    // "., (PMID)" → ". (PMID)" ; "(PubMed) (PubMed)" → "(PubMed)"
+    processed = processed.replaceAll(RegExp(r'\.,\s*'), '. ');
+    processed = processed.replaceAll(
+      RegExp(r'\(PubMed\)\s*\(PubMed\)'),
+      '(PubMed)',
     );
 
-    // 6.1. Mejorar detección de secciones estructuradas (sin ## pero con numeración implícita)
-    // Detectar patrones como "1. **Título:**" o "**Título:**" al inicio de línea
-    processed = processed.replaceAllMapped(
-      RegExp(r'^(\d+\.\s*)?(\*\*[A-ZÁÉÍÓÚÑ][^*]+\*\*:?\s*)$', multiLine: true),
-      (match) => '\n${match.group(0)}\n',
-    );
+    // Limpiar ## sueltos al final de líneas o pegados a palabras
+    // "Fuentes ###" → "Fuentes" ; ".## F" → "."
+    processed = processed.replaceAll(RegExp(r'\.##\s*[A-Z]'), '.');
+    processed = processed.replaceAll(RegExp(r'#{2,}\s*$', multiLine: true), '');
 
-    // 6.2. Asegurar espacio antes de párrafos que empiezan con mayúscula después de punto final
-    // Esto ayuda a separar conceptos diferentes
-    processed = processed.replaceAllMapped(
-      RegExp(r'([.!?])\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,})', multiLine: false),
-      (match) {
-        // Solo añadir salto si no es inicio de oración dentro del mismo párrafo
-        final nextWord = match.group(2)!;
-        // Palabras que típicamente continúan párrafo
-        final continuationWords = [
-          'Este',
-          'Esta',
-          'Estos',
-          'Estas',
-          'Asimismo',
-          'Además',
-          'Por',
-          'Sin',
-          'Con',
-          'En',
-          'La',
-          'El',
-          'Los',
-          'Las',
-        ];
-        if (continuationWords.contains(nextWord.split(' ')[0])) {
-          return match.group(0)!;
-        }
-        return '${match.group(1)}\n\n${match.group(2)}';
-      },
-    );
-
-    // 7. Legacy cleanup (for any old content still in cache)
+    // 5. Limpiar placeholders malformados legacy (compatibilidad)
     processed = processed.replaceAll(RegExp(r'\$1eferencias'), 'Referencias');
     processed = processed.replaceAll(RegExp(r'\$1esumen'), 'Resumen');
-    processed = processed.replaceAll(RegExp(r'\$2oi:'), 'doi:');
-    processed = processed.replaceAll(RegExp(r'\$2ururo'), 'eururo');
+    processed = processed.replaceAll(RegExp(r'\$[12]\s*'), '');
 
-    // 8. Clean up any remaining malformed placeholders (legacy support)
-    // Remove isolated $1 $2 patterns (most common case)
-    processed = processed.replaceAll(RegExp(r'\$1\s+\$2\s*'), '');
-
-    // Remove $1 or $2 at the end of lines or text
-    processed = processed.replaceAll(
-      RegExp(r'\s*\$[12]\s*$', multiLine: true),
-      '',
-    );
-
-    // Remove $1 or $2 followed by non-alphabetic characters (but preserve if part of word)
-    processed = processed.replaceAll(RegExp(r'\$1(?![a-zA-Z])'), '');
-    processed = processed.replaceAll(RegExp(r'\$2(?![a-zA-Z])'), '');
-
-    // 9. Clean up excessive spaces in a line (but preserve line breaks)
+    // 6. Normalizar espacios: múltiples espacios → uno solo (excepto saltos de línea)
     processed = processed.replaceAllMapped(
       RegExp(r'([^\n])\s{2,}([^\n])', multiLine: true),
       (match) => '${match.group(1)} ${match.group(2)}',
     );
 
-    // 10. Remove standalone ## that are not headers (malformed section markers)
-    processed = processed.replaceAll(RegExp(r'\.##\s*F'), '.');
-    processed = processed.replaceAll(RegExp(r'##\s*$', multiLine: true), '');
-
-    // 10.1. Handle malformed PMID references and special brackets
-    processed = processed.replaceAllMapped(
-      RegExp(r'【PMID:\s*(\d+)】'),
-      (match) => '[PMID: ${match.group(1)}]',
-    );
-    processed = processed.replaceAll(RegExp(r'【PMID:\s*\$1】'), '');
-    processed = processed.replaceAll(RegExp(r'\[PMID:\s*\$1\]'), '');
-    processed = processed.replaceAll(RegExp(r'PMID:\s*\$1'), '');
-
-    // 10.2. Replace all 【】 brackets with regular []
+    // 7. Convertir brackets especiales a normales
     processed = processed.replaceAll('【', '[');
     processed = processed.replaceAll('】', ']');
 
-    // 10.3. Format inline references to be more discrete and not interrupt reading
-    // Convert long inline references to a cleaner superscript-style format
-
-    // Step 1: Ensure period before references when missing
-    // Fix "palabra[Referencia]." → "palabra.(Referencia)"
-    processed = processed.replaceAllMapped(
-      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ])\[([^\]]+)\]\.', caseSensitive: false),
-      (match) => '${match.group(1)}.(${match.group(2)})',
-    );
-
-    // Step 2: Convert all bracket references to parentheses (APA format)
-    // [Reference] → (Reference)
-    processed = processed.replaceAllMapped(
-      RegExp(
-        r'\[([^\]]+?(?:PMID|Schwartz|Manual|Libro|PDF)[^\]]*)\]',
-        caseSensitive: false,
-      ),
-      (match) => '(${match.group(1)})',
-    );
-
-    // Step 3: Format long book/manual references to be discrete
-    // Pattern 1: Books/Manuals with (PDF/Libro...) format
-    // Matches: "text - Title. (year). (PDF/Libro de texto...)"
-    processed = processed.replaceAllMapped(
-      RegExp(
-        r'(\w+)\s*[-–—]\s*([A-Z][^.]{3,40})\.\s*\([^)]+\)\.\s*\((?:PDF|Libro)[^\)]*\)[.,]?',
-        caseSensitive: false,
-      ),
-      (match) {
-        final title = match
-            .group(2)!
-            .split(' ')
-            .take(2)
-            .join(' '); // First 2 words
-        return '${match.group(1)}. *($title)*';
-      },
-    );
-
-    // Pattern 2: Long article citations with PMID
-    // Matches: "text - Article title. — Journal (PMID: 123456, 2023)"
-    processed = processed.replaceAllMapped(
-      RegExp(
-        r'(\w+)\s*[-–—]\s*[^.]{10,}?\.\s*[-–—]\s*[^(]{5,}?\(PMID:\s*(\d+)[^)]*\)',
-        caseSensitive: false,
-      ),
-      (match) => '${match.group(1)}. *(PMID: ${match.group(2)})*',
-    );
-
-    // Pattern 3: Books without leading dash but with (PDF...) marker
-    // Matches: "Title/Manual name. (year). (PDF...)"
-    processed = processed.replaceAllMapped(
-      RegExp(
-        r'\s+([A-Z][A-Za-zÀ-ÿ\s]{5,40})\.\s*\([^)]+\)\.\s*\((?:PDF|Libro)[^\)]*\)\s*',
-        caseSensitive: false,
-      ),
-      (match) {
-        final title = match
-            .group(1)!
-            .trim()
-            .split(' ')
-            .take(2)
-            .join(' '); // First 2 words
-        return '. *($title)* ';
-      },
-    );
-
-    // Pattern 4: Standalone long PMID citations (without text before)
-    // Matches: "- Long article title... (PMID: 123456)"
-    processed = processed.replaceAllMapped(
-      RegExp(
-        r'\s*[-–—]\s*[^(]{15,}?\(PMID:\s*(\d+)[^)]*\)\s*',
-        caseSensitive: false,
-      ),
-      (match) => '. *(PMID: ${match.group(1)})* ',
-    );
-
-    // 11. Fix missing spaces after ## in headers
-    processed = processed.replaceAll(RegExp(r'##([^\s#])'), r'## $1');
-
-    // 11.1. Also ensure proper line breaks before headers
-    processed = processed.replaceAll(
-      RegExp(r'([^\n])(\n## )'),
-      r'$1'
-      '\n\n'
-      r'$2',
-    );
-
-    // 11.2. Ensure proper spacing around all headers
-    processed = processed.replaceAllMapped(
-      RegExp(r'^(#{1,6})\s*(.+)$', multiLine: true),
-      (match) => '${match.group(1)} ${match.group(2)}',
-    );
-
-    // 11.3. Procesar secciones de bibliografía con emojis (nuevo formato backend)
-    // Convertir "### 📚 Libros de Texto Médico" a formato más legible
-    processed = processed.replaceAll(
-      RegExp(r'###\s*📚\s*Libros de Texto Médico', caseSensitive: false),
-      '### 📚 Libros de Texto Médico',
-    );
-    processed = processed.replaceAll(
-      RegExp(
-        r'###\s*🔬\s*Literatura Científica.*?(?:PubMed)?',
-        caseSensitive: false,
-      ),
-      '### 🔬 Literatura Científica (PubMed)',
-    );
-
-    // 11.4. Asegurar espaciado correcto antes de secciones de bibliografía
-    processed = processed.replaceAll(
-      RegExp(r'([^\n])\n(###\s*[📚🔬])'),
-      r'$1'
-      '\n\n'
-      r'$2',
-    );
-
-    // 11.5. Detectar y formatear secciones médicas comunes sin headers explícitos
-    // Patrones: "Análisis del Cuadro Clínico:", "Diagnósticos Diferenciales:", etc.
-    final medicalSections = [
-      'Análisis del Cuadro Clínico',
-      'Análisis Clínico',
-      'Diagnósticos Diferenciales',
-      'Diagnóstico Diferencial',
-      'Recomendaciones',
-      'Manejo',
-      'Tratamiento',
-      'Estudios Complementarios',
-      'Definición',
-      'Fisiopatología',
-      'Manifestaciones Clínicas',
-      'Criterios Diagnósticos',
-    ];
-
-    for (final section in medicalSections) {
-      // Convertir "Sección:" o "**Sección:**" a formato de header secundario
-      processed = processed.replaceAllMapped(
-        RegExp(
-          '(?:^|\\n)(\\*\\*)?($section)(\\*\\*)?:?\\s*(?=\\n|[A-Z])',
-          caseSensitive: false,
-        ),
-        (match) => '\n\n**${match.group(2)}:**\n\n',
-      );
-    }
-
-    // 12. Clean up excessive whitespace but preserve paragraph breaks
-    processed = processed.replaceAll(RegExp(r'\n{4,}'), '\n\n\n');
-    processed = processed.replaceAll(RegExp(r'[ \t]+'), ' ');
-
-    // 13. Process placeholders if replacements are provided
+    // 8. Procesar placeholders si se proveen reemplazos
     if (widget.placeholderReplacements != null) {
       widget.placeholderReplacements!.forEach((placeholder, replacement) {
         processed = processed.replaceAll(
@@ -362,177 +114,12 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     return processed.trim();
   }
 
-  /// Consolidates duplicate reference sections and cleans up formatting
-  String _consolidateReferences(String content) {
-    // First, remove all embedded reference sections in the middle of content
-    content = _removeEmbeddedReferenceSections(content);
-
-    // Find all reference sections
-    final referenceSections = <String>[];
-    final pmidReferences = <String, String>{};
-
-    // Extract Referencias: sections (both with and without **)
-    final referencePattern = RegExp(
-      r'(?:Referencias?:|(?:\*\*)?Referencias?(?:\*\*)?:?)\s*\n((?:(?:-\s*)?[^\n]+(?:\n|$))*)',
-      multiLine: true,
-      caseSensitive: false,
-    );
-
-    final matches = referencePattern.allMatches(content);
-    for (final match in matches) {
-      if (match.group(1) != null) {
-        referenceSections.add(match.group(1)!.trim());
-      }
-    }
-
-    // Extract individual references and deduplicate by PMID
-    for (final section in referenceSections) {
-      final lines = section.split('\n');
-      for (final line in lines) {
-        final cleanLine = line.replaceAll(RegExp(r'^-\s*-?\s*'), '').trim();
-        if (cleanLine.isNotEmpty &&
-            !cleanLine.startsWith('*') &&
-            cleanLine.length > 10) {
-          // Extract PMID if present
-          final pmidMatch = RegExp(r'PMID:\s*(\d+)').firstMatch(cleanLine);
-          if (pmidMatch != null) {
-            final pmid = pmidMatch.group(1)!;
-            // Keep the most complete reference for each PMID
-            if (!pmidReferences.containsKey(pmid) ||
-                cleanLine.length > pmidReferences[pmid]!.length) {
-              pmidReferences[pmid] = cleanLine;
-            }
-          } else {
-            // Non-PMID references - keep unique ones but avoid very short lines
-            final key = cleanLine.substring(
-              0,
-              cleanLine.length < 50 ? cleanLine.length : 50,
-            );
-            if (!pmidReferences.containsKey(key)) {
-              pmidReferences[key] = cleanLine;
-            }
-          }
-        }
-      }
-    }
-
-    // Remove all existing reference sections
-    String cleaned = content.replaceAll(referencePattern, '');
-
-    // Detect trailing question to preserve it as the last line
-    String? trailingQuestion;
-    final tqMatch = RegExp(
-      r'(.*?)(\s*)(¿[^?]*\?)\s*$',
-      dotAll: true,
-    ).firstMatch(cleaned);
-    if (tqMatch != null) {
-      cleaned = tqMatch.group(1)!.trimRight();
-      trailingQuestion = tqMatch.group(3)!.trim();
-    }
-
-    // Add consolidated references section if we have any
-    if (pmidReferences.isNotEmpty) {
-      final sortedRefs = pmidReferences.values.toList()..sort();
-      final buffer = StringBuffer();
-      buffer.write(cleaned.trimRight());
-      buffer.write('\n\n**Referencias:**\n');
-      for (final ref in sortedRefs) {
-        buffer.write('- ');
-        buffer.write(ref);
-        buffer.write('\n');
-      }
-      if (trailingQuestion != null && trailingQuestion.isNotEmpty) {
-        buffer.write('\n');
-        buffer.write(trailingQuestion);
-      }
-      return buffer.toString().trim();
-    }
-
-    // No references to add; if there was a trailing question, re-append it
-    if (trailingQuestion != null && trailingQuestion.isNotEmpty) {
-      cleaned = cleaned.trimRight() + '\n\n' + trailingQuestion;
-    }
-
-    return cleaned.trim();
-  }
-
-  /// Removes embedded reference sections that appear in the middle of content
-  String _removeEmbeddedReferenceSections(String content) {
-    // Remove reference sections that appear before the final **(Referencias:** section
-    final parts = content.split('**Referencias:**');
-    if (parts.length > 1) {
-      // If there's a final Referencias section, clean the content before it
-      final mainContent = parts[0];
-      final finalRefs = parts.sublist(1).join('**Referencias:**');
-
-      // Remove any Referencias: sections from main content
-      final cleanedMain = mainContent.replaceAll(
-        RegExp(
-          r'Referencias?\s*:?\s*\n(?:\s*-[^\n]*\n?)*',
-          multiLine: true,
-          caseSensitive: false,
-        ),
-        '',
-      );
-
-      return '$cleanedMain\n\n**Referencias:**$finalRefs';
-    }
-
-    // If no final Referencias section, just remove embedded ones
-    return content.replaceAll(
-      RegExp(
-        r'Referencias?\s*:?\s*\n(?:\s*-[^\n]*\n?)*',
-        multiLine: true,
-        caseSensitive: false,
-      ),
-      '',
-    );
-  }
-
-  /// Formats numbered lists into proper markdown
-  String _formatLists(String content) {
-    // First, ensure proper spacing around numbered lists
-    // Convert numbered lists (1. 2. 3.) to proper markdown with line breaks
-    String formatted = content.replaceAllMapped(
-      RegExp(
-        r'(\d+)\.\s*([^0-9\n]*?)(?=\d+\.\s|\n\n|\*\(Fuente|\*\*Referencias|\$)',
-        multiLine: true,
-        dotAll: true,
-      ),
-      (match) {
-        final number = match.group(1)!;
-        final text = match.group(2)!.trim();
-        // Ensure each numbered item is on its own line with proper spacing
-        return '$number. **${text.replaceAll(RegExp(r'\s+'), ' ')}**\n\n';
-      },
-    );
-
-    // Handle the last numbered item that might not have a following pattern
-    formatted = formatted.replaceAllMapped(
-      RegExp(r'^(\d+)\.\s+(.+)$', multiLine: true),
-      (match) {
-        final number = match.group(1)!;
-        final text = match.group(2)!.trim();
-        // Only format if it hasn't been formatted already
-        if (!text.startsWith('**')) {
-          return '$number. **$text**';
-        }
-        return match.group(0)!;
-      },
-    );
-
-    // Clean up any triple line breaks that might have been created
-    formatted = formatted.replaceAll(RegExp(r'\n{3,}'), '\n\n');
-
-    return formatted;
-  }
-
   @override
   Widget build(BuildContext context) {
-    // Simple content without nested scrolls for chat messages
-    // CRÍTICO: StreamingTextMarkdown usa internamente gpt_markdown
-    // que no respeta los tamaños custom de headers muy bien.
-    // Solución: Ajustar el procesamiento para agregar más espacio entre secciones
+    // SOLUCIÓN: La librería flutter_streaming_text_markdown soporta headers Markdown nativamente.
+    // NO necesitamos degradar headers (## → ###), solo asegurar formato correcto.
+    // El backend ahora envía headers completos sin cortar.
+
     Widget content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: StreamingTextMarkdown.instant(
@@ -543,7 +130,6 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
             height: 1.7,
             fontSize: widget.style.fontSize ?? 15,
           ),
-          // Padding por defecto más amplio
           defaultPadding: const EdgeInsets.all(0),
         ),
       ),
