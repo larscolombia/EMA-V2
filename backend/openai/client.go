@@ -3174,8 +3174,10 @@ func cleanAssistantAnnotations(text string) string {
 	re3 := regexp.MustCompile(`\[citation:\d+\]`)
 	text = re3.ReplaceAllString(text, "")
 
-	// Limpiar espacios extras que puedan haber quedado
-	re4 := regexp.MustCompile(`\s{2,}`)
+	// CRÍTICO: Limpiar espacios extras PERO PRESERVAR saltos de línea para Markdown
+	// NO usar \s (incluye \n) sino solo espacios/tabs horizontales
+	// `[ \t]{2,}` = dos o más espacios/tabs → un espacio
+	re4 := regexp.MustCompile(`[ \t]{2,}`)
 	text = re4.ReplaceAllString(text, " ")
 
 	return strings.TrimSpace(text)
