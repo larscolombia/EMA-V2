@@ -1406,10 +1406,18 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		}
 	}
 	// fetch last assistant message
-	mresp, merr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+	// CRÍTICO: Usar contexto independiente porque GetMessages puede tardar 60-90s en threads grandes
+	// y el contexto del run puede estar cerca de expirar
+	fetchStart := time.Now()
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer fetchCancel()
+
+	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
 	if merr != nil {
+		log.Printf("[runAndWait][GetMessages][ERROR] thread=%s elapsed_ms=%d err=%v", threadID, time.Since(fetchStart).Milliseconds(), merr)
 		return "", merr
 	}
+	log.Printf("[runAndWait][GetMessages][SUCCESS] thread=%s elapsed_ms=%d", threadID, time.Since(fetchStart).Milliseconds())
 	defer mresp.Body.Close()
 	var ml struct {
 		Data []struct {
@@ -3114,7 +3122,7 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 		// OpenAI puede tardar 90-120s en runs complejos con file_search en vectores grandes
 		runCtx, runCancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer runCancel()
-		
+
 		// Usar las instrucciones completas solo para el run, no se guardan en el thread
 		text, err := c.runAndWaitWithVectorStore(runCtx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
