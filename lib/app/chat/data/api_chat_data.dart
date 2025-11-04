@@ -452,6 +452,26 @@ class ApiChatData implements IApiChatData {
       throw Exception('Error inesperado: $e');
     }
   }
+
+  @override
+  Future<void> deleteThread(String threadId) async {
+    const endpoint = '/conversations/delete';
+    try {
+      final response = await _dio.post(
+        endpoint,
+        data: {'thread_id': threadId},
+        options: dio.Options(
+          validateStatus: (code) => code == 204 || code == 200,
+        ),
+      );
+
+      if (response.statusCode != 204 && response.statusCode != 200) {
+        throw Exception('Error al eliminar thread: ${response.statusCode}');
+      }
+    } on DioException catch (e) {
+      throw Exception('Error al eliminar thread de OpenAI: ${e.message}');
+    }
+  }
 }
 
 // Helper to read a ResponseBody stream fully into a String safely

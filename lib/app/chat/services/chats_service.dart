@@ -159,15 +159,37 @@ class ChatsService extends GetxService {
 
   /// Delete a chat and all its local messages by chatId (uid).
   /// Also removes the associated Action record(s).
+  /// CRÍTICO: También elimina thread y artefactos de OpenAI (vector stores de PDFs del usuario, files)
+  /// pero PRESERVA el vector store compartido de libros médicos.
   Future<void> deleteChat(String chatId) async {
-    // Delete messages first (FK-like order safety)
+    // 1. Obtener threadId ANTES de borrar el chat localmente
+    String? threadId;
+    try {
+      final chat = await chatsLocalData.getById('uid = ?', [chatId]);
+      threadId = chat?.threadId;
+    } catch (e) {
+      print('⚠️ [deleteChat] Error obteniendo threadId: $e');
+    }
+
+    // 2. Borrar artefactos de OpenAI si existe threadId
+    if (threadId != null && threadId.isNotEmpty) {
+      try {
+        print('🗑️ [deleteChat] Eliminando thread de OpenAI: $threadId');
+        await apiChatService.deleteThread(threadId);
+        print('✅ [deleteChat] Thread eliminado de OpenAI: $threadId');
+      } catch (e) {
+        // No fallar si no se puede borrar de OpenAI (best-effort)
+        // El usuario puede estar offline o el thread ya no existir
+        print('⚠️ [deleteChat] Error al eliminar thread de OpenAI: $e');
+      }
+    }
+
+    // 3. Borrar datos locales (mensajes, chat, acciones)
     await chatMessagesLocalData.delete(
       where: 'chatId = ?',
       whereArgs: [chatId],
     );
-    // Delete the chat row
     await chatsLocalData.delete(where: 'uid = ?', whereArgs: [chatId]);
-    // Delete related actions referencing this chat
     await actionsService.deleteActionsByItemId(ActionType.chat, chatId);
   }
 }

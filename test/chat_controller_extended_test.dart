@@ -125,6 +125,11 @@ class FakeApiChatData implements IApiChatData {
   @override
   Future<List<ChatMessageModel>> getMessagesById({required String id}) async =>
       [];
+
+  @override
+  Future<void> deleteThread(String threadId) async {
+    // Mock implementation - no-op
+  }
 }
 
 class FakeAttachmentService extends AttachmentService {

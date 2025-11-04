@@ -668,7 +668,20 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	if err := r.Run(":" + port); err != nil {
+
+	// Servidor HTTP personalizado con timeouts generosos para streaming/RAG
+	// WriteTimeout debe ser >90s para permitir OpenAI runs largos con file_search
+	srv := &http.Server{
+		Addr:           ":" + port,
+		Handler:        r,
+		ReadTimeout:    30 * time.Second,  // Suficiente para subir archivos grandes
+		WriteTimeout:   180 * time.Second, // 3 minutos para soportar RAG + streaming
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB
+	}
+
+	log.Printf("[server] Starting HTTP server on port %s with WriteTimeout=%v", port, srv.WriteTimeout)
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 

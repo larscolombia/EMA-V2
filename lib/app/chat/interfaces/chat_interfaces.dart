@@ -45,4 +45,8 @@ abstract class IApiChatData {
     Function(int, int)? onSendProgress,
     void Function(String token)? onStream,
   });
+
+  /// Elimina thread y artefactos asociados de OpenAI
+  /// Solo borra vector stores creados por el usuario (PDFs), NO el vector store de libros compartido
+  Future<void> deleteThread(String threadId);
 }

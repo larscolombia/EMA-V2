@@ -243,6 +243,11 @@ class FakeApiChatData implements IApiChatData {
     onStream?.call('Respuesta ');
     return ChatMessageModel.ai(chatId: 'chat1', text: 'Respuesta completa');
   }
+
+  @override
+  Future<void> deleteThread(String threadId) async {
+    // Mock implementation - no-op
+  }
 }
 
 void main() {

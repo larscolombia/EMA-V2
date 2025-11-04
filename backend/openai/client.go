@@ -2087,9 +2087,14 @@ func (c *Client) DeleteThreadArtifacts(ctx context.Context, threadID string) err
 	for _, fid := range toDelete {
 		_ = c.deleteFile(ctx, fid)
 	}
-	// Delete vector store
-	if vsID != "" {
+	// Delete vector store SOLO si NO es el vector store compartido de libros
+	// El vector store de libros es permanente y usado por todos los threads del chat general
+	const sharedBooksVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
+	if vsID != "" && vsID != sharedBooksVectorID {
+		log.Printf("[delete_artifacts] deleting vector store thread=%s vs=%s", threadID, vsID)
 		_ = c.deleteVectorStore(ctx, vsID)
+	} else if vsID == sharedBooksVectorID {
+		log.Printf("[delete_artifacts] preserving shared books vector store thread=%s vs=%s", threadID, vsID)
 	}
 	// Delete thread
 	_ = c.DeleteThread(ctx, threadID)
