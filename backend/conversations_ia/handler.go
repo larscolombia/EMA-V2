@@ -253,7 +253,10 @@ func (h *Handler) buildContextualizedQuery(ctx context.Context, threadID, curren
 // buildConversationContext obtiene los últimos N mensajes del historial como contexto
 // para que el Assistant mantenga coherencia temática sin contaminar las búsquedas vectoriales
 func (h *Handler) buildConversationContext(ctx context.Context, threadID string, limit int) string {
+	fetchStart := time.Now()
 	messages, err := h.AI.GetThreadMessages(ctx, threadID, limit)
+	log.Printf("[conv][buildContext][fetch] thread=%s limit=%d elapsed_ms=%d err=%v", 
+		threadID, limit, time.Since(fetchStart).Milliseconds(), err)
 	if err != nil || len(messages) == 0 {
 		return ""
 	}
@@ -518,7 +521,9 @@ Instrucciones:
 
 	// Obtener contexto conversacional reciente para mantener coherencia temática
 	// Esto ayuda al Assistant a entender de qué se está hablando sin contaminar las búsquedas
+	contextStart := time.Now()
 	conversationContext := h.buildConversationContext(ctx, threadID, 4) // Últimos 2 intercambios
+	log.Printf("[conv][SmartMessage][context_timing] thread=%s elapsed_ms=%d", threadID, time.Since(contextStart).Milliseconds())
 
 	// Determinar modo de integración: solo vector, solo PubMed, o híbrido
 	var integrationMode string

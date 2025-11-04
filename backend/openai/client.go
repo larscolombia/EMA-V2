@@ -1156,15 +1156,21 @@ func (c *Client) addMessage(ctx context.Context, threadID, prompt string) error 
 	}
 	log.Printf("[addMessage][DEBUG] thread=%s msg_preview=%q", threadID, preview)
 
+	// CRÍTICO: OpenAI puede tardar >90s en threads grandes con búsquedas RAG complejas
+	// El contexto padre (ctx) ya puede estar cerca de expirar, así que NO lo usamos aquí
+	// Usamos un contexto nuevo con timeout generoso para esta operación específica
+	addCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	// Intentar hasta 2 veces si falla por timeout
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
-		resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
+		resp, err := c.doJSON(addCtx, http.MethodPost, "/threads/"+threadID+"/messages", payload)
 		if err != nil {
 			lastErr = err
 			if attempt < 2 && (strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "timeout")) {
 				log.Printf("[addMessage][retry] thread=%s attempt=%d err=%v", threadID, attempt, err)
-				time.Sleep(2 * time.Second) // Pequeña pausa antes de reintentar
+				time.Sleep(3 * time.Second) // Pausa antes de reintentar
 				continue
 			}
 			return err
@@ -1302,13 +1308,22 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		log.Printf("[runAndWait][DEBUG] thread=%s run_id=%s ACTUAL_VECTOR_STORES=%v", threadID, run.ID, run.ToolResources.FileSearch.VectorStoreIDs)
 	}
 
+	// DIAGNÓSTICO: Logging detallado de cada paso del polling
+	pollStart := time.Now()
+	pollCount := 0
+	lastStatus := ""
+
 	// poll
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[runAndWait][TIMEOUT] thread=%s run_id=%s elapsed=%v polls=%d last_status=%s", 
+				threadID, run.ID, time.Since(pollStart), pollCount, lastStatus)
 			return "", ctx.Err()
 		case <-time.After(400 * time.Millisecond):
 		}
+
+		pollCount++
 
 		// Si excedemos la duración máxima, intentamos devolver lo que haya aunque el run no esté completado
 		if time.Since(start) > maxRunDuration {
@@ -1347,8 +1362,10 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 			}
 			// Si no pudimos recuperar nada, continuamos polling hasta timeout real del handler
 		}
+		pollCheckStart := time.Now()
 		rresp, rerr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/runs/"+run.ID, nil)
 		if rerr != nil {
+			log.Printf("[runAndWait][POLL_ERROR] thread=%s run_id=%s poll#%d err=%v", threadID, run.ID, pollCount, rerr)
 			return "", rerr
 		}
 		var r struct {
@@ -1360,7 +1377,23 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		}
 		_ = json.NewDecoder(rresp.Body).Decode(&r)
 		rresp.Body.Close()
+		
+		// Log cambios de estado
+		if r.Status != lastStatus {
+			log.Printf("[runAndWait][STATUS_CHANGE] thread=%s run_id=%s poll#%d elapsed=%v status: %s→%s", 
+				threadID, run.ID, pollCount, time.Since(pollStart), lastStatus, r.Status)
+			lastStatus = r.Status
+		}
+		
+		// Log cada 30 polls (~12 segundos) si sigue en progreso
+		if pollCount%30 == 0 && r.Status != "completed" {
+			log.Printf("[runAndWait][STILL_RUNNING] thread=%s run_id=%s poll#%d elapsed=%v status=%s api_latency=%v", 
+				threadID, run.ID, pollCount, time.Since(pollStart), r.Status, time.Since(pollCheckStart))
+		}
+		
 		if r.Status == "completed" {
+			log.Printf("[runAndWait][COMPLETED] thread=%s run_id=%s total_polls=%d total_elapsed=%v", 
+				threadID, run.ID, pollCount, time.Since(pollStart))
 			break
 		}
 		if r.Status == "failed" || r.Status == "cancelled" || r.Status == "expired" {

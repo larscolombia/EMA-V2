@@ -530,8 +530,11 @@ class ChatController extends GetxService {
                 );
               } else {
                 aiMessage.text += token;
+                // DEBUG CRÍTICO: Verificar si los tokens contienen \n
+                final hasNewline = token.contains('\n');
+                final newlineCount = '\n'.allMatches(token).length;
                 print(
-                  '🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}',
+                  '🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length).replaceAll('\n', '\\n')}${token.length > 30 ? "..." : ""}" | Has \\n: $hasNewline (count: $newlineCount) | Total length: ${aiMessage.text.length}',
                 );
               }
               messages.refresh();
@@ -547,9 +550,17 @@ class ChatController extends GetxService {
           } else {
             // Don't overwrite the streamed content with response.text!
             // aiMessage.text = response.text;
+
+            // DEBUG CRÍTICO: Verificar texto final acumulado
+            final totalNewlines = '\n'.allMatches(aiMessage.text).length;
+            final preview =
+                aiMessage.text.length > 500
+                    ? aiMessage.text.substring(0, 500).replaceAll('\n', '\\n')
+                    : aiMessage.text.replaceAll('\n', '\\n');
             print(
-              '🎯 [Controller] Has first token - keeping streamed content. Final length: ${aiMessage.text.length}',
+              '🎯 [Controller] Stream complete. Final text length: ${aiMessage.text.length} | Newlines: $totalNewlines',
             );
+            print('🎯 [Controller] Preview (first 500 chars): "$preview"');
           }
 
           // Debug: Verificar que no estamos mutando mensajes anteriores

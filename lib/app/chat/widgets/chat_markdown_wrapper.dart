@@ -119,6 +119,8 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // SOLUCIÓN: La librería flutter_streaming_text_markdown soporta headers Markdown nativamente.
     // NO necesitamos degradar headers (## → ###), solo asegurar formato correcto.
     // El backend ahora envía headers completos sin cortar.
+    // IMPORTANTE: Usar .instant() para mostrar texto completo inmediatamente (sin animación).
+    // El streaming ya se maneja en el controller (token por token del SSE).
 
     Widget content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
