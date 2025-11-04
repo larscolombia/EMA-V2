@@ -2098,6 +2098,10 @@ func sseStream(c *gin.Context, ch <-chan string) {
 		_, _ = c.Writer.Write([]byte("data: " + tok + "\n\n"))
 		c.Writer.Flush()
 	}
+	// CRÍTICO: Enviar marcador [DONE] al final del stream
+	// El frontend espera este marcador para cerrar correctamente el stream
+	_, _ = c.Writer.Write([]byte("data: [DONE]\n\n"))
+	c.Writer.Flush()
 }
 
 // sseMaybeCapture agrega token final __FULL__ en modo test (TEST_CAPTURE_FULL=1) replicando chat original.
