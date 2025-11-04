@@ -1998,10 +1998,10 @@ func sseStream(c *gin.Context, ch <-chan string) {
 		if tok == "" {
 			continue
 		}
-		// TEMPORAL: Deshabilitar normalización para diagnóstico
-		// Si esto funciona, el problema está en normalizeMarkdownToken()
-		// normalized := normalizeMarkdownToken(tok)
-		_, _ = c.Writer.Write([]byte("data: " + tok + "\n\n"))
+		// CRÍTICO: Normalizar markdown porque OpenAI envía tokens sin saltos de línea
+		// Ejemplo: "## DefiniciónLa gastritis..." → "## Definición\n\nLa gastritis..."
+		normalized := normalizeMarkdownToken(tok)
+		_, _ = c.Writer.Write([]byte("data: " + normalized + "\n\n"))
 		c.Writer.Flush()
 	}
 	// CRÍTICO: Enviar marcador [DONE] al final del stream

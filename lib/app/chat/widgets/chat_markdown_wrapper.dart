@@ -45,8 +45,8 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
   }
 
   /// Processes raw medical content into well-formatted Markdown
-  /// SIMPLIFICADO: La librería flutter_streaming_text_markdown maneja Markdown nativamente.
-  /// Solo limpiamos artefactos y aseguramos formato básico.
+  /// OPTIMIZADO: Maneja texto concatenado por SSE streaming donde headers
+  /// y párrafos llegan pegados sin saltos de línea apropiados.
   String _processRawContent(String rawContent) {
     if (rawContent.trim().isEmpty) return rawContent;
 
@@ -55,24 +55,37 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // 1. Convert literal \n to actual line breaks
     processed = processed.replaceAll('\\n', '\n');
 
-    // 2. Asegurar doble salto ANTES de headers si están pegados al texto
+    // 2. CRÍTICO PARA SSE: Añadir saltos ANTES de headers pegados a texto
     // "texto## Header" → "texto\n\n## Header"
+    // "palabra.## Header" → "palabra.\n\n## Header"
     processed = processed.replaceAllMapped(
-      RegExp(r'([^\n])(#{1,6}\s+)', multiLine: true),
+      RegExp(r'([^\n])(#{1,6}\s+[^\n])', multiLine: true),
       (match) {
         final before = match.group(1)!;
         final header = match.group(2)!;
-        if (before.trim().isNotEmpty && before != '\n') {
+        // Si hay contenido antes del header (no es inicio de línea), añadir saltos
+        if (before.trim().isNotEmpty) {
           return '$before\n\n$header';
         }
         return '$before$header';
       },
     );
 
-    // 3. Normalizar múltiples saltos a máximo 2 (Markdown paragraph spacing)
+    // 3. Asegurar salto de línea DESPUÉS de headers si no existe
+    // "## Header\nTexto" → "## Header\n\nTexto" (para separar header de contenido)
+    processed = processed.replaceAllMapped(
+      RegExp(r'(#{1,6}\s+[^\n]+)\n([^\n#])', multiLine: true),
+      (match) {
+        final header = match.group(1)!;
+        final nextChar = match.group(2)!;
+        return '$header\n\n$nextChar';
+      },
+    );
+
+    // 4. Normalizar múltiples saltos a máximo 2 (Markdown paragraph spacing)
     processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
-    // 4. Limpiar artefactos de streaming: ## sueltos, espacios extras
+    // 5. Limpiar artefactos de streaming: ## sueltos, espacios extras
     // "., (PMID)" → ". (PMID)" ; "(PubMed) (PubMed)" → "(PubMed)"
     processed = processed.replaceAll(RegExp(r'\.,\s*'), '. ');
     processed = processed.replaceAll(
@@ -85,22 +98,22 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAll(RegExp(r'\.##\s*[A-Z]'), '.');
     processed = processed.replaceAll(RegExp(r'#{2,}\s*$', multiLine: true), '');
 
-    // 5. Limpiar placeholders malformados legacy (compatibilidad)
+    // 6. Limpiar placeholders malformados legacy (compatibilidad)
     processed = processed.replaceAll(RegExp(r'\$1eferencias'), 'Referencias');
     processed = processed.replaceAll(RegExp(r'\$1esumen'), 'Resumen');
     processed = processed.replaceAll(RegExp(r'\$[12]\s*'), '');
 
-    // 6. Normalizar espacios: múltiples espacios → uno solo (excepto saltos de línea)
+    // 7. Normalizar espacios: múltiples espacios → uno solo (excepto saltos de línea)
     processed = processed.replaceAllMapped(
       RegExp(r'([^\n])\s{2,}([^\n])', multiLine: true),
       (match) => '${match.group(1)} ${match.group(2)}',
     );
 
-    // 7. Convertir brackets especiales a normales
+    // 8. Convertir brackets especiales a normales
     processed = processed.replaceAll('【', '[');
     processed = processed.replaceAll('】', ']');
 
-    // 8. Procesar placeholders si se proveen reemplazos
+    // 9. Procesar placeholders si se proveen reemplazos
     if (widget.placeholderReplacements != null) {
       widget.placeholderReplacements!.forEach((placeholder, replacement) {
         processed = processed.replaceAll(
