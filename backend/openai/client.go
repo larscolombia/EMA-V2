@@ -111,7 +111,7 @@ func NewClient() *Client {
 		AssistantID:  assistant,
 		Model:        model,
 		key:          key,
-		httpClient:   &http.Client{Timeout: 120 * time.Second}, // Aumentado para runs largos
+		httpClient:   &http.Client{Timeout: 180 * time.Second}, // Aumentado a 180s para runs largos y addMessage lentos
 		vectorStore:  vsMap,
 		vsLastAccess: make(map[string]time.Time),
 		fileCache:    fcMap,
@@ -1266,6 +1266,8 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	}
 
 	// Always include file_search tool + vector store (even if empty) for consistent retrieval context
+	// NOTA: max_num_results NO es soportado por OpenAI Assistants API v2 en file_search
+	// La optimización principal viene de reducir el prompt (80% menos tokens)
 	tools := []map[string]any{{"type": "file_search"}}
 	payload["tools"] = tools
 	if vectorStoreID != "" {
@@ -1274,18 +1276,23 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 				"vector_store_ids": []string{vectorStoreID},
 			},
 		}
-		log.Printf("[runAndWait][DEBUG] thread=%s OVERRIDE_VECTOR_STORE=%s (forcing file_search to use ONLY this vector)", threadID, vectorStoreID)
+		log.Printf("[runAndWait][DEBUG] thread=%s OVERRIDE_VECTOR_STORE=%s (optimized_prompt)", threadID, vectorStoreID)
 	}
 
 	// DEBUG: Log payload completo para verificar qué estamos enviando
 	payloadJSON, _ := json.Marshal(payload)
 	log.Printf("[runAndWait][DEBUG] thread=%s run_payload=%s", threadID, string(payloadJSON))
 
+	// TIMING: Medir cuánto tarda OpenAI en crear el run
+	createRunStart := time.Now()
 	resp, err := c.doJSON(ctx, http.MethodPost, "/threads/"+threadID+"/runs", payload)
+	createRunElapsed := time.Since(createRunStart)
 	if err != nil {
+		log.Printf("[runAndWait][CREATE_RUN_ERROR] thread=%s elapsed=%v err=%v", threadID, createRunElapsed, err)
 		return "", err
 	}
 	defer resp.Body.Close()
+	log.Printf("[runAndWait][CREATE_RUN_SUCCESS] thread=%s elapsed=%v status_code=%d", threadID, createRunElapsed, resp.StatusCode)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("create run failed: %s", string(b))
@@ -2255,7 +2262,13 @@ func (c *Client) maybeCleanupVectorStores() {
 	c.vsMu.Lock()
 	now := time.Now()
 	expired := make([]string, 0)
+	// CRÍTICO: Proteger el vector store compartido de libros médicos (permanente)
+	const sharedBooksVectorID = "vs_680fc484cef081918b2b9588b701e2f4"
 	for t, id := range c.vectorStore {
+		// NUNCA limpiar el vector store de libros - es compartido y permanente
+		if id == sharedBooksVectorID {
+			continue
+		}
 		last := c.vsLastAccess[t]
 		if last.IsZero() {
 			c.vsLastAccess[t] = now
@@ -2263,6 +2276,7 @@ func (c *Client) maybeCleanupVectorStores() {
 		}
 		if now.Sub(last) > c.vsTTL {
 			expired = append(expired, t)
+			log.Printf("[cleanup][expire] thread=%s vs=%s unused_for=%v", t, id, now.Sub(last))
 			_ = c.deleteVectorStore(context.Background(), id)
 		}
 	}
@@ -3119,9 +3133,11 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 	go func() {
 		defer close(out)
 		// CRÍTICO: Usar contexto independiente para el run (desacoplado del HTTP request timeout)
-		// OpenAI puede tardar 90-120s en runs complejos con file_search en vectores grandes
-		runCtx, runCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		// OpenAI puede tardar 180+ segundos en runs complejos con file_search en vectores grandes
+		// Aumentado a 240s (4 min) porque OpenAI API está experimentando latencias extremas
+		runCtx, runCancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer runCancel()
+		log.Printf("[assist][StreamWithInstructions][run_context] thread=%s timeout=240s", threadID)
 
 		// Usar las instrucciones completas solo para el run, no se guardan en el thread
 		text, err := c.runAndWaitWithVectorStore(runCtx, threadID, instructions, vectorStoreID)

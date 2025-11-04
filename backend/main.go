@@ -671,11 +671,12 @@ func main() {
 
 	// Servidor HTTP personalizado con timeouts generosos para streaming/RAG
 	// WriteTimeout debe ser >90s para permitir OpenAI runs largos con file_search
+	// AUMENTADO a 5 min debido a latencias extremas de OpenAI API (180s+ para crear runs)
 	srv := &http.Server{
 		Addr:           ":" + port,
 		Handler:        r,
 		ReadTimeout:    30 * time.Second,  // Suficiente para subir archivos grandes
-		WriteTimeout:   180 * time.Second, // 3 minutos para soportar RAG + streaming
+		WriteTimeout:   300 * time.Second, // 5 minutos para tolerar latencias extremas de OpenAI
 		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1 MB
 	}
