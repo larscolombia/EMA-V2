@@ -3069,14 +3069,47 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 	log.Printf("[assist][StreamWithInstructions][start] thread=%s vs=%s user_msg_len=%d instructions_len=%d",
 		threadID, vectorStoreID, len(userMessage), len(instructions))
 
-	out := make(chan string, 1)
+	out := make(chan string, 100) // Buffer más grande para chunks
 	go func() {
 		defer close(out)
 		// Usar las instrucciones completas solo para el run, no se guardan en el thread
 		text, err := c.runAndWaitWithVectorStore(ctx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			out <- text
+			// CRÍTICO: Enviar el texto en chunks inteligentes respetando Markdown
+			// Dividir por líneas para no romper elementos Markdown
+			lines := strings.Split(text, "\n")
+			currentChunk := ""
+			maxChunkSize := 200 // Caracteres por chunk (más grande para mantener contexto)
+
+			for _, line := range lines {
+				// Si añadir esta línea excede el tamaño, enviar chunk actual
+				if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > maxChunkSize {
+					out <- currentChunk
+					currentChunk = ""
+				}
+
+				// Añadir línea al chunk actual
+				if currentChunk != "" {
+					currentChunk += "\n"
+				}
+				currentChunk += line
+
+				// Enviar inmediatamente si es un header o elemento importante
+				if strings.HasPrefix(strings.TrimSpace(line), "#") ||
+					strings.HasPrefix(strings.TrimSpace(line), "##") ||
+					strings.HasPrefix(strings.TrimSpace(line), "###") {
+					if currentChunk != "" {
+						out <- currentChunk
+						currentChunk = ""
+					}
+				}
+			}
+
+			// Enviar cualquier contenido restante
+			if currentChunk != "" {
+				out <- currentChunk
+			}
 		}
 		if err != nil {
 			log.Printf("[assist][StreamWithInstructions][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
