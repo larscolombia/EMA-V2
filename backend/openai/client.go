@@ -657,69 +657,37 @@ func (c *Client) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID st
 	return c.pollVectorStoreFileIndexed(ctx, vsID, fileID, timeout)
 }
 
-// emitMarkdownChunks divide texto largo en chunks lógicos (headers, párrafos)
-// para simular streaming y permitir que normalizeMarkdownToken() procese correctamente.
-// Estrategia: dividir por headers markdown (##, ###) y enviar cada sección como chunk.
+// emitMarkdownChunks envía el texto dividido en chunks pequeños (~100 chars)
+// para simular streaming SSE, permitiendo que normalizeMarkdownToken() añada
+// saltos de línea correctamente entre headers y contenido.
 func emitMarkdownChunks(out chan<- string, text string) {
 	if text == "" {
 		return
 	}
 
-	// Regex para detectar headers markdown: lineas que empiezan con # (1-6)
-	// Capturamos el header + contenido hasta el siguiente header o fin de texto
-	headerPattern := regexp.MustCompile(`(?m)(^#{1,6}\s+[^\n]+)`)
-	
-	// Encontrar todas las posiciones de headers
-	matches := headerPattern.FindAllStringIndex(text, -1)
-	
-	if len(matches) == 0 {
-		// Sin headers, enviar todo de una vez
-		out <- text
-		return
+	// ESTRATEGIA SIMPLE: Dividir el texto en chunks de ~100 caracteres
+	// respetando límites de línea para no cortar palabras/headers en medio
+	const chunkSize = 100
+	lines := strings.Split(text, "\n")
+	currentChunk := ""
+
+	for _, line := range lines {
+		// Si añadir esta línea excede el tamaño, enviar chunk actual
+		if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > chunkSize {
+			out <- currentChunk
+			currentChunk = ""
+		}
+
+		// Añadir línea al chunk
+		if currentChunk != "" {
+			currentChunk += "\n"
+		}
+		currentChunk += line
 	}
 
-	// Enviar chunks: desde inicio hasta primer header, luego entre headers
-	lastEnd := 0
-	for i, match := range matches {
-		start, end := match[0], match[1]
-		
-		// Contenido antes de este header
-		if start > lastEnd {
-			chunk := text[lastEnd:start]
-			if strings.TrimSpace(chunk) != "" {
-				out <- chunk
-			}
-		}
-		
-		// El header mismo
-		headerLine := text[start:end]
-		out <- headerLine
-		
-		// Contenido después del header hasta el siguiente (o fin)
-		contentStart := end
-		var contentEnd int
-		if i+1 < len(matches) {
-			contentEnd = matches[i+1][0]
-		} else {
-			contentEnd = len(text)
-		}
-		
-		if contentEnd > contentStart {
-			content := text[contentStart:contentEnd]
-			if strings.TrimSpace(content) != "" {
-				out <- content
-			}
-		}
-		
-		lastEnd = contentEnd
-	}
-	
-	// Contenido final si queda algo
-	if lastEnd < len(text) {
-		remaining := text[lastEnd:]
-		if strings.TrimSpace(remaining) != "" {
-			out <- remaining
-		}
+	// Enviar último chunk si queda contenido
+	if currentChunk != "" {
+		out <- currentChunk
 	}
 }
 
