@@ -539,7 +539,15 @@ Instrucciones:
 	if integrationMode == "hybrid" {
 		// MODO HÍBRIDO: Integrar vector store y PubMed
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
+				"- # Título principal\n"+
+				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- Listas con viñetas (-) o numeradas (1.)\n"+
+				"- **Negritas** para términos importantes\n"+
+				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
+				"NO escribas texto plano sin estructura. SIEMPRE usa Markdown.\n\n"+
+				"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
 				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
 				"Analiza si la pregunta es:\n"+
@@ -641,7 +649,15 @@ Instrucciones:
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
+				"- # Título principal\n"+
+				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- Listas con viñetas (-) o numeradas (1.)\n"+
+				"- **Negritas** para términos importantes\n"+
+				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
+				"NO escribas texto plano sin estructura. SIEMPRE usa Markdown.\n\n"+
+				"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
 				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
 				"A) CONSULTA CLÍNICA: edad, síntomas, signos, o primera persona ('Tengo X', 'Me duele Y')\n"+
@@ -698,7 +714,15 @@ Instrucciones:
 	} else {
 		// MODO PUBMED ONLY
 		input = fmt.Sprintf(
-			"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
+				"- # Título principal\n"+
+				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- Listas con viñetas (-) o numeradas (1.)\n"+
+				"- **Negritas** para términos importantes\n"+
+				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
+				"NO escribas texto plano sin estructura. SIEMPRE usa Markdown.\n\n"+
+				"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
 				"%s"+ // Contexto conversacional si existe
 				"═══ DETECCIÓN ═══\n"+
 				"A) CLÍNICA (caso paciente o 'Tengo X') → razonamiento interno + respuesta MÉDICO-A-MÉDICO\n"+

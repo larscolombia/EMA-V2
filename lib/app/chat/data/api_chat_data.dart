@@ -81,6 +81,9 @@ class ApiChatData implements IApiChatData {
         options: Options(
           responseType: ResponseType.stream,
           headers: {'Accept': 'text/event-stream'},
+          // Timeouts generosos para respuestas largas
+          receiveTimeout: const Duration(minutes: 3),
+          sendTimeout: const Duration(seconds: 30),
         ),
       );
 
