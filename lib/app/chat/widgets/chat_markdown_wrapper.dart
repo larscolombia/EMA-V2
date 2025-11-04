@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:flutter_streaming_text_markdown/flutter_streaming_text_markdown.dart';
 
-/// A wrapper for GptMarkdown that processes raw medical content into well-formatted
+/// A wrapper for StreamingTextMarkdown that processes raw medical content into well-formatted
 /// Markdown with proper styling for titles, references, and clinical content.
 ///
 /// This widget is optimized to handle the new backend format that includes:
@@ -9,6 +9,7 @@ import 'package:gpt_markdown/gpt_markdown.dart';
 /// - Source indicators: *(Fuente: Base de conocimientos interna)*, *(Fuente: PubMed)*
 /// - Clean **Referencias:** sections with proper formatting
 /// - No duplicate references or malformed placeholders
+/// - Streaming support with proper line breaks and formatting
 class ChatMarkdownWrapper extends StatefulWidget {
   final String text;
   final TextStyle style;
@@ -54,20 +55,29 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
     // 1.1. CRÍTICO: Separar headers Markdown que lleguen pegados del backend
     // Patrón: "texto## Header" -> "texto\n\n## Header"
+    // MEJORADO: Aplicar ANTES de cualquier otro procesamiento
     processed = processed.replaceAllMapped(
-      RegExp(r'([^\s\n])\s*(#{1,6})\s+'),
-      (match) => '${match.group(1)}\n\n${match.group(2)} ',
+      RegExp(r'([^\n])(#{1,6})\s+', multiLine: true),
+      (match) {
+        final before = match.group(1)!;
+        final hashes = match.group(2)!;
+        // Si el carácter anterior no es espacio, agregar doble salto
+        if (before.trim().isNotEmpty) {
+          return '$before\n\n$hashes ';
+        }
+        return '$before$hashes ';
+      },
     );
 
     // 1.2. Separar listas que lleguen pegadas: "texto- Item" -> "texto\n- Item"
     processed = processed.replaceAllMapped(
-      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?])\s*-\s+([A-ZÁÉÍÓÚÑ])'),
-      (match) => '${match.group(1)}\n- ${match.group(2)}',
+      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?)])\s*-\s+', multiLine: true),
+      (match) => '${match.group(1)}\n- ',
     );
 
     // 1.3. Separar listas numeradas pegadas: "texto1. Item" -> "texto\n1. Item"
     processed = processed.replaceAllMapped(
-      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*(\d+\.\s+)'),
+      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*(\d+\.\s+)', multiLine: true),
       (match) => '${match.group(1)}\n${match.group(2)}',
     );
 
@@ -519,63 +529,22 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    // Custom theme for medical content with white/light colors for dark chat background
-    final customTheme = theme.copyWith(
-      textTheme: theme.textTheme.copyWith(
-        // H1 - Main titles
-        displayLarge: widget.style.copyWith(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          height: 1.5,
-        ),
-        // H2 - Section titles (Evidencia usada, Fuentes, etc.)
-        displayMedium: widget.style.copyWith(
-          fontSize: 16,
-          fontWeight: FontWeight.bold,
-          height: 1.6,
-        ),
-        // H3 - Subsection titles
-        displaySmall: widget.style.copyWith(
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
-          height: 1.6,
-        ),
-        // H4 - Minor titles
-        headlineLarge: widget.style.copyWith(
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
-          height: 1.6,
-        ),
-        // H5 - Small titles
-        headlineMedium: widget.style.copyWith(
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-          height: 1.6,
-        ),
-        // H6 - Minimal titles
-        headlineSmall: widget.style.copyWith(
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-          height: 1.6,
-        ),
-        // Body text - use the same style passed from ChatMessageAi with better spacing
-        bodyLarge: widget.style.copyWith(height: 1.7),
-        bodyMedium: widget.style.copyWith(height: 1.7),
-      ),
-    );
-
     // Simple content without nested scrolls for chat messages
-    // Wrap in a container to ensure proper paragraph spacing
-    Widget content = Theme(
-      data: customTheme,
-      child: DefaultTextStyle.merge(
-        style: widget.style.copyWith(height: 1.7),
-        textAlign: TextAlign.justify,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4.0),
-          child: GptMarkdown(_processedText),
+    // CRÍTICO: StreamingTextMarkdown usa internamente gpt_markdown
+    // que no respeta los tamaños custom de headers muy bien.
+    // Solución: Ajustar el procesamiento para agregar más espacio entre secciones
+    Widget content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: StreamingTextMarkdown.instant(
+        text: _processedText,
+        markdownEnabled: true,
+        theme: StreamingTextTheme(
+          textStyle: widget.style.copyWith(
+            height: 1.7,
+            fontSize: widget.style.fontSize ?? 15,
+          ),
+          // Padding por defecto más amplio
+          defaultPadding: const EdgeInsets.all(0),
         ),
       ),
     );

@@ -539,10 +539,11 @@ Instrucciones:
 	if integrationMode == "hybrid" {
 		// MODO HÍBRIDO: Integrar vector store y PubMed
 		input = fmt.Sprintf(
-			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA - FORMATO MARKDOWN ⚠️⚠️⚠️\n"+
 				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
-				"- # Título principal\n"+
+				"- ## Título principal (usa SIEMPRE ## no #, tamaño moderado)\n"+
 				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- CRÍTICO: Agrega DOBLE salto de línea (\\n\\n) ANTES de cada ##\n"+
 				"- Listas con viñetas (-) o numeradas (1.)\n"+
 				"- **Negritas** para términos importantes\n"+
 				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
@@ -649,10 +650,11 @@ Instrucciones:
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
-			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA - FORMATO MARKDOWN ⚠️⚠️⚠️\n"+
 				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
-				"- # Título principal\n"+
+				"- ## Título principal (usa SIEMPRE ## no #, tamaño moderado)\n"+
 				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- CRÍTICO: Agrega DOBLE salto de línea (\\n\\n) ANTES de cada ##\n"+
 				"- Listas con viñetas (-) o numeradas (1.)\n"+
 				"- **Negritas** para términos importantes\n"+
 				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
@@ -714,10 +716,11 @@ Instrucciones:
 	} else {
 		// MODO PUBMED ONLY
 		input = fmt.Sprintf(
-			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA ⚠️⚠️⚠️\n"+
+			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA - FORMATO MARKDOWN ⚠️⚠️⚠️\n"+
 				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
-				"- # Título principal\n"+
+				"- ## Título principal (usa SIEMPRE ## no #, tamaño moderado)\n"+
 				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
+				"- CRÍTICO: Agrega DOBLE salto de línea (\\n\\n) ANTES de cada ##\n"+
 				"- Listas con viñetas (-) o numeradas (1.)\n"+
 				"- **Negritas** para términos importantes\n"+
 				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
