@@ -1317,7 +1317,7 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[runAndWait][TIMEOUT] thread=%s run_id=%s elapsed=%v polls=%d last_status=%s", 
+			log.Printf("[runAndWait][TIMEOUT] thread=%s run_id=%s elapsed=%v polls=%d last_status=%s",
 				threadID, run.ID, time.Since(pollStart), pollCount, lastStatus)
 			return "", ctx.Err()
 		case <-time.After(400 * time.Millisecond):
@@ -1377,22 +1377,22 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		}
 		_ = json.NewDecoder(rresp.Body).Decode(&r)
 		rresp.Body.Close()
-		
+
 		// Log cambios de estado
 		if r.Status != lastStatus {
-			log.Printf("[runAndWait][STATUS_CHANGE] thread=%s run_id=%s poll#%d elapsed=%v status: %s→%s", 
+			log.Printf("[runAndWait][STATUS_CHANGE] thread=%s run_id=%s poll#%d elapsed=%v status: %s→%s",
 				threadID, run.ID, pollCount, time.Since(pollStart), lastStatus, r.Status)
 			lastStatus = r.Status
 		}
-		
+
 		// Log cada 30 polls (~12 segundos) si sigue en progreso
 		if pollCount%30 == 0 && r.Status != "completed" {
-			log.Printf("[runAndWait][STILL_RUNNING] thread=%s run_id=%s poll#%d elapsed=%v status=%s api_latency=%v", 
+			log.Printf("[runAndWait][STILL_RUNNING] thread=%s run_id=%s poll#%d elapsed=%v status=%s api_latency=%v",
 				threadID, run.ID, pollCount, time.Since(pollStart), r.Status, time.Since(pollCheckStart))
 		}
-		
+
 		if r.Status == "completed" {
-			log.Printf("[runAndWait][COMPLETED] thread=%s run_id=%s total_polls=%d total_elapsed=%v", 
+			log.Printf("[runAndWait][COMPLETED] thread=%s run_id=%s total_polls=%d total_elapsed=%v",
 				threadID, run.ID, pollCount, time.Since(pollStart))
 			break
 		}

@@ -255,7 +255,7 @@ func (h *Handler) buildContextualizedQuery(ctx context.Context, threadID, curren
 func (h *Handler) buildConversationContext(ctx context.Context, threadID string, limit int) string {
 	fetchStart := time.Now()
 	messages, err := h.AI.GetThreadMessages(ctx, threadID, limit)
-	log.Printf("[conv][buildContext][fetch] thread=%s limit=%d elapsed_ms=%d err=%v", 
+	log.Printf("[conv][buildContext][fetch] thread=%s limit=%d elapsed_ms=%d err=%v",
 		threadID, limit, time.Since(fetchStart).Milliseconds(), err)
 	if err != nil || len(messages) == 0 {
 		return ""
