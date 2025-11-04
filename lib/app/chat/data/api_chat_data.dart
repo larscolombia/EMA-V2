@@ -91,33 +91,36 @@ class ApiChatData implements IApiChatData {
         throw Exception('Respuesta de streaming vacía');
       }
       // body.stream is a Stream<List<int>>; decode as UTF8
-      final stream = utf8.decoder.bind(body.stream);
+      // CRÍTICO: usar LineSplitter con transform() para manejar
+      // líneas incompletas que llegan partidas entre chunks. LineSplitter mantiene
+      // un buffer interno y solo emite líneas completas.
+      final stream = utf8.decoder
+          .bind(body.stream)
+          .transform(const LineSplitter());
       final buffer = StringBuffer();
 
-      await for (final chunk in stream) {
-        for (final line in const LineSplitter().convert(chunk)) {
-          if (line.startsWith('data:')) {
-            // Preserve original token spacing. Our SSE writer sends "data: <msg>";
-            // remove only the single space after the colon to restore the exact token from OpenAI.
-            var content = line.substring(5); // " <msg>" or " [DONE]"
-            if (content.startsWith(' ')) content = content.substring(1);
-            // Stage markers are synthetic tokens that start with __STAGE__:<name>
-            if (content.startsWith('__STAGE__:')) {
-              onStream?.call(
-                content,
-              ); // Pass-through so controller can react to stages
-              continue;
-            }
-            print(
-              '📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
-            );
-            if (content == '[DONE]') {
-              print('📡 [API] Received DONE marker, ending stream');
-              break;
-            }
-            buffer.write(content);
-            onStream?.call(content);
+      await for (final line in stream) {
+        if (line.startsWith('data:')) {
+          // Preserve original token spacing. Our SSE writer sends "data: <msg>";
+          // remove only the single space after the colon to restore the exact token from OpenAI.
+          var content = line.substring(5); // " <msg>" or " [DONE]"
+          if (content.startsWith(' ')) content = content.substring(1);
+          // Stage markers are synthetic tokens that start with __STAGE__:<name>
+          if (content.startsWith('__STAGE__:')) {
+            onStream?.call(
+              content,
+            ); // Pass-through so controller can react to stages
+            continue;
           }
+          print(
+            '📡 [API] Received SSE chunk: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
+          );
+          if (content == '[DONE]') {
+            print('📡 [API] Received DONE marker, ending stream');
+            break;
+          }
+          buffer.write(content);
+          onStream?.call(content);
         }
       }
 
@@ -241,39 +244,39 @@ class ApiChatData implements IApiChatData {
           'Error del servidor (${response.statusCode}): ${jsonMap?['error'] ?? (text.isNotEmpty ? text : 'sin detalle')}',
         );
       }
-      final stream = utf8.decoder.bind(body.stream);
+      // CRÍTICO: usar LineSplitter con transform() para manejar líneas incompletas
+      final stream = utf8.decoder
+          .bind(body.stream)
+          .transform(const LineSplitter());
       final buffer = StringBuffer();
       var tokenCount = 0;
       print('📡 [PDF-UPLOAD] Starting SSE stream processing...');
 
-      await for (final chunk in stream) {
-        print('📡 [PDF-UPLOAD] Raw chunk received: ${chunk.length} bytes');
-        for (final line in const LineSplitter().convert(chunk)) {
-          print(
-            '📡 [PDF-UPLOAD] Processing line: "${line.substring(0, line.length > 100 ? 100 : line.length)}"',
-          );
-          if (line.startsWith('data:')) {
-            var content = line.substring(5);
-            if (content.startsWith(' ')) content = content.substring(1);
-            if (content.startsWith('__STAGE__:')) {
-              print('📡 [PDF-UPLOAD] Stage marker: $content');
-              onStream?.call(content);
-              continue;
-            }
-            print(
-              '📡 [PDF-UPLOAD] SSE token #${++tokenCount}: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
-            );
-            if (content == '[DONE]') {
-              print('📡 [PDF-UPLOAD] Received DONE marker, ending stream');
-              break;
-            }
-            buffer.write(content);
-            print(
-              '📡 [PDF-UPLOAD] Calling onStream callback with token #$tokenCount',
-            );
+      await for (final line in stream) {
+        print(
+          '📡 [PDF-UPLOAD] Processing line: "${line.substring(0, line.length > 100 ? 100 : line.length)}"',
+        );
+        if (line.startsWith('data:')) {
+          var content = line.substring(5);
+          if (content.startsWith(' ')) content = content.substring(1);
+          if (content.startsWith('__STAGE__:')) {
+            print('📡 [PDF-UPLOAD] Stage marker: $content');
             onStream?.call(content);
-            print('📡 [PDF-UPLOAD] onStream callback completed');
+            continue;
           }
+          print(
+            '📡 [PDF-UPLOAD] SSE token #${++tokenCount}: "${content.substring(0, content.length > 50 ? 50 : content.length)}${content.length > 50 ? "..." : ""}" (${content.length} chars)',
+          );
+          if (content == '[DONE]') {
+            print('📡 [PDF-UPLOAD] Received DONE marker, ending stream');
+            break;
+          }
+          buffer.write(content);
+          print(
+            '📡 [PDF-UPLOAD] Calling onStream callback with token #$tokenCount',
+          );
+          onStream?.call(content);
+          print('📡 [PDF-UPLOAD] onStream callback completed');
         }
       }
       final finalText = buffer.toString();
@@ -387,27 +390,26 @@ class ApiChatData implements IApiChatData {
         );
       }
 
-      final stream = utf8.decoder.bind(body.stream);
+      // CRÍTICO: usar LineSplitter con transform() para manejar líneas incompletas
+      final stream = utf8.decoder
+          .bind(body.stream)
+          .transform(const LineSplitter());
       final buffer = StringBuffer();
       var tokenCount = 0;
       print('📡 [IMAGE-UPLOAD] Starting SSE stream processing...');
 
-      await for (final chunk in stream) {
-        print('📡 [IMAGE-UPLOAD] Raw chunk received: ${chunk.length} bytes');
-        final lines = chunk.split('\n');
-        for (final line in lines) {
-          if (line.isEmpty) continue;
-          if (line.startsWith('data: ')) {
-            final data = line.substring(6).trim();
-            if (data == '[DONE]') {
-              print('📡 [IMAGE-UPLOAD] Received [DONE] signal');
-              break;
-            }
-            if (data.isNotEmpty) {
-              tokenCount++;
-              buffer.write(data);
-              onStream?.call(data);
-            }
+      await for (final line in stream) {
+        if (line.isEmpty) continue;
+        if (line.startsWith('data: ')) {
+          final data = line.substring(6).trim();
+          if (data == '[DONE]') {
+            print('📡 [IMAGE-UPLOAD] Received [DONE] signal');
+            break;
+          }
+          if (data.isNotEmpty) {
+            tokenCount++;
+            buffer.write(data);
+            onStream?.call(data);
           }
         }
       }

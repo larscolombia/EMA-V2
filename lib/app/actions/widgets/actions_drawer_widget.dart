@@ -84,31 +84,40 @@ class ActionsDrawerListWidget extends StatelessWidget {
                     onPressed: () async {
                       final confirmed = await showDialog<bool>(
                         context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Eliminar'),
-                          content: const Text('¿Deseas eliminar este elemento?'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(false),
-                              child: const Text('Cancelar'),
+                        builder:
+                            (ctx) => AlertDialog(
+                              title: const Text('Eliminar'),
+                              content: const Text(
+                                '¿Deseas eliminar este elemento?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(false),
+                                  child: const Text('Cancelar'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.of(ctx).pop(true),
+                                  child: const Text('Eliminar'),
+                                ),
+                              ],
                             ),
-                            FilledButton(
-                              onPressed: () => Navigator.of(ctx).pop(true),
-                              child: const Text('Eliminar'),
-                            ),
-                          ],
-                        ),
                       );
                       if (confirmed == true) {
                         if (action.type == ActionType.chat) {
-                          await _chatController.chatsService.deleteChat(action.itemId);
+                          await _chatController.chatsService.deleteChat(
+                            action.itemId,
+                          );
                         } else {
                           await _actionsController.deleteAction(action);
                         }
                         _actionsController.loadActions(0);
                       }
                     },
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.redAccent,
+                      size: 20,
+                    ),
                   ),
                   AppIcons.arrowRightCircular(
                     height: 22,

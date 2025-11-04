@@ -40,7 +40,8 @@ class LocalChatMessageData extends ILocalData<ChatMessageModel>
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
         attach TEXT,
-        imageAttach TEXT
+        imageAttach TEXT,
+        format TEXT DEFAULT 'plain'
       );
     ''';
   }

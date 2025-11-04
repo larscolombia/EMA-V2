@@ -197,24 +197,45 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   List<String> _extractSources(String text) {
     final List<String> sources = [];
 
-    // Buscar sección de fuentes con ## Fuentes (formato nuevo del backend)
-    final sourcesRegex = RegExp(
-      r'##\s*Fuentes\s*\n(.*?)(?=\n\n|\n## |$)',
+    // 1. Buscar sección nueva con emojis: ## Fuentes seguido de ### 📚 y ### 🔬
+    final newFormatRegex = RegExp(
+      r'##\s*Fuentes\s*\n+(.*?)(?=\n\n[^#\-\*]|\z)',
       dotAll: true,
       caseSensitive: false,
     );
-    final sourcesMatch = sourcesRegex.firstMatch(text);
+    final newFormatMatch = newFormatRegex.firstMatch(text);
 
-    if (sourcesMatch != null) {
-      final sourcesText = sourcesMatch.group(1) ?? '';
-      // Extraer elementos de lista con - o *
-      final listRegex = RegExp(r'^[\-\*]\s*(.+)$', multiLine: true);
+    if (newFormatMatch != null) {
+      final sourcesSection = newFormatMatch.group(1) ?? '';
+      // Extraer líneas que empiezan con - (lista de fuentes)
+      final listRegex = RegExp(r'^\s*[\-\*]\s*(.+)$', multiLine: true);
       sources.addAll(
         listRegex
-            .allMatches(sourcesText)
+            .allMatches(sourcesSection)
             .map((match) => match.group(1)!.trim())
-            .where((s) => s.isNotEmpty),
+            .where((s) => s.isNotEmpty && !s.contains('###')),
       );
+    }
+
+    // 2. Fallback: Buscar formato antiguo ## Fuentes sin subsecciones
+    if (sources.isEmpty) {
+      final sourcesRegex = RegExp(
+        r'##\s*Fuentes\s*:?\s*\n(.*?)(?=\n\n|\n## |$)',
+        dotAll: true,
+        caseSensitive: false,
+      );
+      final sourcesMatch = sourcesRegex.firstMatch(text);
+
+      if (sourcesMatch != null) {
+        final sourcesText = sourcesMatch.group(1) ?? '';
+        final listRegex = RegExp(r'^[\-\*]\s*(.+)$', multiLine: true);
+        sources.addAll(
+          listRegex
+              .allMatches(sourcesText)
+              .map((match) => match.group(1)!.trim())
+              .where((s) => s.isNotEmpty),
+        );
+      }
     }
 
     // Fallback: buscar patrón "Fuentes:" sin ##
@@ -260,10 +281,13 @@ class _ChatMessageAiState extends State<ChatMessageAi>
 
     String content = text;
 
-    // 1. Remover sección "## Fuentes" completa con todo su contenido
+    // 1. Remover sección "## Fuentes" completa incluyendo subsecciones con emojis
     // Este patrón captura desde ## Fuentes hasta el final del texto
     content = content.replaceAll(
-      RegExp(r'\n*##\s*Fuentes\s*:?\s*\n[\s\S]*$', caseSensitive: false),
+      RegExp(
+        r'\n*##\s*Fuentes\s*:?\s*\n+(?:###\s*[📚🔬].*?\n+)?[\s\S]*$',
+        caseSensitive: false,
+      ),
       '',
     );
 
@@ -273,21 +297,30 @@ class _ChatMessageAiState extends State<ChatMessageAi>
       '',
     );
 
-    // 3. Remover líneas que empiezan con "- " y contienen referencias bibliográficas
+    // 3. Remover líneas sueltas que empiezan con "- " y contienen referencias bibliográficas
     // (Manual, PMID, PDF, etc.) que puedan haber quedado
     content = content.replaceAll(
       RegExp(
-        r'\n\s*-\s+.*?(?:Manual\s+Schwartz|PMID:\s*\d+|\.pdf|PubMed).*?$',
+        r'\n\s*-\s+.*?(?:Manual\s+Schwartz|PMID:\s*\d+|\.pdf|PubMed|Libro de texto|Literatura Científica).*?$',
         caseSensitive: false,
         multiLine: true,
       ),
       '',
     );
 
-    // 4. Remover símbolos ## mal formados al final
+    // 4. Remover subsecciones de fuentes sueltas que quedaron
+    content = content.replaceAll(
+      RegExp(
+        r'###\s*[📚🔬].*?(?:Libros|Literatura).*?\n',
+        caseSensitive: false,
+      ),
+      '',
+    );
+
+    // 5. Remover símbolos ## mal formados al final
     content = content.replaceAll(RegExp(r'\.?\s*##\s*[A-Z]?\s*$'), '.');
 
-    // 5. Limpiar espacios en blanco excesivos al final
+    // 6. Limpiar espacios en blanco excesivos al final
     content = content.replaceAll(RegExp(r'\s+$'), '');
 
     return content.trim();
@@ -302,17 +335,9 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   @override
   Widget build(BuildContext context) {
     final String timeStr = DateFormat('HH:mm').format(widget.message.createdAt);
+    final isLongMessage = widget.message.text.length > 800;
 
-    // Debug: imprimir la longitud del texto del mensaje
-    print(
-      '🔍 [ChatMessageAi] Mensaje recibido - Longitud: ${widget.message.text.length}',
-    );
-    print('🔍 [ChatMessageAi] Texto completo: "${widget.message.text}"');
-    print(
-      '🔍 [ChatMessageAi] Contenido principal: "${_getMainContent(widget.message.text)}"',
-    );
-
-    // Si no hay texto útil, no renderizar la burbuja para evitar espacios en blanco y overflows innecesarios
+    // Si no hay texto útil, no renderizar la burbuja
     if (widget.message.text.trim().isEmpty) {
       return const SizedBox.shrink();
     }
@@ -323,50 +348,102 @@ class _ChatMessageAiState extends State<ChatMessageAi>
         child: FadeTransition(
           opacity: _fadeAnimation,
           child: Container(
-            margin: const EdgeInsets.only(
-              top: 8,
-              bottom: 8,
-              right: 8, // Reducido el margen derecho
-              left: 8, // Reducido el margen izquierdo
-            ),
-            // Usar todo el ancho disponible sin restricciones
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             width: double.infinity,
             decoration: BoxDecoration(
-              color: const Color.fromRGBO(58, 12, 140, 0.9),
-              borderRadius: BorderRadius.circular(12),
+              // 🎨 Cambiar a blanco para mensajes largos
+              color:
+                  isLongMessage
+                      ? Colors.white
+                      : const Color.fromRGBO(58, 12, 140, 0.9),
+              borderRadius: BorderRadius.circular(16),
+              // 🎨 Añadir sombra sutil para mensajes largos
+              boxShadow:
+                  isLongMessage
+                      ? [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                      : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Contenido principal de la respuesta
+                // 📋 Header para mensajes largos
+                if (isLongMessage)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color.fromRGBO(58, 12, 140, 0.05),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        topRight: Radius.circular(16),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.article_outlined,
+                          color: const Color.fromRGBO(58, 12, 140, 1),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Respuesta Detallada',
+                          style: TextStyle(
+                            color: const Color.fromRGBO(58, 12, 140, 1),
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Contenido principal
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.all(isLongMessage ? 20 : 16),
                   child: ChatMarkdownWrapper(
                     text: _getMainContent(widget.message.text),
-                    style: const TextStyle(
-                      fontSize: 15,
-                      color: Colors.white,
+                    style: TextStyle(
+                      fontSize: isLongMessage ? 15.5 : 15,
+                      // 🎨 Texto negro para fondo blanco, blanco para morado
+                      color: isLongMessage ? Colors.black87 : Colors.white,
                       height: 1.7,
                       letterSpacing: 0.2,
                     ),
                   ),
                 ),
 
-                // Mostrar fuentes si están disponibles con diseño mejorado
+                // 📚 Mostrar fuentes si están disponibles
                 if (_extractSources(widget.message.text).isNotEmpty)
                   Container(
-                    margin: const EdgeInsets.only(
-                      left: 12,
-                      right: 12,
-                      bottom: 12,
+                    margin: EdgeInsets.only(
+                      left: isLongMessage ? 16 : 12,
+                      right: isLongMessage ? 16 : 12,
+                      bottom: 16,
                       top: 8,
                     ),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
+                      // 🎨 Fondo adaptable: gris claro sobre blanco, blanco transparente sobre morado
+                      color:
+                          isLongMessage
+                              ? const Color.fromRGBO(58, 12, 140, 0.04)
+                              : Colors.white.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.15),
+                        color:
+                            isLongMessage
+                                ? const Color.fromRGBO(58, 12, 140, 0.15)
+                                : Colors.white.withOpacity(0.15),
                         width: 1,
                       ),
                     ),
@@ -379,12 +456,18 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                             Container(
                               padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
+                                color:
+                                    isLongMessage
+                                        ? const Color.fromRGBO(58, 12, 140, 0.1)
+                                        : Colors.white.withOpacity(0.1),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Icon(
                                 Icons.menu_book_rounded,
-                                color: Colors.white,
+                                color:
+                                    isLongMessage
+                                        ? const Color.fromRGBO(58, 12, 140, 1)
+                                        : Colors.white,
                                 size: 18,
                               ),
                             ),
@@ -392,7 +475,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                             Text(
                               'Bibliografía',
                               style: TextStyle(
-                                color: Colors.white,
+                                color:
+                                    isLongMessage
+                                        ? const Color.fromRGBO(58, 12, 140, 1)
+                                        : Colors.white,
                                 fontSize: 15,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 0.3,
@@ -404,7 +490,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                         // Separador
                         Container(
                           height: 1,
-                          color: Colors.white.withOpacity(0.1),
+                          color:
+                              isLongMessage
+                                  ? const Color.fromRGBO(58, 12, 140, 0.1)
+                                  : Colors.white.withOpacity(0.1),
                         ),
                         const SizedBox(height: 12),
                         // Lista de fuentes
@@ -413,10 +502,21 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                             margin: const EdgeInsets.only(bottom: 10),
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.15),
+                              color:
+                                  isLongMessage
+                                      ? Colors.black.withOpacity(0.03)
+                                      : Colors.black.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.08),
+                                color:
+                                    isLongMessage
+                                        ? const Color.fromRGBO(
+                                          58,
+                                          12,
+                                          140,
+                                          0.08,
+                                        )
+                                        : Colors.white.withOpacity(0.08),
                                 width: 0.5,
                               ),
                             ),
@@ -431,7 +531,15 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                                   ),
                                   child: Icon(
                                     _getSourceIcon(source),
-                                    color: Colors.white60,
+                                    color:
+                                        isLongMessage
+                                            ? const Color.fromRGBO(
+                                              58,
+                                              12,
+                                              140,
+                                              0.6,
+                                            )
+                                            : Colors.white60,
                                     size: 16,
                                   ),
                                 ),
@@ -440,7 +548,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                                   child: Text(
                                     _toApa(source),
                                     style: TextStyle(
-                                      color: Colors.white.withOpacity(0.85),
+                                      color:
+                                          isLongMessage
+                                              ? Colors.black87
+                                              : Colors.white.withOpacity(0.85),
                                       fontSize: 12,
                                       height: 1.5,
                                       letterSpacing: 0.2,
@@ -455,15 +566,21 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                     ),
                   ),
 
-                // Muestra la hora del mensaje
+                // ⏰ Muestra la hora del mensaje
                 Padding(
-                  padding: const EdgeInsets.only(right: 8, bottom: 4),
+                  padding: EdgeInsets.only(
+                    right: isLongMessage ? 20 : 8,
+                    bottom: isLongMessage ? 8 : 4,
+                  ),
                   child: Align(
                     alignment: Alignment.bottomRight,
                     child: Text(
                       timeStr,
                       style: TextStyle(
-                        color: const Color.fromRGBO(255, 255, 255, 0.7),
+                        color:
+                            isLongMessage
+                                ? Colors.black45
+                                : const Color.fromRGBO(255, 255, 255, 0.7),
                         fontSize: 10,
                       ),
                     ),

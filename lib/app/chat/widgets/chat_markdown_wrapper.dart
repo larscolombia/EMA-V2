@@ -52,6 +52,25 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     // 1. Convert literal \n to actual line breaks
     processed = processed.replaceAll('\\n', '\n');
 
+    // 1.1. CRÍTICO: Separar headers Markdown que lleguen pegados del backend
+    // Patrón: "texto## Header" -> "texto\n\n## Header"
+    processed = processed.replaceAllMapped(
+      RegExp(r'([^\s\n])\s*(#{1,6})\s+'),
+      (match) => '${match.group(1)}\n\n${match.group(2)} ',
+    );
+
+    // 1.2. Separar listas que lleguen pegadas: "texto- Item" -> "texto\n- Item"
+    processed = processed.replaceAllMapped(
+      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?])\s*-\s+([A-ZÁÉÍÓÚÑ])'),
+      (match) => '${match.group(1)}\n- ${match.group(2)}',
+    );
+
+    // 1.3. Separar listas numeradas pegadas: "texto1. Item" -> "texto\n1. Item"
+    processed = processed.replaceAllMapped(
+      RegExp(r'([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*(\d+\.\s+)'),
+      (match) => '${match.group(1)}\n${match.group(2)}',
+    );
+
     // 2. Ensure paragraphs are properly separated
     // Replace double line breaks with proper markdown spacing
     processed = processed.replaceAll(RegExp(r'\n\n+'), '\n\n');
@@ -89,6 +108,44 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     processed = processed.replaceAllMapped(
       RegExp(r'([.!?])\s*\n([A-ZÁÉÍÓÚÑ])', multiLine: true),
       (match) => '${match.group(1)}\n\n${match.group(2)}',
+    );
+
+    // 6.1. Mejorar detección de secciones estructuradas (sin ## pero con numeración implícita)
+    // Detectar patrones como "1. **Título:**" o "**Título:**" al inicio de línea
+    processed = processed.replaceAllMapped(
+      RegExp(r'^(\d+\.\s*)?(\*\*[A-ZÁÉÍÓÚÑ][^*]+\*\*:?\s*)$', multiLine: true),
+      (match) => '\n${match.group(0)}\n',
+    );
+
+    // 6.2. Asegurar espacio antes de párrafos que empiezan con mayúscula después de punto final
+    // Esto ayuda a separar conceptos diferentes
+    processed = processed.replaceAllMapped(
+      RegExp(r'([.!?])\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,})', multiLine: false),
+      (match) {
+        // Solo añadir salto si no es inicio de oración dentro del mismo párrafo
+        final nextWord = match.group(2)!;
+        // Palabras que típicamente continúan párrafo
+        final continuationWords = [
+          'Este',
+          'Esta',
+          'Estos',
+          'Estas',
+          'Asimismo',
+          'Además',
+          'Por',
+          'Sin',
+          'Con',
+          'En',
+          'La',
+          'El',
+          'Los',
+          'Las',
+        ];
+        if (continuationWords.contains(nextWord.split(' ')[0])) {
+          return match.group(0)!;
+        }
+        return '${match.group(1)}\n\n${match.group(2)}';
+      },
     );
 
     // 7. Legacy cleanup (for any old content still in cache)
@@ -248,6 +305,34 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
       '\n\n'
       r'$2',
     );
+
+    // 11.5. Detectar y formatear secciones médicas comunes sin headers explícitos
+    // Patrones: "Análisis del Cuadro Clínico:", "Diagnósticos Diferenciales:", etc.
+    final medicalSections = [
+      'Análisis del Cuadro Clínico',
+      'Análisis Clínico',
+      'Diagnósticos Diferenciales',
+      'Diagnóstico Diferencial',
+      'Recomendaciones',
+      'Manejo',
+      'Tratamiento',
+      'Estudios Complementarios',
+      'Definición',
+      'Fisiopatología',
+      'Manifestaciones Clínicas',
+      'Criterios Diagnósticos',
+    ];
+
+    for (final section in medicalSections) {
+      // Convertir "Sección:" o "**Sección:**" a formato de header secundario
+      processed = processed.replaceAllMapped(
+        RegExp(
+          '(?:^|\\n)(\\*\\*)?($section)(\\*\\*)?:?\\s*(?=\\n|[A-Z])',
+          caseSensitive: false,
+        ),
+        (match) => '\n\n**${match.group(2)}:**\n\n',
+      );
+    }
 
     // 12. Clean up excessive whitespace but preserve paragraph breaks
     processed = processed.replaceAll(RegExp(r'\n{4,}'), '\n\n\n');

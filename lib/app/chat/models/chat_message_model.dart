@@ -7,6 +7,12 @@ import 'package:ema_educacion_medica_avanzada/core/attachments/image_attachment.
 import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
+/// Enum para determinar el formato de renderizado del mensaje
+enum MessageFormat {
+  plain, // Mensaje corto (burbuja morada estilo chat)
+  markdown, // Mensaje largo estructurado (tarjeta blanca tipo documento)
+}
+
 class ChatMessageModel {
   final String uid;
   final String chatId;
@@ -17,6 +23,7 @@ class ChatMessageModel {
   final PdfAttachment? attach;
   final ImageAttachment? imageAttach;
   final Widget? widget; // Widget personalizado para renderizar el mensaje
+  final MessageFormat format; // Formato de renderizado
 
   ChatMessageModel._({
     required this.uid,
@@ -28,12 +35,14 @@ class ChatMessageModel {
     this.attach,
     this.imageAttach,
     this.widget,
+    this.format = MessageFormat.plain, // Default: burbuja morada normal
   });
 
   factory ChatMessageModel.ai({
     required String chatId,
     required String text,
     Widget? widget,
+    MessageFormat format = MessageFormat.plain,
   }) {
     return ChatMessageModel._(
       uid: const Uuid().v4(),
@@ -45,6 +54,7 @@ class ChatMessageModel {
       attach: null,
       imageAttach: null,
       widget: widget,
+      format: format,
     );
   }
 
@@ -61,6 +71,7 @@ class ChatMessageModel {
       updatedAt: DateTime.fromMillisecondsSinceEpoch(map['updatedAt'] as int),
       attach: null,
       imageAttach: null,
+      format: MessageFormat.plain, // Por ahora API retorna plain
     );
   }
 
@@ -74,6 +85,7 @@ class ChatMessageModel {
       updatedAt: DateTime.now(),
       attach: null,
       imageAttach: null,
+      format: MessageFormat.plain, // Los temporales siempre plain
     );
   }
 
@@ -92,6 +104,7 @@ class ChatMessageModel {
       updatedAt: DateTime.now(),
       attach: attach,
       imageAttach: imageAttach,
+      format: MessageFormat.plain, // Usuario siempre plain
     );
   }
 
@@ -111,6 +124,10 @@ class ChatMessageModel {
           map['imageAttach'] != null
               ? ImageAttachment.fromJson(map['imageAttach'] as String)
               : null,
+      format:
+          map['format'] == 'markdown'
+              ? MessageFormat.markdown
+              : MessageFormat.plain,
     );
   }
 
@@ -147,6 +164,7 @@ class ChatMessageModel {
       'updatedAt': updatedAt.millisecondsSinceEpoch,
       'attach': attach?.toJson(),
       'imageAttach': imageAttach?.toJson(),
+      'format': format == MessageFormat.markdown ? 'markdown' : 'plain',
     };
   }
 

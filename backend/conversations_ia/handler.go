@@ -667,8 +667,26 @@ Instrucciones:
 				"3. PROHIBIDO conocimiento general\n"+
 				"4. Tono: PROFESIONAL MÉDICO (no para pacientes)\n"+
 				"5. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
-				"═══ BIBLIOGRAFÍA ═══\n"+
-				"OBLIGATORIO: Si usaste libros arriba, DEBES citarlos aquí.\n\n"+
+				"═══ FORMATO DE SALIDA — MARKDOWN ESTRUCTURADO ═══\n"+
+				"OBLIGATORIO usar encabezados Markdown (#, ##, ###), listas (-, 1.), negritas **...**, itálicas *...*, y citas con >.\n"+
+				"PROHIBIDO usar bloques de código (```), XML/HTML o JSON en la salida visible.\n"+
+				"NO incluyas etiquetas como [STATE], [INTERNAL], ni preámbulos del tipo 'A continuación...'.\n"+
+				"Extensión: clara y suficiente; evita párrafos kilométricos (máx. 6–8 líneas por párrafo).\n\n"+
+				"Estructura sugerida (adapta nombres según el tema):\n"+
+				"# Título breve y específico\n"+
+				"## Resumen\n"+
+				"- Punto clave 1\n"+
+				"- Punto clave 2\n"+
+				"## Desarrollo/Análisis\n"+
+				"- Hallazgo o razonamiento 1\n"+
+				"- Hallazgo o razonamiento 2\n"+
+				"> Alerta/nota crítica (si aplica)\n"+
+				"## Recomendaciones / Pasos siguientes\n"+
+				"- Acción 1\n"+
+				"- Acción 2\n\n"+
+				"═══ BIBLIOGRAFÍA — NUNCA OMITIR ═══\n"+
+				"⚠️ REGLA CRÍTICA: Tu respuesta DEBE terminar con la sección ## Fuentes.\n"+
+				"NO es opcional. SIEMPRE incluye esta sección, aunque uses una sola fuente.\n\n"+
 				"## Fuentes\n\n"+
 				"### 📚 Libros de Texto Médico\n"+
 				"- Formato: **Título del libro.** (año). [Libro de texto médico].\n"+
@@ -704,7 +722,26 @@ Instrucciones:
 				"3. Si pide PMIDs → incluye PMID: ###### en CADA cita\n"+
 				"4. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n"+
 				"5. Tono: PROFESIONAL MÉDICO (no para pacientes)\n\n"+
-				"═══ BIBLIOGRAFÍA ═══\n"+
+				"═══ FORMATO DE SALIDA — MARKDOWN ESTRUCTURADO ═══\n"+
+				"OBLIGATORIO usar encabezados Markdown (#, ##, ###), listas (-, 1.), negritas **...**, itálicas *...*, y citas con >.\n"+
+				"PROHIBIDO usar bloques de código (```), XML/HTML o JSON en la salida visible.\n"+
+				"NO incluyas etiquetas como [STATE], [INTERNAL], ni preámbulos del tipo 'A continuación...'.\n"+
+				"Extensión: clara y suficiente; evita párrafos kilométricos (máx. 6–8 líneas por párrafo).\n\n"+
+				"Estructura sugerida (adapta nombres según el tema):\n"+
+				"# Título breve y específico\n"+
+				"## Resumen\n"+
+				"- Punto clave 1\n"+
+				"- Punto clave 2\n"+
+				"## Desarrollo/Análisis\n"+
+				"- Hallazgo o razonamiento 1\n"+
+				"- Hallazgo o razonamiento 2\n"+
+				"> Alerta/nota crítica (si aplica)\n"+
+				"## Recomendaciones / Pasos siguientes\n"+
+				"- Acción 1\n"+
+				"- Acción 2\n\n"+
+				"═══ BIBLIOGRAFÍA — NUNCA OMITIR ═══\n"+
+				"⚠️ REGLA CRÍTICA: Tu respuesta DEBE terminar con la sección ## Fuentes.\n"+
+				"NO es opcional. SIEMPRE incluye esta sección, aunque uses un solo artículo.\n\n"+
 				"## Fuentes\n\n"+
 				"### 🔬 Literatura Científica (PubMed)\n"+
 				"- Formato: **Título del artículo.** — *Revista* (PMID: ######, año).\n"+
@@ -1924,11 +1961,23 @@ C) SINÓNIMOS: Si buscaste un término y no lo encontraste, sugiere términos al
 - Usa herramientas de conversión como Adobe Acrobat
 - Indica manualmente qué sección te interesa si ves el documento"
 
-═══ FORMATO DE SALIDA ═══
-- Markdown limpio y estructurado
-- Bullets o listas numeradas para claridad
-- Termina SIEMPRE con "## Fuentes" citando el archivo Y páginas
-- PROHIBIDO citar "Documentos PDF cargados" (usa nombre real del archivo)
+═══ FORMATO DE SALIDA — MARKDOWN ESTRUCTURADO ═══
+OBLIGATORIO usar encabezados Markdown (#, ##, ###), listas (-, 1.), negritas **...**, itálicas *...*, y citas con >.
+PROHIBIDO usar bloques de código con fences, XML/HTML o JSON en la salida visible.
+NO incluyas etiquetas como [STATE], [INTERNAL], ni preámbulos del tipo 'A continuación...'.
+Extensión: clara y suficiente; evita párrafos kilométricos (máx. 6–8 líneas por párrafo).
+
+Estructura sugerida (adapta nombres según el tema):
+# Título breve y específico
+## Resumen
+- Punto clave 1
+- Punto clave 2
+## Contenido del Documento
+- Hallazgo 1
+- Hallazgo 2
+> Nota importante (si aplica)
+## Fuentes
+OBLIGATORIO: Cita el archivo Y páginas específicas. PROHIBIDO citar "Documentos PDF cargados" (usa nombre real del archivo).
 
 ═══ IMPORTANTE ═══
 Tu objetivo NO es "opinar" ni dar teoría externa: es navegar, citar y explicar lo que está en %s,
@@ -1955,6 +2004,59 @@ func toString(v interface{}) string {
 	return ""
 }
 
+// normalizeMarkdownToken añade saltos de línea donde OpenAI los omite en el streaming.
+// Problema: OpenAI puede enviar "# Título## Resumen- Item" sin \n entre elementos Markdown.
+// Solución: Detectar patrones y forzar separación con \n\n para legibilidad.
+//
+// Ejemplos de transformación:
+// - "# Título## Resumen" -> "# Título\n\n## Resumen"
+// - "texto- Item 1- Item 2" -> "texto\n- Item 1\n- Item 2"
+// - "palabra1. Primer punto" -> "palabra\n1. Primer punto"
+// - "frase> Cita importante" -> "frase\n> Cita importante"
+func normalizeMarkdownToken(tok string) string {
+	if tok == "" {
+		return ""
+	}
+
+	// 1. Headers H2/H3 pegados a texto: "texto## Header" -> "texto\n\n## Header"
+	// Busca ## o ### precedidos por carácter no-blanco
+	tok = regexp.MustCompile(`([^\s\n])\s*(#{2,3})\s+`).ReplaceAllString(tok, "$1\n\n$2 ")
+
+	// 2. Headers H1 seguidos inmediatamente de H2/H3: "# Título## Resumen" -> "# Título\n\n## Resumen"
+	tok = regexp.MustCompile(`(^#\s+[^\n#]+)(#{2,3})\s+`).ReplaceAllString(tok, "$1\n\n$2 ")
+
+	// 3. Bullets/listas pegadas: "texto- Item" -> "texto\n- Item"
+	// Solo si NO es una palabra con guion (ej: "médico-quirúrgico")
+	// Busca espacio + guion + espacio pegado a texto anterior
+	tok = regexp.MustCompile(`([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?])\s*-\s+([A-ZÁÉÍÓÚÑ])`).ReplaceAllString(tok, "$1\n- $2")
+
+	// 4. Listas numeradas pegadas: "texto1. Item" -> "texto\n1. Item"
+	// Solo cuando el número está precedido por letra/puntuación (no otro número)
+	tok = regexp.MustCompile(`([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*(\d+\.\s+[A-ZÁÉÍÓÚÑ])`).ReplaceAllString(tok, "$1\n$2")
+
+	// 5. Citas pegadas: "texto> Cita" -> "texto\n> Cita"
+	tok = regexp.MustCompile(`([a-záéíóúñA-ZÁÉÍÓÚÑ.!?])\s*>\s+`).ReplaceAllString(tok, "$1\n> ")
+
+	// 6. Espaciado alrededor de "## Fuentes" - sección crítica que debe estar bien separada
+	tok = regexp.MustCompile(`([^\n])(##\s+Fuentes)`).ReplaceAllString(tok, "$1\n\n$2")
+
+	// 7. Si el token termina con un header sin contenido (ej: "## "), añade salto
+	// para que el siguiente token empiece limpio
+	trimmed := strings.TrimRight(tok, " \t")
+	if strings.HasSuffix(trimmed, "#") || strings.HasSuffix(trimmed, "##") || strings.HasSuffix(trimmed, "###") {
+		tok = trimmed + "\n\n"
+	}
+
+	return tok
+}
+
+// Casos de prueba esperados (ejecutar con go test si se crea handler_test.go):
+// normalizeMarkdownToken("# Diagnósticos## Resumen") → "# Diagnósticos\n\n## Resumen"
+// normalizeMarkdown Token("texto- Punto 1- Punto 2") → "texto\n- Punto 1\n- Punto 2"
+// normalizeMarkdownToken("Análisis1. Primer diagnóstico") → "Análisis\n1. Primer diagnóstico"
+// normalizeMarkdownToken("Nota> Importante") → "Nota\n> Importante"
+// normalizeMarkdownToken("médico-quirúrgico- Punto") → "médico-quirúrgico\n- Punto" (preserva guion interno)
+
 // sseStream mínima (duplicada para aislar del paquete chat existente) – reusa formato: cada token -> data: token\n\n
 func sseStream(c *gin.Context, ch <-chan string) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -1966,12 +2068,10 @@ func sseStream(c *gin.Context, ch <-chan string) {
 		if tok == "" {
 			continue
 		}
-		// Preservar saltos de línea según protocolo SSE: cada línea con prefijo 'data: '
-		lines := strings.Split(tok, "\n")
-		for _, ln := range lines {
-			_, _ = c.Writer.Write([]byte("data: " + ln + "\n"))
-		}
-		_, _ = c.Writer.Write([]byte("\n"))
+		// TEMPORAL: Deshabilitar normalización para diagnóstico
+		// Si esto funciona, el problema está en normalizeMarkdownToken()
+		// normalized := normalizeMarkdownToken(tok)
+		_, _ = c.Writer.Write([]byte("data: " + tok + "\n\n"))
 		c.Writer.Flush()
 	}
 }

@@ -4,18 +4,13 @@ import 'package:ema_educacion_medica_avanzada/core/logger/logger.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-
 // Se está omitiendo para hacer pruebas
 // el scrollController no funciona
 class ChatList extends StatefulWidget {
-
-  const ChatList({
-    super.key,
-  });
+  const ChatList({super.key});
 
   @override
   State<ChatList> createState() => _ChatListState();
-
 }
 
 class _ChatListState extends State<ChatList> {
@@ -43,12 +38,14 @@ class _ChatListState extends State<ChatList> {
         itemCount: controller.messages.length,
         controller: scrollController,
         padding: EdgeInsets.only(left: 12, right: 12, top: 16),
-
         itemBuilder: (context, index) {
           final message = controller.messages[index];
-          return message.aiMessage
-            ? ChatMessageAi(message: message)
-            : ChatMessageUser(message: message);
+
+          if (message.aiMessage) {
+            return ChatMessageAi(message: message);
+          } else {
+            return ChatMessageUser(message: message);
+          }
         },
       );
     });

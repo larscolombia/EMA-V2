@@ -163,12 +163,19 @@ class ChatController extends GetxService {
   }
 
   Future<void> _loadChatById(String chatId) async {
-    final chat = await chatsService.getChatById(chatId);
+    try {
+      final chat = await chatsService.getChatById(chatId);
 
-    if (chat != null) {
-      currentChat.value = chat;
-      threadId = chat.threadId;
-      threadPref.setValue(threadId);
+      if (chat != null) {
+        currentChat.value = chat;
+        threadId = chat.threadId;
+        threadPref.setValue(threadId);
+      } else {
+        throw Exception('Chat no encontrado con ID: $chatId');
+      }
+    } catch (e) {
+      print('❌ [ChatController] Error en _loadChatById: $e');
+      rethrow; // Re-lanzar para que showChat lo capture
     }
   }
 
@@ -178,14 +185,22 @@ class ChatController extends GetxService {
 
       final chatMessages = await chatsService.getMessagesById(chatId);
 
+      if (chatMessages.isEmpty) {
+        print(
+          '⚠️ [ChatController] No se encontraron mensajes para el chat: $chatId',
+        );
+      }
+
       messages.value = chatMessages;
 
       scrollToBottom();
 
       loading.value = false;
     } catch (e) {
+      print('❌ [ChatController] Error en _loadMessagesByChatId: $e');
       error.value = 'Error al cargar mensajes';
       loading.value = false;
+      rethrow; // Re-lanzar para que showChat lo capture
     }
   }
 
@@ -202,6 +217,7 @@ class ChatController extends GetxService {
               ? (start.threadId.isNotEmpty ? start.threadId : 'test-thread')
               : start.threadId;
       threadPref.setValue(threadId);
+
       messages.add(
         ChatMessageModel.ai(chatId: currentChat.value.uid, text: start.text),
       );
@@ -291,6 +307,7 @@ class ChatController extends GetxService {
         // Don't overwrite the streamed content with response.text!
         // aiMessage.text = response.text;
       }
+
       // Success: clear snapshot
       _lastFailedUserMessage = null;
       _lastFailedPdf = null;
@@ -476,6 +493,10 @@ class ChatController extends GetxService {
           );
           messages.add(userMessage);
 
+          // 💾 Guardar mensaje del usuario en BD local
+          print('💾 [ChatController] Guardando mensaje del usuario en BD');
+          await chatsService.chatMessagesLocalData.insertOne(userMessage);
+
           // Si hay PDF o el backend no envía texto inicial, procedemos a enviar mensaje (streaming) inmediatamente.
           final aiMessage = ChatMessageModel.ai(
             chatId: currentChat.value.uid,
@@ -542,13 +563,8 @@ class ChatController extends GetxService {
             );
           }
 
-          // CRÍTICO: Crear un nuevo objeto para persistencia para evitar mutaciones compartidas
-          // El objeto aiMessage puede estar siendo referenciado en múltiples lugares
-          final persistedMessage = ChatMessageModel.ai(
-            chatId: aiMessage.chatId,
-            text: aiMessage.text,
-          );
-          chatsService.chatMessagesLocalData.insertOne(persistedMessage);
+          // Guardar mensaje en BD
+          chatsService.chatMessagesLocalData.insertOne(aiMessage);
           pendingPdf.value = null;
           pendingImage.value = null;
           // Descontar cuota de archivo si se usó
@@ -606,6 +622,13 @@ class ChatController extends GetxService {
           resetAutoScroll();
 
           messages.add(userMessage);
+
+          // 💾 Guardar mensaje del usuario en BD local (fallback path)
+          print(
+            '💾 [ChatController] Guardando mensaje del usuario en BD (fallback)',
+          );
+          await chatsService.chatMessagesLocalData.insertOne(userMessage);
+
           pendingPdf.value = null;
           pendingImage.value = null;
           scrollToBottom();
@@ -687,6 +710,13 @@ class ChatController extends GetxService {
       resetAutoScroll();
 
       messages.add(userMessage);
+
+      // 💾 Guardar mensaje del usuario en BD local (existing chat path)
+      print(
+        '💾 [ChatController] Guardando mensaje del usuario en BD (existing chat)',
+      );
+      await chatsService.chatMessagesLocalData.insertOne(userMessage);
+
       pendingPdf.value = null;
       pendingImage.value = null;
       scrollToBottom();
@@ -795,12 +825,8 @@ class ChatController extends GetxService {
         }
         Logger.debug('server response ok');
 
-        // CRÍTICO: Crear un nuevo objeto para persistencia para evitar mutaciones compartidas
-        final persistedMessage = ChatMessageModel.ai(
-          chatId: aiMessage.chatId,
-          text: aiMessage.text,
-        );
-        chatsService.chatMessagesLocalData.insertOne(persistedMessage);
+        // Guardar mensaje en BD
+        chatsService.chatMessagesLocalData.insertOne(aiMessage);
         pendingPdf.value = null;
         pendingImage.value = null;
 
@@ -811,14 +837,6 @@ class ChatController extends GetxService {
         print(
           '🔍 [Controller-R2] After persist - AI message length: ${aiMessage.text.length}',
         );
-        print(
-          '🔍 [Controller-R2] After persist - Persisted message length: ${persistedMessage.text.length}',
-        );
-        for (int i = 0; i < messages.length; i++) {
-          print(
-            '🔍 [Controller-R2] Message[$i]: uid=${messages[i].uid.substring(0, 8)}, length=${messages[i].text.length}, aiMsg=${messages[i].aiMessage}',
-          );
-        }
 
         // Ensure proper scrolling for structured content with multiple delayed attempts
         scrollToBottom();
@@ -931,18 +949,45 @@ class ChatController extends GetxService {
 
   void showChat(String chatId) async {
     try {
-      loading.value = true;
+      print('🔍 [ChatController] showChat llamado con chatId: $chatId');
 
+      loading.value = true;
       messages.clear();
 
+      // Cerrar drawer/overlays
       Get.back(closeOverlays: true);
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _loadChatById(chatId);
-        _loadMessagesByChatId(chatId);
-      });
+      // Navegar a la vista del chat si no estamos ahí
+      if (Get.currentRoute != Routes.home.name) {
+        await Get.toNamed(Routes.home.name);
+      }
+
+      // Cargar chat y mensajes de forma secuencial con manejo de errores
+      try {
+        await _loadChatById(chatId);
+        print('✅ [ChatController] Chat cargado: ${currentChat.value.uid}');
+
+        await _loadMessagesByChatId(chatId);
+        print('✅ [ChatController] Mensajes cargados: ${messages.length}');
+
+        // Scroll al final después de cargar
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          scrollToBottom();
+        });
+      } catch (e) {
+        print('❌ [ChatController] Error al cargar chat/mensajes: $e');
+        error.value = 'Error al cargar el chat';
+        Notify.snackbar(
+          'Error',
+          'No se pudo cargar el chat. Inténtalo de nuevo.',
+          NotifyType.error,
+        );
+      }
+
+      loading.value = false;
     } catch (e) {
-      Notify.snackbar('Chats', 'No se encontró el chat.');
+      print('❌ [ChatController] Error general en showChat: $e');
+      Notify.snackbar('Error', 'No se encontró el chat.', NotifyType.error);
       loading.value = false;
     }
   }
