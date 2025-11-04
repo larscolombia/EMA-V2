@@ -3110,8 +3110,13 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 	out := make(chan string, 100) // Buffer más grande para chunks
 	go func() {
 		defer close(out)
+		// CRÍTICO: Usar contexto independiente para el run (desacoplado del HTTP request timeout)
+		// OpenAI puede tardar 90-120s en runs complejos con file_search en vectores grandes
+		runCtx, runCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer runCancel()
+		
 		// Usar las instrucciones completas solo para el run, no se guardan en el thread
-		text, err := c.runAndWaitWithVectorStore(ctx, threadID, instructions, vectorStoreID)
+		text, err := c.runAndWaitWithVectorStore(runCtx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
 			// CRÍTICO: Enviar chunks respetando integridad de headers Markdown
