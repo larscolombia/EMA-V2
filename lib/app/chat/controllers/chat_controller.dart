@@ -91,8 +91,9 @@ class ChatController extends GetxService {
 
         // CRÍTICO: Limpiar cualquier marcador __STAGE__: que pudiera haber quedado
         // (por si el backend los incluyó antes del fix)
-        finalText = finalText.replaceAll(RegExp(r'__STAGE__:[^\s]+'), '').trim();
-        
+        finalText =
+            finalText.replaceAll(RegExp(r'__STAGE__:[^\s]+'), '').trim();
+
         // Limpiar múltiples saltos de línea que puedan haber quedado
         finalText = finalText.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
