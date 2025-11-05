@@ -2698,66 +2698,6 @@ func classifyErr(err error) string {
 	}
 }
 
-// MessageDebug: versión de Message que devuelve JSON en lugar de SSE para debugging en Postman
-// Acumula todo el stream y devuelve {"text": "contenido completo con \n\n preservados"}
-func (h *Handler) MessageDebug(c *gin.Context) {
-	if h.AI.GetAssistantID() == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "assistant no configurado"})
-		return
-	}
-
-	var req struct {
-		ThreadID   string `json:"thread_id"`
-		Prompt     string `json:"prompt"`
-		FocusDocID string `json:"focus_doc_id,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "parámetros inválidos"})
-		return
-	}
-
-	log.Printf("[conv][MessageDebug] thread=%s prompt=%q", req.ThreadID, truncatePreview(req.Prompt, 100))
-
-	snap := h.snapshotTopic(req.ThreadID)
-	resp, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID, snap)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
-		return
-	}
-
-	if resp == nil || resp.Stream == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
-		return
-	}
-
-	// Acumular todo el stream en un buffer
-	var fullText strings.Builder
-	for token := range resp.Stream {
-		if token == "__STAGE__:start" || strings.HasPrefix(token, "__STAGE__:") {
-			continue // Ignorar marcadores de etapa
-		}
-		fullText.WriteString(token)
-	}
-
-	text := fullText.String()
-
-	// Aplicar normalización markdown una sola vez al texto completo
-	normalized := normalizeMarkdownToken(text)
-
-	log.Printf("[conv][MessageDebug] accumulated %d chars, normalized %d chars", len(text), len(normalized))
-
-	// Devolver JSON con el texto preservando \n literalmente
-	c.JSON(http.StatusOK, gin.H{
-		"text":            normalized,
-		"source":          resp.Source,
-		"thread_id":       req.ThreadID,
-		"char_count":      len(normalized),
-		"newline_count":   strings.Count(normalized, "\n"),
-		"allowed_sources": resp.AllowedSources,
-	})
-}
-
 // Delete: limpieza de artifacts (paridad)
 func (h *Handler) Delete(c *gin.Context) {
 	var req struct {
