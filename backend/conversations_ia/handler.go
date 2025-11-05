@@ -1998,11 +1998,57 @@ func sseStream(c *gin.Context, ch <-chan string) {
 		if tok == "" {
 			continue
 		}
+		// DEBUG: Log preview del token ANTES de normalizar
+		preview := tok
+		if len(tok) > 200 {
+			preview = tok[:200] + "..."
+		}
+		log.Printf("[SSE] Token received (len=%d): %q", len(tok), preview)
+
 		// CRÍTICO: Normalizar markdown porque OpenAI envía tokens sin saltos de línea
 		// Ejemplo: "## DefiniciónLa gastritis..." → "## Definición\n\nLa gastritis..."
 		normalized := normalizeMarkdownToken(tok)
-		_, _ = c.Writer.Write([]byte("data: " + normalized + "\n\n"))
-		c.Writer.Flush()
+
+		// DEBUG: Verificar si la normalización cambió algo
+		if normalized != tok {
+			normPreview := normalized
+			if len(normalized) > 200 {
+				normPreview = normalized[:200] + "..."
+			}
+			log.Printf("[SSE] Token NORMALIZED (len=%d): %q", len(normalized), normPreview)
+		}
+
+		// CRÍTICO: Si el token es muy grande (>500 chars), dividirlo en chunks pequeños
+		// para que el frontend pueda procesarlo correctamente y SSE no se corte
+		if len(normalized) > 500 {
+			log.Printf("[SSE] Large token detected (%d chars), splitting into chunks", len(normalized))
+			// Dividir por líneas para no cortar en medio de palabras
+			lines := strings.Split(normalized, "\n")
+			currentChunk := ""
+			for _, line := range lines {
+				// Si añadir esta línea excede 300 chars, enviar chunk actual
+				if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > 300 {
+					_, _ = c.Writer.Write([]byte("data: " + currentChunk + "\n\n"))
+					c.Writer.Flush()
+					log.Printf("[SSE] Chunk sent: %d chars", len(currentChunk))
+					currentChunk = ""
+				}
+				if currentChunk != "" {
+					currentChunk += "\n"
+				}
+				currentChunk += line
+			}
+			// Enviar último chunk
+			if currentChunk != "" {
+				_, _ = c.Writer.Write([]byte("data: " + currentChunk + "\n\n"))
+				c.Writer.Flush()
+				log.Printf("[SSE] Final chunk sent: %d chars", len(currentChunk))
+			}
+		} else {
+			// Token pequeño, enviar directamente
+			_, _ = c.Writer.Write([]byte("data: " + normalized + "\n\n"))
+			c.Writer.Flush()
+		}
 	}
 	// CRÍTICO: Enviar marcador [DONE] al final del stream
 	// El frontend espera este marcador para cerrar correctamente el stream

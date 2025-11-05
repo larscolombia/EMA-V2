@@ -660,34 +660,54 @@ func (c *Client) PollVectorStoreFileIndexed(ctx context.Context, vsID, fileID st
 // emitMarkdownChunks envía el texto dividido en chunks pequeños (~100 chars)
 // para simular streaming SSE, permitiendo que normalizeMarkdownToken() añada
 // saltos de línea correctamente entre headers y contenido.
+// ESTRATEGIA: Headers se envían JUNTO con su párrafo siguiente para que
+// normalizeMarkdownToken() pueda detectar y añadir \n\n si falta.
 func emitMarkdownChunks(out chan<- string, text string) {
 	if text == "" {
 		return
 	}
 
-	// ESTRATEGIA SIMPLE: Dividir el texto en chunks de ~100 caracteres
-	// respetando límites de línea para no cortar palabras/headers en medio
-	const chunkSize = 100
 	lines := strings.Split(text, "\n")
-	currentChunk := ""
+	i := 0
 
-	for _, line := range lines {
-		// Si añadir esta línea excede el tamaño, enviar chunk actual
-		if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > chunkSize {
-			out <- currentChunk
-			currentChunk = ""
+	for i < len(lines) {
+		line := lines[i]
+
+		// Si es un header markdown (## Título), acumular con líneas siguientes
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			chunk := line
+			i++
+
+			// Añadir líneas siguientes hasta completar ~200 chars o encontrar otro header
+			for i < len(lines) {
+				nextLine := lines[i]
+				// Si encontramos otro header, detener
+				if strings.HasPrefix(strings.TrimSpace(nextLine), "#") {
+					break
+				}
+				chunk += "\n" + nextLine
+				i++
+				// Limitar chunk a ~200 chars
+				if len(chunk) > 200 {
+					break
+				}
+			}
+
+			out <- chunk
+		} else {
+			// Línea normal: acumular hasta ~150 chars
+			chunk := line
+			i++
+			for i < len(lines) && len(chunk) < 150 {
+				nextLine := lines[i]
+				if strings.HasPrefix(strings.TrimSpace(nextLine), "#") {
+					break
+				}
+				chunk += "\n" + nextLine
+				i++
+			}
+			out <- chunk
 		}
-
-		// Añadir línea al chunk
-		if currentChunk != "" {
-			currentChunk += "\n"
-		}
-		currentChunk += line
-	}
-
-	// Enviar último chunk si queda contenido
-	if currentChunk != "" {
-		out <- currentChunk
 	}
 }
 
@@ -1872,9 +1892,9 @@ NO uses razonamiento interno visible.
 				tmpFile := "/tmp/assistant_full_" + threadID + ".txt"
 				os.WriteFile(tmpFile, []byte(text), 0644)
 			}
-			// CRÍTICO: Enviar texto en chunks simulando streaming para que normalizeMarkdownToken()
-			// en sseStream() pueda añadir saltos de línea correctamente entre headers y contenido
-			emitMarkdownChunks(out, text)
+			// DEBUG: Enviar texto completo sin chunking para verificar formato original de OpenAI
+			log.Printf("[DEBUG] Text preview (first 300 chars): %q", truncateString(text, 300))
+			out <- text
 		}
 		if err != nil {
 			log.Printf("[assist][StreamAssistantMessage][error] thread=%s err=%v", threadID, err)
@@ -3136,8 +3156,8 @@ func (c *Client) StreamAssistantWithSpecificVectorStore(ctx context.Context, thr
 		text, err := c.runAndWaitWithVectorStore(ctx, threadID, prompt, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithSpecificVector][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			// CRÍTICO: Enviar en chunks para normalización markdown correcta
-			emitMarkdownChunks(out, text)
+			// DEBUG: Enviar texto completo sin chunking
+			out <- text
 		}
 		if err != nil {
 			log.Printf("[assist][StreamWithSpecificVector][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
@@ -3180,8 +3200,8 @@ func (c *Client) StreamAssistantWithInstructions(ctx context.Context, threadID, 
 		text, err := c.runAndWaitWithVectorStore(runCtx, threadID, instructions, vectorStoreID)
 		if err == nil && text != "" {
 			log.Printf("[assist][StreamWithInstructions][done] thread=%s vs=%s chars=%d", threadID, vectorStoreID, len(text))
-			// CRÍTICO: Enviar en chunks para normalización markdown correcta
-			emitMarkdownChunks(out, text)
+			// DEBUG: Enviar texto completo sin chunking
+			out <- text
 		}
 		if err != nil {
 			log.Printf("[assist][StreamWithInstructions][error] thread=%s vs=%s err=%v", threadID, vectorStoreID, err)
