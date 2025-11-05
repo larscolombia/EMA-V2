@@ -105,9 +105,24 @@ class ChatController extends GetxService {
         print(
           '✅ [Controller] Final JSON received: ${finalText.length} chars, ${jsonData['newline_count']} newlines',
         );
+
+        // DEBUG: Mostrar primeras 500 chars con saltos de línea visibles
+        final debugPreview = finalText
+            .substring(0, finalText.length > 500 ? 500 : finalText.length)
+            .replaceAll('\n', '⏎\n');
         print(
-          '✅ [Controller] Preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length).replaceAll('\n', '\\n')}"',
+          '✅ [Controller] Preview (primeros 500 chars con ⏎ = salto):\n$debugPreview',
         );
+
+        // DEBUG: Contar patrones markdown
+        final h1Count = '# '.allMatches(finalText).length;
+        final h2Count = '## '.allMatches(finalText).length;
+        final bulletCount =
+            RegExp(r'^\s*-\s+', multiLine: true).allMatches(finalText).length;
+        print(
+          '✅ [Controller] Markdown patterns: H1=$h1Count, H2=$h2Count, bullets=$bulletCount',
+        );
+
         return;
       } catch (e) {
         print('❌ [Controller] Error parsing final JSON: $e');

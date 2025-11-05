@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_streaming_text_markdown/flutter_streaming_text_markdown.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 
 /// A wrapper for StreamingTextMarkdown that processes raw medical content into well-formatted
 /// Markdown with proper styling for titles, references, and clinical content.
@@ -45,75 +45,43 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
   }
 
   /// Processes raw medical content into well-formatted Markdown
-  /// OPTIMIZADO: Maneja texto concatenado por SSE streaming donde headers
-  /// y párrafos llegan pegados sin saltos de línea apropiados.
+  /// SIMPLIFICADO: El backend (Go) ya envía formato correcto vía evento __JSON__
+  /// Solo aplicamos limpieza ligera para casos edge y compatibilidad legacy.
   String _processRawContent(String rawContent) {
     if (rawContent.trim().isEmpty) return rawContent;
 
     String processed = rawContent;
 
-    // 1. Convert literal \n to actual line breaks
-    processed = processed.replaceAll('\\n', '\n');
-
-    // 2. CRÍTICO PARA SSE: Añadir saltos ANTES de headers pegados a texto
-    // "texto## Header" → "texto\n\n## Header"
-    // "palabra.## Header" → "palabra.\n\n## Header"
-    processed = processed.replaceAllMapped(
-      RegExp(r'([^\n])(#{1,6}\s+[^\n])', multiLine: true),
-      (match) {
-        final before = match.group(1)!;
-        final header = match.group(2)!;
-        // Si hay contenido antes del header (no es inicio de línea), añadir saltos
-        if (before.trim().isNotEmpty) {
-          return '$before\n\n$header';
-        }
-        return '$before$header';
-      },
+    // DEBUG: Verificar texto recibido y contar saltos de línea reales
+    final newlineCount = '\n'.allMatches(processed).length;
+    final doubleNewlineCount = '\n\n'.allMatches(processed).length;
+    final preview =
+        processed.length > 200 ? processed.substring(0, 200) : processed;
+    print(
+      '[ChatMarkdownWrapper] 📝 Texto: ${processed.length} chars, $newlineCount \\n, $doubleNewlineCount \\n\\n',
     );
+    print('[ChatMarkdownWrapper] Preview: ${preview.replaceAll('\n', '⏎')}');
 
-    // 3. Asegurar salto de línea DESPUÉS de headers si no existe
-    // "## Header\nTexto" → "## Header\n\nTexto" (para separar header de contenido)
-    processed = processed.replaceAllMapped(
-      RegExp(r'(#{1,6}\s+[^\n]+)\n([^\n#])', multiLine: true),
-      (match) {
-        final header = match.group(1)!;
-        final nextChar = match.group(2)!;
-        return '$header\n\n$nextChar';
-      },
-    );
+    // IMPORTANTE: El backend YA normaliza el texto completo en normalizeMarkdownFull()
+    // antes de enviarlo vía __JSON__. Aquí solo hacemos limpieza final mínima.
 
-    // 4. Normalizar múltiples saltos a máximo 2 (Markdown paragraph spacing)
+    // 1. Normalizar múltiples saltos a máximo 2 (Markdown paragraph spacing)
     processed = processed.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
-    // 5. Limpiar artefactos de streaming: ## sueltos, espacios extras
-    // "., (PMID)" → ". (PMID)" ; "(PubMed) (PubMed)" → "(PubMed)"
-    processed = processed.replaceAll(RegExp(r'\.,\s*'), '. ');
+    // 2. Limpiar artefactos legacy: duplicados de fuentes
     processed = processed.replaceAll(
       RegExp(r'\(PubMed\)\s*\(PubMed\)'),
       '(PubMed)',
     );
 
-    // Limpiar ## sueltos al final de líneas o pegados a palabras
-    // "Fuentes ###" → "Fuentes" ; ".## F" → "."
-    processed = processed.replaceAll(RegExp(r'\.##\s*[A-Z]'), '.');
-    processed = processed.replaceAll(RegExp(r'#{2,}\s*$', multiLine: true), '');
-
-    // 6. Limpiar placeholders malformados legacy (compatibilidad)
-    processed = processed.replaceAll(RegExp(r'\$1eferencias'), 'Referencias');
-    processed = processed.replaceAll(RegExp(r'\$1esumen'), 'Resumen');
-    processed = processed.replaceAll(RegExp(r'\$[12]\s*'), '');
-
-    // 7. Normalizar espacios: múltiples espacios → uno solo (excepto saltos de línea)
-    processed = processed.replaceAllMapped(
-      RegExp(r'([^\n])\s{2,}([^\n])', multiLine: true),
-      (match) => '${match.group(1)} ${match.group(2)}',
-    );
-
-    // 8. Convertir brackets especiales a normales
+    // 3. Convertir brackets especiales a normales
     processed = processed.replaceAll('【', '[');
     processed = processed.replaceAll('】', ']');
 
-    // 9. Procesar placeholders si se proveen reemplazos
+    // 4. Limpiar trailing whitespace al final de líneas
+    processed = processed.replaceAll(RegExp(r'[ \t]+\n'), '\n');
+
+    // 5. Procesar placeholders si se proveen reemplazos (casos interactivos)
     if (widget.placeholderReplacements != null) {
       widget.placeholderReplacements!.forEach((placeholder, replacement) {
         processed = processed.replaceAll(
@@ -129,24 +97,37 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // SOLUCIÓN: La librería flutter_streaming_text_markdown soporta headers Markdown nativamente.
-    // NO necesitamos degradar headers (## → ###), solo asegurar formato correcto.
-    // El backend ahora envía headers completos sin cortar.
-    // IMPORTANTE: Usar .instant() para mostrar texto completo inmediatamente (sin animación).
-    // El streaming ya se maneja en el controller (token por token del SSE).
+    // DEBUG: Contar saltos de línea reales
+    final realNewlines = '\n'.allMatches(_processedText).length;
+    print(
+      '[ChatMarkdownWrapper] 🔍 Saltos de línea reales en texto: $realNewlines',
+    );
+    print('[ChatMarkdownWrapper] 🔍 Longitud total: ${_processedText.length}');
+
+    // Renderizar con flutter_markdown para respetar headings y párrafos
+    final theme = Theme.of(context);
+    final baseMdStyle = MarkdownStyleSheet.fromTheme(theme).copyWith(
+      p: widget.style.copyWith(height: 1.7),
+      h1: widget.style.copyWith(
+        fontSize: (widget.style.fontSize ?? 15) + 6,
+        fontWeight: FontWeight.bold,
+      ),
+      h2: widget.style.copyWith(
+        fontSize: (widget.style.fontSize ?? 15) + 4,
+        fontWeight: FontWeight.bold,
+      ),
+      h3: widget.style.copyWith(
+        fontSize: (widget.style.fontSize ?? 15) + 2,
+        fontWeight: FontWeight.bold,
+      ),
+    );
 
     Widget content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: StreamingTextMarkdown.instant(
-        text: _processedText,
-        markdownEnabled: true,
-        theme: StreamingTextTheme(
-          textStyle: widget.style.copyWith(
-            height: 1.7,
-            fontSize: widget.style.fontSize ?? 15,
-          ),
-          defaultPadding: const EdgeInsets.all(0),
-        ),
+      child: MarkdownBody(
+        data: _processedText,
+        selectable: true,
+        styleSheet: baseMdStyle,
       ),
     );
 

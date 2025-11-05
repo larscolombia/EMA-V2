@@ -1980,6 +1980,98 @@ func normalizeMarkdownToken(tok string) string {
 	return tok
 }
 
+// normalizeMarkdownFull aplica normalización profunda al texto COMPLETO acumulado.
+// A diferencia de normalizeMarkdownToken que trabaja token por token durante streaming,
+// esta función ve todo el contexto y puede hacer correcciones más precisas.
+// Se ejecuta UNA VEZ al final del streaming antes de enviar el evento __JSON__.
+func normalizeMarkdownFull(text string) string {
+	if text == "" {
+		return ""
+	}
+
+	processed := text
+
+	// 1. CRÍTICO: Separar headers pegados a texto anterior
+	// "texto.## Header" → "texto.\n\n## Header"
+	// "palabra## Header" → "palabra\n\n## Header"
+	// IMPORTANTE: Solo cuando el header NO está al inicio de línea
+	processed = regexp.MustCompile(`([^\n#])(#{1,6}\s+)`).ReplaceAllString(processed, "$1\n\n$2")
+
+	// 2. Separar headers consecutivos sin espacio suficiente
+	// "# Título## Resumen" → "# Título\n\n## Resumen"
+	// "## Header1\n## Header2" → "## Header1\n\n## Header2"
+	lines := strings.Split(processed, "\n")
+	var normalized []string
+	prevWasHeader := false
+
+	for i, line := range lines {
+		isHeader := regexp.MustCompile(`^\s*#{1,6}\s+`).MatchString(line)
+		isBullet := regexp.MustCompile(`^\s*-\s+`).MatchString(line)
+		isNumbered := regexp.MustCompile(`^\s*\d+\.\s+`).MatchString(line)
+		isListItem := isBullet || isNumbered
+
+		// Si la línea anterior era header y esta también, añadir espacio
+		if prevWasHeader && isHeader && i > 0 {
+			normalized = append(normalized, "") // Línea vacía para separación
+		}
+
+		// Si la línea anterior era header y esta es contenido o lista, añadir espacio
+		if prevWasHeader && !isHeader && i > 0 && strings.TrimSpace(line) != "" {
+			normalized = append(normalized, "") // Línea vacía para separación
+		}
+
+		normalized = append(normalized, line)
+		prevWasHeader = isHeader
+		_ = isListItem // Para no perder la variable por ahora
+	}
+	processed = strings.Join(normalized, "\n")
+
+	// 3. Separar bullets pegados a texto (búsqueda más específica)
+	// "texto:- Item" → "texto:\n- Item"
+	// "palabra.- Item" → "palabra.\n- Item"
+	// Pero NO "médico-quirúrgico" (preservar guiones internos)
+	processed = regexp.MustCompile(`([a-záéíóúñA-ZÁÉÍÓÚÑ0-9.!?,;:])-\s+([A-ZÁÉÍÓÚÑ])`).ReplaceAllString(processed, "$1\n- $2")
+
+	// 4. Separar bullets que están al inicio después de texto sin salto
+	// "texto- Item" → "texto\n- Item"
+	processed = regexp.MustCompile(`([^\n\s])\s*\n?\s*-\s+([A-ZÁÉÍÓÚÑ])`).ReplaceAllStringFunc(processed, func(match string) string {
+		// Solo aplicar si NO es guion interno (verificar que hay espacio o puntuación antes del -)
+		parts := regexp.MustCompile(`([^\n\s])(\s*\n?\s*)-(\s+)([A-ZÁÉÍÓÚÑ])`).FindStringSubmatch(match)
+		if len(parts) > 4 {
+			before := parts[1]
+			after := parts[4]
+			// Si el carácter antes del - es una letra minúscula, probablemente es guion interno
+			if regexp.MustCompile(`[a-záéíóúñ]`).MatchString(before) && !regexp.MustCompile(`[.!?,;:]`).MatchString(before) {
+				return match // Preservar guion interno
+			}
+			return before + "\n- " + after
+		}
+		return match
+	})
+
+	// 5. Separar listas numeradas pegadas
+	// "texto.1. Item" → "texto.\n1. Item"
+	processed = regexp.MustCompile(`([a-záéíóúñA-ZÁÉÍÓÚÑ.!?,;:])\s*(\d+\.\s+[A-ZÁÉÍÓÚÑ])`).ReplaceAllString(processed, "$1\n$2")
+
+	// 6. Normalizar espaciado de sección "## Fuentes"
+	processed = regexp.MustCompile(`([^\n])(##\s+Fuentes:?)`).ReplaceAllString(processed, "$1\n\n$2")
+
+	// 7. Limpiar múltiples saltos de línea (máximo 2 = espacio de párrafo)
+	processed = regexp.MustCompile(`\n{3,}`).ReplaceAllString(processed, "\n\n")
+
+	// 8. Limpiar espacios al final de líneas (trailing whitespace)
+	processed = regexp.MustCompile(`[ \t]+\n`).ReplaceAllString(processed, "\n")
+
+	// 9. Limpiar headers incompletos al final
+	// "Fuentes ###" → "Fuentes"
+	processed = regexp.MustCompile(`#{2,}\s*$`).ReplaceAllString(processed, "")
+
+	// 10. Asegurar que el texto termine limpiamente
+	processed = strings.TrimRight(processed, " \t\n") + "\n"
+
+	return processed
+}
+
 // Casos de prueba esperados (ejecutar con go test si se crea handler_test.go):
 // normalizeMarkdownToken("# Diagnósticos## Resumen") → "# Diagnósticos\n\n## Resumen"
 // normalizeMarkdown Token("texto- Punto 1- Punto 2") → "texto\n- Punto 1\n- Punto 2"
@@ -2046,7 +2138,7 @@ func sseStream(c *gin.Context, ch <-chan string) {
 					log.Printf("[SSE] Final chunk sent: %d chars", len(remaining))
 					break
 				}
-				// Buscar último espacio antes de chunkSize para no cortar palabras
+				// Buscar último espacio o salto de línea antes de chunkSize para no cortar palabras
 				cutPoint := chunkSize
 				for cutPoint > 0 && remaining[cutPoint] != ' ' && remaining[cutPoint] != '\n' {
 					cutPoint--
@@ -2055,8 +2147,21 @@ func sseStream(c *gin.Context, ch <-chan string) {
 				if cutPoint < chunkSize-50 {
 					cutPoint = chunkSize
 				}
+
+				// CRÍTICO: Si cortamos en un salto de línea, incluirlo en el chunk actual
+				// para que el siguiente chunk no pierda el spacing
 				chunk := remaining[:cutPoint]
-				remaining = strings.TrimLeft(remaining[cutPoint:], " ") // Quitar espacios iniciales del siguiente chunk
+				if cutPoint < len(remaining) && remaining[cutPoint] == '\n' {
+					// Incluir el \n en el chunk actual
+					chunk = remaining[:cutPoint+1]
+					remaining = remaining[cutPoint+1:]
+				} else {
+					// Cortamos en espacio, avanzar para no duplicarlo
+					remaining = remaining[cutPoint:]
+					// Solo quitar espacios normales, NO saltos de línea
+					remaining = strings.TrimLeft(remaining, " ")
+				}
+
 				_, _ = c.Writer.Write([]byte("data: " + chunk + "\n\n"))
 				c.Writer.Flush()
 				log.Printf("[SSE] Chunk sent: %d chars", len(chunk))
@@ -2071,7 +2176,10 @@ func sseStream(c *gin.Context, ch <-chan string) {
 	// CRÍTICO: Enviar evento FINAL con JSON completo bien formateado
 	// El frontend debe buscar este evento especial "__JSON__:" para obtener el texto definitivo
 	finalText := fullText.String()
-	finalNormalized := normalizeMarkdownToken(finalText)
+
+	// Aplicar normalización profunda al texto COMPLETO (no token por token)
+	// Esto garantiza que todos los patrones markdown se formateen correctamente
+	finalNormalized := normalizeMarkdownFull(finalText)
 
 	// Escapar JSON correctamente
 	jsonBytes, err := json.Marshal(map[string]interface{}{
