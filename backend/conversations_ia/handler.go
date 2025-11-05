@@ -2030,21 +2030,36 @@ func sseStream(c *gin.Context, ch <-chan string) {
 			log.Printf("[SSE] Token NORMALIZED (len=%d): %q", len(normalized), normPreview)
 		}
 
-		// CRÍTICO: Si el token es muy grande (>500 chars), dividirlo en chunks de ~400 chars
-		// SIN perder los saltos de línea \n\n originales
+		// CRÍTICO: Si el token es muy grande (>500 chars), dividirlo en chunks
+		// RESPETANDO LÍMITES DE PALABRAS para no romper "## Definición" en "## Defi" + "nición"
 		if len(normalized) > 500 {
-			log.Printf("[SSE] Large token detected (%d chars), splitting into chunks preserving \\n", len(normalized))
-			// Dividir en chunks de ~400 chars respetando límites de caracteres
-			chunkSize := 400
-			for i := 0; i < len(normalized); i += chunkSize {
-				end := i + chunkSize
-				if end > len(normalized) {
-					end = len(normalized)
+			log.Printf("[SSE] Large token detected (%d chars), splitting into word-safe chunks", len(normalized))
+			// Dividir en chunks de ~400 chars cortando solo en espacios (no en medio de palabras)
+			// y preservando saltos de línea exactos
+			remaining := normalized
+			for len(remaining) > 0 {
+				chunkSize := 400
+				if len(remaining) <= chunkSize {
+					// Último chunk, enviar todo
+					_, _ = c.Writer.Write([]byte("data: " + remaining + "\n\n"))
+					c.Writer.Flush()
+					log.Printf("[SSE] Final chunk sent: %d chars", len(remaining))
+					break
 				}
-				chunk := normalized[i:end]
+				// Buscar último espacio antes de chunkSize para no cortar palabras
+				cutPoint := chunkSize
+				for cutPoint > 0 && remaining[cutPoint] != ' ' && remaining[cutPoint] != '\n' {
+					cutPoint--
+				}
+				// Si no encontramos espacio en los últimos 50 chars, cortar en chunkSize (palabra muy larga)
+				if cutPoint < chunkSize-50 {
+					cutPoint = chunkSize
+				}
+				chunk := remaining[:cutPoint]
+				remaining = strings.TrimLeft(remaining[cutPoint:], " ") // Quitar espacios iniciales del siguiente chunk
 				_, _ = c.Writer.Write([]byte("data: " + chunk + "\n\n"))
 				c.Writer.Flush()
-				log.Printf("[SSE] Chunk sent: %d chars (offset %d)", len(chunk), i)
+				log.Printf("[SSE] Chunk sent: %d chars", len(chunk))
 			}
 		} else {
 			// Token pequeño, enviar directamente
