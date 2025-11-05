@@ -1,5 +1,7 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
 
+import 'dart:convert';
+
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_message_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/models/chat_model.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/services/chats_service.dart';
@@ -66,6 +68,65 @@ class ChatController extends GetxService {
   // App lifecycle tracking for recovery
   final isAppResumed = false.obs;
   final lastSendTime = DateTime.now().obs;
+
+  /// Helper para procesar tokens SSE, incluyendo el evento final __JSON__ con texto completo bien formateado
+  void _processStreamToken(
+    String token,
+    ChatMessageModel aiMessage,
+    bool Function() hasFirstToken,
+    void Function(bool) setHasFirstToken,
+  ) {
+    if (token.startsWith('__STAGE__:')) {
+      final stage = token.split(':').last.trim();
+      currentStage.value = stage;
+      return;
+    }
+
+    // CRÍTICO: Detectar evento final con JSON completo bien formateado
+    if (token.startsWith('__JSON__:')) {
+      try {
+        final jsonStr = token.substring(9); // Quitar "__JSON__:"
+        final jsonData = json.decode(jsonStr) as Map<String, dynamic>;
+        var finalText = jsonData['text'] as String;
+
+        // CRÍTICO: Limpiar cualquier marcador __STAGE__: que pudiera haber quedado
+        // (por si el backend los incluyó antes del fix)
+        finalText = finalText.replaceAll(RegExp(r'__STAGE__:[^\s]+'), '').trim();
+        
+        // Limpiar múltiples saltos de línea que puedan haber quedado
+        finalText = finalText.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+
+        // Reemplazar texto acumulado con versión final bien formateada
+        aiMessage.text = finalText;
+        messages.refresh();
+        scrollToBottom();
+
+        print(
+          '✅ [Controller] Final JSON received: ${finalText.length} chars, ${jsonData['newline_count']} newlines',
+        );
+        print(
+          '✅ [Controller] Preview: "${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length).replaceAll('\n', '\\n')}"',
+        );
+        return;
+      } catch (e) {
+        print('❌ [Controller] Error parsing final JSON: $e');
+        // NO mostrar el JSON literal en la UI si falla el parsing
+        return;
+      }
+    }
+
+    if (!hasFirstToken()) {
+      setHasFirstToken(true);
+      aiMessage.text = token;
+      if (!messages.contains(aiMessage)) {
+        messages.add(aiMessage);
+      }
+    } else {
+      aiMessage.text += token;
+    }
+    messages.refresh();
+    scrollToBottom();
+  }
 
   @override
   void onInit() {
@@ -284,20 +345,12 @@ class ChatController extends GetxService {
         userMessage: failedMsg,
         file: failedPdf,
         onStream: (token) {
-          if (token.startsWith('__STAGE__:')) {
-            final stage = token.split(':').last.trim();
-            currentStage.value = stage;
-            return; // do not append to message text
-          }
-          if (!hasFirstToken) {
-            hasFirstToken = true;
-            aiMessage.text = token;
-            messages.add(aiMessage);
-          } else {
-            aiMessage.text += token;
-          }
-          messages.refresh();
-          scrollToBottom();
+          _processStreamToken(
+            token,
+            aiMessage,
+            () => hasFirstToken,
+            (val) => hasFirstToken = val,
+          );
         },
       );
       if (!hasFirstToken) {
@@ -516,29 +569,12 @@ class ChatController extends GetxService {
             image: currentImage,
             focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
             onStream: (token) {
-              if (token.startsWith('__STAGE__:')) {
-                final stage = token.split(':').last.trim();
-                currentStage.value = stage;
-                return;
-              }
-              if (!hasFirstToken) {
-                hasFirstToken = true;
-                aiMessage.text = token;
-                messages.add(aiMessage);
-                print(
-                  '🎯 [Controller] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)',
-                );
-              } else {
-                aiMessage.text += token;
-                // DEBUG CRÍTICO: Verificar si los tokens contienen \n
-                final hasNewline = token.contains('\n');
-                final newlineCount = '\n'.allMatches(token).length;
-                print(
-                  '🎯 [Controller] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length).replaceAll('\n', '\\n')}${token.length > 30 ? "..." : ""}" | Has \\n: $hasNewline (count: $newlineCount) | Total length: ${aiMessage.text.length}',
-                );
-              }
-              messages.refresh();
-              scrollToBottom();
+              _processStreamToken(
+                token,
+                aiMessage,
+                () => hasFirstToken,
+                (val) => hasFirstToken = val,
+              );
             },
           );
           Logger.debug('stream complete len=${response.text.length}');
@@ -662,15 +698,12 @@ class ChatController extends GetxService {
             file: currentPdf,
             image: currentImage,
             onStream: (token) {
-              if (!hasFirstToken) {
-                hasFirstToken = true;
-                aiMessage.text = token;
-                messages.add(aiMessage);
-              } else {
-                aiMessage.text += token;
-              }
-              messages.refresh();
-              scrollToBottom();
+              _processStreamToken(
+                token,
+                aiMessage,
+                () => hasFirstToken,
+                (val) => hasFirstToken = val,
+              );
             },
           );
           if (!hasFirstToken) {
@@ -762,30 +795,13 @@ class ChatController extends GetxService {
           image: currentImage,
           focusDocId: focusOnPdfMode.value ? focusedPdfId : null,
           onStream: (token) {
-            if (token.startsWith('__STAGE__:')) {
-              final stage = token.split(':').last.trim();
-              currentStage.value = stage;
-              return;
-            }
             lastSendTime.value = DateTime.now();
-            if (!hasFirstToken) {
-              hasFirstToken = true;
-              aiMessage.text = token;
-              messages.add(aiMessage);
-              print(
-                '🎯 [Controller-R2] First token: "${token.substring(0, token.length > 50 ? 50 : token.length)}${token.length > 50 ? "..." : ""}" (${token.length} chars)',
-              );
-              print(
-                '🎯 [Controller-R2] Message added to list. Total messages: ${messages.length}',
-              );
-            } else {
-              aiMessage.text += token;
-              print(
-                '🎯 [Controller-R2] Token appended: "${token.substring(0, token.length > 30 ? 30 : token.length)}${token.length > 30 ? "..." : ""}" | Total length now: ${aiMessage.text.length}',
-              );
-            }
-            messages.refresh();
-            scrollToBottom();
+            _processStreamToken(
+              token,
+              aiMessage,
+              () => hasFirstToken,
+              (val) => hasFirstToken = val,
+            );
           },
         );
         ChatMessageModel response;

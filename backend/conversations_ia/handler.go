@@ -1988,22 +1988,34 @@ func normalizeMarkdownToken(tok string) string {
 // normalizeMarkdownToken("médico-quirúrgico- Punto") → "médico-quirúrgico\n- Punto" (preserva guion interno)
 
 // sseStream mínima (duplicada para aislar del paquete chat existente) – reusa formato: cada token -> data: token\n\n
+// HÍBRIDO: Envía chunks SSE para progreso visual + JSON final con texto completo bien formateado
 func sseStream(c *gin.Context, ch <-chan string) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.WriteHeader(http.StatusOK)
 	c.Writer.Flush()
+
+	// Buffer para acumular texto completo
+	var fullText strings.Builder
+
 	for tok := range ch {
 		if tok == "" {
 			continue
 		}
+
 		// DEBUG: Log preview del token ANTES de normalizar
 		preview := tok
 		if len(tok) > 200 {
 			preview = tok[:200] + "..."
 		}
 		log.Printf("[SSE] Token received (len=%d): %q", len(tok), preview)
+
+		// CRÍTICO: NO acumular marcadores de stage en el texto final
+		// Solo acumular contenido real
+		if !strings.HasPrefix(tok, "__STAGE__:") {
+			fullText.WriteString(tok)
+		}
 
 		// CRÍTICO: Normalizar markdown porque OpenAI envía tokens sin saltos de línea
 		// Ejemplo: "## DefiniciónLa gastritis..." → "## Definición\n\nLa gastritis..."
@@ -2018,31 +2030,21 @@ func sseStream(c *gin.Context, ch <-chan string) {
 			log.Printf("[SSE] Token NORMALIZED (len=%d): %q", len(normalized), normPreview)
 		}
 
-		// CRÍTICO: Si el token es muy grande (>500 chars), dividirlo en chunks pequeños
-		// para que el frontend pueda procesarlo correctamente y SSE no se corte
+		// CRÍTICO: Si el token es muy grande (>500 chars), dividirlo en chunks de ~400 chars
+		// SIN perder los saltos de línea \n\n originales
 		if len(normalized) > 500 {
-			log.Printf("[SSE] Large token detected (%d chars), splitting into chunks", len(normalized))
-			// Dividir por líneas para no cortar en medio de palabras
-			lines := strings.Split(normalized, "\n")
-			currentChunk := ""
-			for _, line := range lines {
-				// Si añadir esta línea excede 300 chars, enviar chunk actual
-				if len(currentChunk) > 0 && len(currentChunk)+len(line)+1 > 300 {
-					_, _ = c.Writer.Write([]byte("data: " + currentChunk + "\n\n"))
-					c.Writer.Flush()
-					log.Printf("[SSE] Chunk sent: %d chars", len(currentChunk))
-					currentChunk = ""
+			log.Printf("[SSE] Large token detected (%d chars), splitting into chunks preserving \\n", len(normalized))
+			// Dividir en chunks de ~400 chars respetando límites de caracteres
+			chunkSize := 400
+			for i := 0; i < len(normalized); i += chunkSize {
+				end := i + chunkSize
+				if end > len(normalized) {
+					end = len(normalized)
 				}
-				if currentChunk != "" {
-					currentChunk += "\n"
-				}
-				currentChunk += line
-			}
-			// Enviar último chunk
-			if currentChunk != "" {
-				_, _ = c.Writer.Write([]byte("data: " + currentChunk + "\n\n"))
+				chunk := normalized[i:end]
+				_, _ = c.Writer.Write([]byte("data: " + chunk + "\n\n"))
 				c.Writer.Flush()
-				log.Printf("[SSE] Final chunk sent: %d chars", len(currentChunk))
+				log.Printf("[SSE] Chunk sent: %d chars (offset %d)", len(chunk), i)
 			}
 		} else {
 			// Token pequeño, enviar directamente
@@ -2050,8 +2052,26 @@ func sseStream(c *gin.Context, ch <-chan string) {
 			c.Writer.Flush()
 		}
 	}
-	// CRÍTICO: Enviar marcador [DONE] al final del stream
-	// El frontend espera este marcador para cerrar correctamente el stream
+
+	// CRÍTICO: Enviar evento FINAL con JSON completo bien formateado
+	// El frontend debe buscar este evento especial "__JSON__:" para obtener el texto definitivo
+	finalText := fullText.String()
+	finalNormalized := normalizeMarkdownToken(finalText)
+
+	// Escapar JSON correctamente
+	jsonBytes, err := json.Marshal(map[string]interface{}{
+		"text":          finalNormalized,
+		"char_count":    len(finalNormalized),
+		"newline_count": strings.Count(finalNormalized, "\n"),
+	})
+
+	if err == nil {
+		_, _ = c.Writer.Write([]byte("data: __JSON__:" + string(jsonBytes) + "\n\n"))
+		c.Writer.Flush()
+		log.Printf("[SSE] Final JSON sent with %d chars, %d newlines", len(finalNormalized), strings.Count(finalNormalized, "\n"))
+	}
+
+	// Marcador de fin de stream
 	_, _ = c.Writer.Write([]byte("data: [DONE]\n\n"))
 	c.Writer.Flush()
 }
@@ -2553,6 +2573,66 @@ func classifyErr(err error) string {
 	default:
 		return "openai_error"
 	}
+}
+
+// MessageDebug: versión de Message que devuelve JSON en lugar de SSE para debugging en Postman
+// Acumula todo el stream y devuelve {"text": "contenido completo con \n\n preservados"}
+func (h *Handler) MessageDebug(c *gin.Context) {
+	if h.AI.GetAssistantID() == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "assistant no configurado"})
+		return
+	}
+
+	var req struct {
+		ThreadID   string `json:"thread_id"`
+		Prompt     string `json:"prompt"`
+		FocusDocID string `json:"focus_doc_id,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parámetros inválidos"})
+		return
+	}
+
+	log.Printf("[conv][MessageDebug] thread=%s prompt=%q", req.ThreadID, truncatePreview(req.Prompt, 100))
+
+	snap := h.snapshotTopic(req.ThreadID)
+	resp, err := h.SmartMessage(c.Request.Context(), req.ThreadID, req.Prompt, req.FocusDocID, snap)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
+		return
+	}
+
+	if resp == nil || resp.Stream == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "respuesta vacía"})
+		return
+	}
+
+	// Acumular todo el stream en un buffer
+	var fullText strings.Builder
+	for token := range resp.Stream {
+		if token == "__STAGE__:start" || strings.HasPrefix(token, "__STAGE__:") {
+			continue // Ignorar marcadores de etapa
+		}
+		fullText.WriteString(token)
+	}
+
+	text := fullText.String()
+
+	// Aplicar normalización markdown una sola vez al texto completo
+	normalized := normalizeMarkdownToken(text)
+
+	log.Printf("[conv][MessageDebug] accumulated %d chars, normalized %d chars", len(text), len(normalized))
+
+	// Devolver JSON con el texto preservando \n literalmente
+	c.JSON(http.StatusOK, gin.H{
+		"text":            normalized,
+		"source":          resp.Source,
+		"thread_id":       req.ThreadID,
+		"char_count":      len(normalized),
+		"newline_count":   strings.Count(normalized, "\n"),
+		"allowed_sources": resp.AllowedSources,
+	})
 }
 
 // Delete: limpieza de artifacts (paridad)

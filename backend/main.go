@@ -195,6 +195,7 @@ func main() {
 	convHandler.SetQuotaValidator(qValidator.ValidateAndConsume)
 	r.POST("/conversations/start", convHandler.Start)
 	r.POST("/conversations/message", convHandler.Message)
+	r.POST("/conversations/message/debug", convHandler.MessageDebug) // Versión JSON para debugging en Postman
 	// Debug config (non-secret) – can be protected later behind ENV
 	r.GET("/conversations/debug/config", convHandler.DebugConfig)
 	// Paridad: limpieza y vector store
