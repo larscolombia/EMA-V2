@@ -525,11 +525,7 @@ Instrucciones:
 	// Esto ayuda al Assistant a entender de qué se está hablando sin contaminar las búsquedas
 	// CRÍTICO: Usar contexto independiente con timeout generoso para evitar que el contexto HTTP
 	// (que puede tener timeouts más cortos) cancele esta operación
-	contextStart := time.Now()
-	contextFetchCtx, contextCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer contextCancel()
-	conversationContext := h.buildConversationContext(contextFetchCtx, threadID, 4) // Últimos 2 intercambios
-	log.Printf("[conv][SmartMessage][context_timing] thread=%s elapsed_ms=%d", threadID, time.Since(contextStart).Milliseconds())
+	// IMPORTANTE: Este contexto se construirá DESPUÉS de detectar cambio temático para evitar contaminar con fuentes antiguas
 
 	// DETECCIÓN DE CAMBIO TEMÁTICO: Comparar tema actual con keywords previas
 	currentKeywords := extractTopicKeywords(prompt, nil)
@@ -555,6 +551,19 @@ Instrucciones:
 			log.Printf("[conv][SmartMessage][TOPIC_CHANGE_DETECTED] thread=%s prev_topic=%v new_topic=%v → EVIDENCE_SET_REGENERATED",
 				threadID, snap.Keywords, currentKeywords)
 		}
+	}
+
+	// Construir contexto conversacional SOLO si NO cambió el tema
+	var conversationContext string
+	if topicChanged {
+		log.Printf("[conv][SmartMessage][context_cleared] thread=%s reason=topic_changed clearing_context_to_prevent_citation_carryover", threadID)
+		conversationContext = "" // Empezar con contexto limpio en nuevo tema
+	} else {
+		contextStart := time.Now()
+		contextFetchCtx, contextCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer contextCancel()
+		conversationContext = h.buildConversationContext(contextFetchCtx, threadID, 4) // Últimos 2 intercambios
+		log.Printf("[conv][SmartMessage][context_timing] thread=%s elapsed_ms=%d", threadID, time.Since(contextStart).Milliseconds())
 	}
 
 	// Actualizar snapshot con keywords actuales para persistencia posterior
