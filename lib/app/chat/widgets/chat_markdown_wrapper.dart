@@ -1,5 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
+
+/// Custom builder para párrafos justificados
+class JustifiedParagraphBuilder extends MarkdownElementBuilder {
+  final TextStyle? style;
+
+  JustifiedParagraphBuilder({this.style});
+
+  @override
+  void visitElementBefore(md.Element element) {
+    // No hacemos nada aquí
+  }
+
+  @override
+  Widget? visitText(md.Text text, TextStyle? preferredStyle) {
+    return RichText(
+      textAlign: TextAlign.justify,
+      text: TextSpan(text: text.text, style: preferredStyle ?? style),
+    );
+  }
+}
 
 /// A wrapper for StreamingTextMarkdown that processes raw medical content into well-formatted
 /// Markdown with proper styling for titles, references, and clinical content.
@@ -26,13 +47,28 @@ class ChatMarkdownWrapper extends StatefulWidget {
   State<ChatMarkdownWrapper> createState() => _ChatMarkdownWrapperState();
 }
 
-class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
+class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper>
+    with SingleTickerProviderStateMixin {
+  // Set estático para persistir entre reconstrucciones del widget
+  // Guarda hashes de textos que ya fueron animados
+  static final Set<int> _animatedTexts = {};
+
   late String _processedText;
+  String _displayedText = '';
+  bool _isAnimating = true;
+  bool _showCursor = true;
+  int _currentIndex = 0;
+  bool _hasLoggedOnce = false; // Para evitar logs repetidos
+
+  // Timer para la animación de typing (velocidad moderada, natural)
+  Duration _typingSpeed = const Duration(milliseconds: 12);
 
   @override
   void initState() {
     super.initState();
     _processedText = _processRawContent(widget.text);
+    _startTypingAnimation();
+    _startCursorBlink();
   }
 
   @override
@@ -40,7 +76,114 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
     super.didUpdateWidget(oldWidget);
     if (widget.text != oldWidget.text ||
         widget.placeholderReplacements != oldWidget.placeholderReplacements) {
-      _processedText = _processRawContent(widget.text);
+      final newProcessed = _processRawContent(widget.text);
+
+      // Si el texto cambió, reiniciar animación desde donde quedó
+      if (newProcessed != _processedText) {
+        _processedText = newProcessed;
+        if (_isAnimating) {
+          _startTypingAnimation();
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _isAnimating = false;
+    super.dispose();
+  }
+
+  void _startTypingAnimation() {
+    if (!mounted) return;
+
+    // Usar hash del texto para identificar si ya fue animado
+    final textHash = _processedText.hashCode;
+
+    // Si ya se animó este texto, mostrar completo inmediatamente
+    if (_animatedTexts.contains(textHash)) {
+      setState(() {
+        _displayedText = _processedText;
+        _isAnimating = false;
+      });
+      return;
+    }
+
+    // Mostrar todo el texto inmediatamente si es muy corto
+    if (_processedText.length < 50) {
+      setState(() {
+        _displayedText = _processedText;
+        _isAnimating = false;
+        _animatedTexts.add(textHash);
+      });
+      return;
+    }
+
+    _currentIndex = 0;
+    _isAnimating = true;
+    _animateNextChunk();
+  }
+
+  void _animateNextChunk() {
+    if (!mounted || !_isAnimating) return;
+
+    if (_currentIndex >= _processedText.length) {
+      if (mounted) {
+        setState(() {
+          _isAnimating = false;
+          _displayedText = _processedText;
+          _animatedTexts.add(_processedText.hashCode); // Marcar que ya se animó
+        });
+      }
+      return;
+    }
+
+    // Animar en chunks medianos para balance entre fluidez y velocidad
+    final chunkSize = 3;
+    final endIndex = (_currentIndex + chunkSize).clamp(
+      0,
+      _processedText.length,
+    );
+
+    Future.delayed(_typingSpeed, () {
+      if (!mounted || !_isAnimating) return;
+
+      // Usar WidgetsBinding para evitar rebuilds durante scroll
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isAnimating) return;
+
+        setState(() {
+          _currentIndex = endIndex;
+          _displayedText = _processedText.substring(0, endIndex);
+        });
+      });
+
+      _animateNextChunk();
+    });
+  }
+
+  void _startCursorBlink() {
+    Future.delayed(const Duration(milliseconds: 530), () {
+      if (!mounted || !_isAnimating) return;
+
+      // Solo hacer setState si realmente está animando
+      if (_isAnimating && mounted) {
+        setState(() {
+          _showCursor = !_showCursor;
+        });
+        _startCursorBlink();
+      }
+    });
+  }
+
+  void _skipAnimation() {
+    if (_isAnimating) {
+      setState(() {
+        _isAnimating = false;
+        _displayedText = _processedText;
+        _currentIndex = _processedText.length;
+        _animatedTexts.add(_processedText.hashCode); // Marcar que ya se animó
+      });
     }
   }
 
@@ -97,37 +240,78 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // DEBUG: Contar saltos de línea reales
-    final realNewlines = '\n'.allMatches(_processedText).length;
-    print(
-      '[ChatMarkdownWrapper] 🔍 Saltos de línea reales en texto: $realNewlines',
-    );
-    print('[ChatMarkdownWrapper] 🔍 Longitud total: ${_processedText.length}');
+    // DEBUG: Contar saltos de línea reales (solo una vez)
+    if (!_hasLoggedOnce && _processedText.isNotEmpty) {
+      _hasLoggedOnce = true;
+      final realNewlines = '\n'.allMatches(_processedText).length;
+      print(
+        '[ChatMarkdownWrapper] 🔍 Saltos de línea reales en texto: $realNewlines',
+      );
+      print(
+        '[ChatMarkdownWrapper] 🔍 Longitud total: ${_processedText.length}',
+      );
+    }
 
     // Renderizar con flutter_markdown para respetar headings y párrafos
     final theme = Theme.of(context);
+    final baseFontSize = widget.style.fontSize ?? 15;
+
     final baseMdStyle = MarkdownStyleSheet.fromTheme(theme).copyWith(
-      p: widget.style.copyWith(height: 1.7),
+      // Párrafos: texto justificado con buen espaciado
+      p: widget.style.copyWith(height: 1.6, fontSize: baseFontSize),
+      pPadding: const EdgeInsets.only(bottom: 12.0),
+
+      // Headers: bold y con buen espaciado
       h1: widget.style.copyWith(
-        fontSize: (widget.style.fontSize ?? 15) + 6,
+        fontSize: baseFontSize + 8,
         fontWeight: FontWeight.bold,
+        height: 1.4,
       ),
+      h1Padding: const EdgeInsets.only(top: 16.0, bottom: 12.0),
+
       h2: widget.style.copyWith(
-        fontSize: (widget.style.fontSize ?? 15) + 4,
+        fontSize: baseFontSize + 6,
         fontWeight: FontWeight.bold,
+        height: 1.3,
       ),
+      h2Padding: const EdgeInsets.only(top: 14.0, bottom: 10.0),
+
       h3: widget.style.copyWith(
-        fontSize: (widget.style.fontSize ?? 15) + 2,
-        fontWeight: FontWeight.bold,
+        fontSize: baseFontSize + 4,
+        fontWeight: FontWeight.w600,
+        height: 1.3,
       ),
+      h3Padding: const EdgeInsets.only(top: 12.0, bottom: 8.0),
+
+      // Listas: con buen espaciado
+      listBullet: widget.style.copyWith(fontSize: baseFontSize),
+      listIndent: 24.0,
+
+      // Énfasis
+      strong: widget.style.copyWith(fontWeight: FontWeight.bold),
+      em: widget.style.copyWith(fontStyle: FontStyle.italic),
+
+      textAlign: WrapAlignment.start,
     );
+
+    // Usar texto animado o completo según el estado
+    final displayText =
+        _isAnimating
+            ? (_displayedText + (_showCursor ? '▌' : ''))
+            : _processedText;
 
     Widget content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: MarkdownBody(
-        data: _processedText,
-        selectable: true,
+        data: displayText,
+        selectable:
+            !_isAnimating, // Solo seleccionable cuando termina la animación
         styleSheet: baseMdStyle,
+        builders: {
+          'p': JustifiedParagraphBuilder(
+            style: widget.style.copyWith(height: 1.7),
+          ),
+        },
       ),
     );
 
@@ -139,7 +323,62 @@ class _ChatMarkdownWrapperState extends State<ChatMarkdownWrapper> {
       );
     }
 
-    return SelectionArea(child: content);
+    // Envolver en GestureDetector para permitir saltar la animación
+    // CRÍTICO: usar RepaintBoundary para evitar rebuilds que causan "vibración"
+    // Stack con overlay transparente para capturar taps en toda el área
+    return RepaintBoundary(
+      child: Stack(
+        children: [
+          SelectionArea(child: content),
+          // Overlay transparente que captura taps en toda el área de la burbuja
+          if (_isAnimating)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _skipAnimation,
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+          // Indicador visual sutil cuando se puede saltar
+          // IgnorePointer para que no interfiera con el overlay
+          if (_isAnimating)
+            Positioned(
+              right: 8,
+              top: 8,
+              child: IgnorePointer(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceVariant.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.touch_app,
+                        size: 14,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Tap para saltar',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
 

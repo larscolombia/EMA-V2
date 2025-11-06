@@ -17,6 +17,7 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
+  bool _isSourcesExpanded = false; // Estado del desplegable de fuentes
 
   // Formatea una cadena en estilo Título (conservando preposiciones comunes en minúscula)
   String _toTitleCase(String input) {
@@ -197,30 +198,63 @@ class _ChatMessageAiState extends State<ChatMessageAi>
   List<String> _extractSources(String text) {
     final List<String> sources = [];
 
-    // 1. Buscar sección nueva con emojis: ## Fuentes seguido de ### 📚 y ### 🔬
+    // 1. Buscar sección con ## Fuentes (con cualquier texto adicional como OBLIGATORIO, AL FINAL, etc.)
+    // Captura TODO desde ## Fuentes hasta el final del texto completo
     final newFormatRegex = RegExp(
-      r'##\s*Fuentes\s*\n+(.*?)(?=\n\n[^#\-\*]|\z)',
-      dotAll: true,
+      r'##\s*Fuentes?[^#\n]*\n+([\s\S]*?)$',
       caseSensitive: false,
     );
     final newFormatMatch = newFormatRegex.firstMatch(text);
 
     if (newFormatMatch != null) {
       final sourcesSection = newFormatMatch.group(1) ?? '';
-      // Extraer líneas que empiezan con - (lista de fuentes)
-      final listRegex = RegExp(r'^\s*[\-\*]\s*(.+)$', multiLine: true);
-      sources.addAll(
-        listRegex
-            .allMatches(sourcesSection)
-            .map((match) => match.group(1)!.trim())
-            .where((s) => s.isNotEmpty && !s.contains('###')),
+
+      // Debug: mostrar la sección completa capturada
+      print(
+        '📖 [_extractSources] Sección capturada (${sourcesSection.length} chars)',
       );
+      print('📖 Contenido: ${sourcesSection.replaceAll('\n', '⏎\n')}');
+
+      // Extraer líneas que empiezan con - o * o ** (Markdown bullet/bold)
+      // El patrón captura: - texto, * texto, ** texto (negritas usadas como bullets)
+      final listRegex = RegExp(
+        r'^\s*(?:[\-\*]+)\s*\*?\s*(.+?)\.?\s*$',
+        multiLine: true,
+      );
+      final allMatches = listRegex.allMatches(sourcesSection).toList();
+
+      print('📖 Total de líneas con - o * o **: ${allMatches.length}');
+
+      for (var i = 0; i < allMatches.length; i++) {
+        var content = allMatches[i].group(1)!.trim();
+
+        // Limpiar asteriscos finales de negritas (**texto**)
+        content = content.replaceAll(RegExp(r'\*+$'), '').trim();
+
+        print('📖 Línea $i: "$content"');
+
+        // Solo excluir si la línea es EXACTAMENTE un encabezado de subsección
+        // Ejemplos a excluir: "📚 Libros", "🔬 PubMed", "📚 Literatura"
+        final isSubsectionHeader = RegExp(
+          r'^#{1,3}\s*[📚🔬📖🔍]?\s*(?:Libros?|PubMed|Literatura|Artículos?)\s*$',
+          caseSensitive: false,
+        ).hasMatch(content);
+
+        if (content.isNotEmpty && !isSubsectionHeader && content.length > 5) {
+          sources.add(content);
+          print('✅ Añadida: "$content"');
+        } else if (isSubsectionHeader) {
+          print('⏭️ Ignorada (encabezado): "$content"');
+        } else {
+          print('⏭️ Ignorada (muy corta o vacía): "$content"');
+        }
+      }
     }
 
-    // 2. Fallback: Buscar formato antiguo ## Fuentes sin subsecciones
+    // 2. Fallback: Buscar "Fuentes" o "Fuente" con cualquier sufijo/prefijo (: OBLIGATORIO, AL FINAL, etc.)
     if (sources.isEmpty) {
       final sourcesRegex = RegExp(
-        r'##\s*Fuentes\s*:?\s*\n(.*?)(?=\n\n|\n## |$)',
+        r'##\s*Fuentes?[^#\n]*\n(.*?)(?=\n\n|\n## |$)',
         dotAll: true,
         caseSensitive: false,
       );
@@ -238,10 +272,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
       }
     }
 
-    // Fallback: buscar patrón "Fuentes:" sin ##
+    // Fallback: buscar patrón "Fuentes" sin ## pero con cualquier sufijo
     if (sources.isEmpty) {
       final altSourceRegex1 = RegExp(
-        r'Fuentes?:\s*\n(.*?)(?=\n\n|\n## |$)',
+        r'Fuentes?[^\n]*\n(.*?)(?=\n\n|\n## |$)',
         dotAll: true,
         caseSensitive: false,
       );
@@ -258,10 +292,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
       }
     }
 
-    // Fallback 2: Buscar "Fuente:" o "Fuentes:" en línea única
+    // Fallback 2: Buscar "Fuente:" o "Fuentes:" en línea única con cualquier sufijo
     if (sources.isEmpty) {
       final altSourceRegex2 = RegExp(
-        r'Fuentes?:\s*(.+?)(?=\n|$)',
+        r'Fuentes?[^\n]*:\s*(.+?)(?=\n|$)',
         multiLine: true,
         caseSensitive: false,
       );
@@ -276,51 +310,28 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     return sources;
   }
 
-  String _getMainContent(String text) {
+  String _getMainContent(String text, {bool shouldRemoveSources = true}) {
     if (text.trim().isEmpty) return text;
 
     String content = text;
 
-    // 1. Remover sección "## Fuentes" completa incluyendo subsecciones con emojis
-    // Este patrón captura desde ## Fuentes hasta el final del texto
-    content = content.replaceAll(
-      RegExp(
-        r'\n*##\s*Fuentes\s*:?\s*\n+(?:###\s*[📚🔬].*?\n+)?[\s\S]*$',
-        caseSensitive: false,
-      ),
-      '',
-    );
+    // Solo remover fuentes si fueron detectadas exitosamente
+    if (shouldRemoveSources) {
+      // 1. Remover sección "## Fuentes" con cualquier sufijo (OBLIGATORIO, AL FINAL, etc.)
+      // Este patrón captura desde ## Fuentes hasta el final (incluye subsecciones con emojis)
+      content = content.replaceAll(
+        RegExp(r'\n*##\s*Fuentes?[^#\n]*\n+[\s\S]*$', caseSensitive: false),
+        '',
+      );
 
-    // 2. Remover sección "Fuentes:" sin ## (fallback para formatos antiguos)
-    content = content.replaceAll(
-      RegExp(r'\n*Fuentes?\s*:?\s*\n[\s\S]*$', caseSensitive: false),
-      '',
-    );
+      // 2. Fallback: Remover "Fuentes" sin ## (casos legacy)
+      content = content.replaceAll(
+        RegExp(r'\n*Fuentes?[^\n]*\n[\s\S]*$', caseSensitive: false),
+        '',
+      );
+    }
 
-    // 3. Remover líneas sueltas que empiezan con "- " y contienen referencias bibliográficas
-    // (Manual, PMID, PDF, etc.) que puedan haber quedado
-    content = content.replaceAll(
-      RegExp(
-        r'\n\s*-\s+.*?(?:Manual\s+Schwartz|PMID:\s*\d+|\.pdf|PubMed|Libro de texto|Literatura Científica).*?$',
-        caseSensitive: false,
-        multiLine: true,
-      ),
-      '',
-    );
-
-    // 4. Remover subsecciones de fuentes sueltas que quedaron
-    content = content.replaceAll(
-      RegExp(
-        r'###\s*[📚🔬].*?(?:Libros|Literatura).*?\n',
-        caseSensitive: false,
-      ),
-      '',
-    );
-
-    // 5. Remover símbolos ## mal formados al final
-    content = content.replaceAll(RegExp(r'\.?\s*##\s*[A-Z]?\s*$'), '.');
-
-    // 6. Limpiar espacios en blanco excesivos al final
+    // Limpiar espacios en blanco excesivos al final (siempre)
     content = content.replaceAll(RegExp(r'\s+$'), '');
 
     return content.trim();
@@ -340,6 +351,21 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     // Si no hay texto útil, no renderizar la burbuja
     if (widget.message.text.trim().isEmpty) {
       return const SizedBox.shrink();
+    }
+
+    // Extraer fuentes una sola vez para coordinar con _getMainContent
+    final extractedSources = _extractSources(widget.message.text);
+    final hasValidSources = extractedSources.isNotEmpty;
+
+    // DEBUG: Advertir si el texto contiene "Fuentes" pero no se detectaron
+    if (!hasValidSources &&
+        widget.message.text.toLowerCase().contains('fuente')) {
+      print(
+        '⚠️ [ChatMessageAi] Texto contiene "Fuente" pero no se detectaron fuentes',
+      );
+      print(
+        '📄 Preview (primeros 500 chars): ${widget.message.text.substring(0, widget.message.text.length > 500 ? 500 : widget.message.text.length)}',
+      );
     }
 
     return Align(
@@ -411,7 +437,10 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                 Padding(
                   padding: EdgeInsets.all(isLongMessage ? 20 : 16),
                   child: ChatMarkdownWrapper(
-                    text: _getMainContent(widget.message.text),
+                    text: _getMainContent(
+                      widget.message.text,
+                      shouldRemoveSources: hasValidSources,
+                    ),
                     style: TextStyle(
                       fontSize: isLongMessage ? 15.5 : 15,
                       // 🎨 Texto negro para fondo blanco, blanco para morado
@@ -422,8 +451,8 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                   ),
                 ),
 
-                // 📚 Mostrar fuentes si están disponibles
-                if (_extractSources(widget.message.text).isNotEmpty)
+                // 📚 Mostrar fuentes si están disponibles (desplegable)
+                if (hasValidSources)
                   Container(
                     margin: EdgeInsets.only(
                       left: isLongMessage ? 16 : 12,
@@ -431,7 +460,6 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                       bottom: 16,
                       top: 8,
                     ),
-                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       // 🎨 Fondo adaptable: gris claro sobre blanco, blanco transparente sobre morado
                       color:
@@ -450,118 +478,227 @@ class _ChatMessageAiState extends State<ChatMessageAi>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Header de fuentes
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color:
-                                    isLongMessage
-                                        ? const Color.fromRGBO(58, 12, 140, 0.1)
-                                        : Colors.white.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Icon(
-                                Icons.menu_book_rounded,
-                                color:
-                                    isLongMessage
-                                        ? const Color.fromRGBO(58, 12, 140, 1)
-                                        : Colors.white,
-                                size: 18,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Text(
-                              'Bibliografía',
-                              style: TextStyle(
-                                color:
-                                    isLongMessage
-                                        ? const Color.fromRGBO(58, 12, 140, 1)
-                                        : Colors.white,
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        // Separador
-                        Container(
-                          height: 1,
-                          color:
-                              isLongMessage
-                                  ? const Color.fromRGBO(58, 12, 140, 0.1)
-                                  : Colors.white.withOpacity(0.1),
-                        ),
-                        const SizedBox(height: 12),
-                        // Lista de fuentes
-                        ..._extractSources(widget.message.text).map(
-                          (source) => Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color:
-                                  isLongMessage
-                                      ? Colors.black.withOpacity(0.03)
-                                      : Colors.black.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color:
-                                    isLongMessage
-                                        ? const Color.fromRGBO(
-                                          58,
-                                          12,
-                                          140,
-                                          0.08,
-                                        )
-                                        : Colors.white.withOpacity(0.08),
-                                width: 0.5,
-                              ),
-                            ),
+                        // Header clickeable para expandir/contraer
+                        InkWell(
+                          onTap: () {
+                            setState(() {
+                              _isSourcesExpanded = !_isSourcesExpanded;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
                             child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Icono según tipo de fuente
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: 2,
-                                    right: 10,
-                                  ),
-                                  child: Icon(
-                                    _getSourceIcon(source),
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
                                     color:
                                         isLongMessage
                                             ? const Color.fromRGBO(
                                               58,
                                               12,
                                               140,
-                                              0.6,
+                                              0.1,
                                             )
-                                            : Colors.white60,
-                                    size: 16,
+                                            : Colors.white.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Icon(
+                                    Icons.menu_book_rounded,
+                                    color:
+                                        isLongMessage
+                                            ? const Color.fromRGBO(
+                                              58,
+                                              12,
+                                              140,
+                                              1,
+                                            )
+                                            : Colors.white,
+                                    size: 18,
                                   ),
                                 ),
-                                // Contenido de la fuente
-                                Expanded(
+                                const SizedBox(width: 10),
+                                Text(
+                                  'Bibliografía',
+                                  style: TextStyle(
+                                    color:
+                                        isLongMessage
+                                            ? const Color.fromRGBO(
+                                              58,
+                                              12,
+                                              140,
+                                              1,
+                                            )
+                                            : Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // Badge con contador
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        isLongMessage
+                                            ? const Color.fromRGBO(
+                                              58,
+                                              12,
+                                              140,
+                                              1,
+                                            )
+                                            : Colors.white,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
                                   child: Text(
-                                    _toApa(source),
+                                    '${extractedSources.length}',
                                     style: TextStyle(
                                       color:
                                           isLongMessage
-                                              ? Colors.black87
-                                              : Colors.white.withOpacity(0.85),
+                                              ? Colors.white
+                                              : const Color.fromRGBO(
+                                                58,
+                                                12,
+                                                140,
+                                                1,
+                                              ),
                                       fontSize: 12,
-                                      height: 1.5,
-                                      letterSpacing: 0.2,
+                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
+                                ),
+                                const Spacer(),
+                                // Icono de expansión
+                                Icon(
+                                  _isSourcesExpanded
+                                      ? Icons.keyboard_arrow_up
+                                      : Icons.keyboard_arrow_down,
+                                  color:
+                                      isLongMessage
+                                          ? const Color.fromRGBO(
+                                            58,
+                                            12,
+                                            140,
+                                            0.6,
+                                          )
+                                          : Colors.white60,
+                                  size: 24,
                                 ),
                               ],
                             ),
                           ),
                         ),
+                        // Contenido desplegable
+                        if (_isSourcesExpanded) ...[
+                          // Separador
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Container(
+                              height: 1,
+                              color:
+                                  isLongMessage
+                                      ? const Color.fromRGBO(58, 12, 140, 0.1)
+                                      : Colors.white.withOpacity(0.1),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          // Lista de fuentes
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              left: 16,
+                              right: 16,
+                              bottom: 16,
+                            ),
+                            child: Column(
+                              children:
+                                  extractedSources
+                                      .map(
+                                        (source) => Container(
+                                          margin: const EdgeInsets.only(
+                                            bottom: 10,
+                                          ),
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                isLongMessage
+                                                    ? Colors.black.withOpacity(
+                                                      0.03,
+                                                    )
+                                                    : Colors.black.withOpacity(
+                                                      0.15,
+                                                    ),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            border: Border.all(
+                                              color:
+                                                  isLongMessage
+                                                      ? const Color.fromRGBO(
+                                                        58,
+                                                        12,
+                                                        140,
+                                                        0.08,
+                                                      )
+                                                      : Colors.white
+                                                          .withOpacity(0.08),
+                                              width: 0.5,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              // Icono según tipo de fuente
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  top: 2,
+                                                  right: 10,
+                                                ),
+                                                child: Icon(
+                                                  _getSourceIcon(source),
+                                                  color:
+                                                      isLongMessage
+                                                          ? const Color.fromRGBO(
+                                                            58,
+                                                            12,
+                                                            140,
+                                                            0.6,
+                                                          )
+                                                          : Colors.white60,
+                                                  size: 16,
+                                                ),
+                                              ),
+                                              // Contenido de la fuente
+                                              Expanded(
+                                                child: Text(
+                                                  _toApa(source),
+                                                  style: TextStyle(
+                                                    color:
+                                                        isLongMessage
+                                                            ? Colors.black87
+                                                            : Colors.white
+                                                                .withOpacity(
+                                                                  0.85,
+                                                                ),
+                                                    fontSize: 12,
+                                                    height: 1.5,
+                                                    letterSpacing: 0.2,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
