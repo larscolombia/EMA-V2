@@ -531,6 +531,35 @@ Instrucciones:
 	conversationContext := h.buildConversationContext(contextFetchCtx, threadID, 4) // Últimos 2 intercambios
 	log.Printf("[conv][SmartMessage][context_timing] thread=%s elapsed_ms=%d", threadID, time.Since(contextStart).Milliseconds())
 
+	// DETECCIÓN DE CAMBIO TEMÁTICO: Comparar tema actual con keywords previas
+	currentKeywords := extractTopicKeywords(prompt, nil)
+	topicChanged := false
+	if snap.MessageCount > 0 && len(snap.Keywords) > 0 {
+		// Verificar si hay overlap entre keywords actuales y previas
+		overlap := 0
+		for _, curr := range currentKeywords {
+			for _, prev := range snap.Keywords {
+				if strings.EqualFold(curr, prev) {
+					overlap++
+					break
+				}
+			}
+		}
+		// Si hay menos de 30% de overlap, consideramos que cambió el tema
+		overlapPercent := float64(overlap) / float64(len(snap.Keywords)) * 100
+		topicChanged = overlapPercent < 30
+		log.Printf("[conv][SmartMessage][topic_detection] thread=%s prev_keywords=%v current_keywords=%v overlap=%.1f%% topic_changed=%v",
+			threadID, snap.Keywords, currentKeywords, overlapPercent, topicChanged)
+
+		if topicChanged {
+			log.Printf("[conv][SmartMessage][TOPIC_CHANGE_DETECTED] thread=%s prev_topic=%v new_topic=%v → EVIDENCE_SET_REGENERATED",
+				threadID, snap.Keywords, currentKeywords)
+		}
+	}
+
+	// Actualizar snapshot con keywords actuales para persistencia posterior
+	resp.Topic.Keywords = currentKeywords
+
 	// Determinar modo de integración: solo vector, solo PubMed, o híbrido
 	var integrationMode string
 	if vecHas && pubHas {
@@ -543,45 +572,76 @@ Instrucciones:
 		integrationMode = "pubmed_only"
 		resp.Source = "pubmed"
 	}
-	log.Printf("[conv][SmartMessage][integration] thread=%s mode=%s vecHas=%v pubHas=%v has_context=%v", threadID, integrationMode, vecHas, pubHas, conversationContext != "")
+	log.Printf("[conv][SmartMessage][integration] thread=%s mode=%s vecHas=%v pubHas=%v has_context=%v topic_changed=%v",
+		threadID, integrationMode, vecHas, pubHas, conversationContext != "", topicChanged)
+
+	// Construir advertencia de cambio temático si aplica
+	topicChangeWarning := ""
+	if topicChanged {
+		topicChangeWarning = fmt.Sprintf(
+			"⚠️⚠️⚠️ ALERTA DE CAMBIO TEMÁTICO ⚠️⚠️⚠️\n"+
+				"El tema de esta pregunta (%v) es DIFERENTE al tema previo (%v).\n"+
+				"Las fuentes (Biblioteca y PubMed) SE HAN REGENERADO específicamente para el tema ACTUAL.\n"+
+				"PROHIBIDO citar fuentes del tema anterior. USA EXCLUSIVAMENTE las fuentes listadas abajo.\n\n",
+			currentKeywords, snap.Keywords,
+		)
+	}
 
 	// Construir prompt adaptado al modo de integración
 	var input string
 	if integrationMode == "hybrid" {
 		// MODO HÍBRIDO: Integrar vector store y PubMed (VERSIÓN OPTIMIZADA)
 		input = fmt.Sprintf(
-			"⚠️ FORMATO MARKDOWN OBLIGATORIO ⚠️\n"+
-				"- ## Headers con \\n\\n antes\n"+
-				"- Listas (-, 1.), **negritas**, ## Fuentes AL FINAL\n\n"+
-				"Asistente médico experto. Respuestas SOLO de fuentes verificadas.\n\n"+
+			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
+				"• Usa ## para headers principales (con \\n\\n antes)\n"+
+				"• Listas numeradas (1. 2. 3.) o con viñetas (-, •)\n"+
+				"• **Negritas** para términos clave\n"+
+				"• Sección ## Fuentes AL FINAL (siempre)\n\n"+
+				"Eres un asistente médico académico especializado. Tu audiencia son médicos, residentes y profesionales de la salud.\n"+
+				"TONO REQUERIDO: Profesional académico, similar a revisiones médicas especializadas (UpToDate, DynaMed).\n"+
+				"LENGUAJE: Técnico, preciso, sin coloquialismos. Evita simplificaciones excesivas.\n"+
+				"ESTILO: Directo y objetivo, sin preámbulos innecesarios ni frases de relleno.\n\n"+
 				"%s"+ // Contexto conversacional
-				"TIPO DE CONSULTA:\n"+
-				"A) CLÍNICA: síntomas, edad, 'Tengo X' → Razonamiento interno + Hipótesis\n"+
-				"B) TEÓRICA: 'Qué es X' → Definición + Fisio + Dx + Tx\n\n"+
+				"%s"+ // topicChangeWarning
+				"CLASIFICACIÓN DE CONSULTA:\n"+
+				"A) CLÍNICA: Presentación de caso, síntomas, signos, datos demográficos\n"+
+				"B) TEÓRICA: Definiciones, fisiopatología, diagnóstico, tratamiento\n\n"+
 				"SI CLÍNICA (A):\n"+
-				"INTERNO (no muestres): Demografía, Síntomas TODOS, Signos alarma, 3 Hipótesis (dx/probabilidad/criterios)\n"+
-				"Reglas: ACUMULA datos mensajes previos, NO resetees, mantén coherencia temática\n"+
-				"RESPUESTA MÉDICO-A-MÉDICO: Lenguaje técnico, 300-500 palabras\n"+
-				"Estructura: Análisis → Diferenciales → Recomendaciones\n"+
-				"NO uses '[STATE]'. Fluye como colegas.\n\n"+
+				"ANÁLISIS INTERNO (no mostrar explícitamente):\n"+
+				"• Datos demográficos relevantes\n"+
+				"• Síntomas y signos presentes\n"+
+				"• Signos de alarma (red flags)\n"+
+				"• Diagnósticos diferenciales prioritarios (mínimo 3, con fundamento clínico)\n"+
+				"RESPUESTA:\n"+
+				"• Tono: Presentación de caso clínico en revista médica\n"+
+				"• Estructura: Análisis del cuadro → Diagnósticos diferenciales (con criterios) → Abordaje diagnóstico → Manejo recomendado\n"+
+				"• Extensión: 400-600 palabras, bien estructuradas\n"+
+				"• Citar guías clínicas cuando aplique (AHA/ACC, IDSA, ASCO, ESMO, etc.)\n\n"+
 				"SI TEÓRICA (B):\n"+
-				"🔴 Si contexto previo habla tema específico (ej: 'Frantz') y pregunta genérica ('tratamiento?'),\n"+
-				"contextualiza al tema previo (Tx Frantz, NO Tx general).\n"+
-				"MÉDICO-A-MÉDICO: técnico, preciso, sin simplificar\n"+
-				"Estructura: Definición + Fisio + Manifestaciones + Dx + Tx (300-500 palabras)\n"+
-				"Usa nomenclatura internacional, guías clínicas (ACC/AHA, NCCN, ESMO)\n\n"+
+				"CONTEXTO IMPORTANTE: Si el contexto previo refiere a un tema específico (ej: 'tumor de Frantz') y la pregunta es genérica\n"+
+				"('¿cuál es el tratamiento?'), DEBES contextualizar la respuesta al tema específico previo (tratamiento del tumor de Frantz).\n"+
+				"RESPUESTA:\n"+
+				"• Tono: Revisión académica especializada (similar a capítulo de libro médico o UpToDate)\n"+
+				"• Estructura: Definición precisa → Epidemiología (si relevante) → Fisiopatología → Manifestaciones clínicas → Criterios diagnósticos → Tratamiento basado en evidencia → Pronóstico\n"+
+				"• Extensión: 400-600 palabras, distribución equilibrada entre secciones\n"+
+				"• Terminología: Nomenclatura internacional actualizada (ICD, WHO, clasificaciones específicas)\n"+
+				"• Referencias a guías: Menciona guías relevantes (AHA/ACC, NCCN, ASCO, ESMO, KDIGO, etc.)\n"+
+				"• Niveles de evidencia: Cuando sea pertinente, indica grado de recomendación (I, IIa, IIb) y nivel de evidencia (A, B, C)\n\n"+
 				"FUENTES:\n"+
 				"Biblioteca:\n%s\n\n"+
 				"PubMed:\n%s\n\n"+
 				"Referencias:\n%s\n\n"+
 				"Pregunta: %s\n\n"+
-				"REGLAS:\n"+
-				"1. USA SOLO información arriba\n"+
-				"2. PRIORIZA libros + COMPLEMENTA PubMed\n"+
-				"3. Si pide PMIDs → incluye PMID: ######\n"+
-				"4. NO inventes fuentes\n\n"+
-				"## Fuentes (OBLIGATORIO)\n\n"+
-				"🚨🚨🚨 REGLA NO NEGOCIABLE - CITACIÓN COMPLETA 🚨🚨🚨\n"+
+				"🚨 REGLAS CRÍTICAS DE CITACIÓN - NO NEGOCIABLES 🚨\n"+
+				"1. USA EXCLUSIVAMENTE la información de las secciones 'Biblioteca:' y 'PubMed:' DE ARRIBA\n"+
+				"2. PROHIBIDO citar fuentes de mensajes anteriores o del contexto conversacional\n"+
+				"3. Si cambió el tema médico respecto a mensajes previos, las fuentes también DEBEN cambiar\n"+
+				"4. PRIORIZA libros de 'Biblioteca:' + COMPLEMENTA con 'PubMed:'\n"+
+				"5. Si solicita PMIDs → incluye PMID: ######\n"+
+				"6. NO inventes ni reutilices fuentes de respuestas anteriores\n\n"+
+				"IMPORTANTE: Cada pregunta tiene su propio conjunto de fuentes. No arrastres citas de temas previos.\n\n"+
+				"## Fuentes\n\n"+
+				"REGLA OBLIGATORIA - CITACIÓN COMPLETA:\n"+
 				"En la sección ### 📚 Libros DEBES listar CADA UNO de los libros que aparecen en 'Biblioteca:' arriba.\n"+
 				"NO omitas ninguno. Si hay 3 libros en 'Biblioteca:', DEBES citar los 3.\n"+
 				"Aunque hayas usado principalmente uno, los demás también proporcionan contexto complementario.\n\n"+
@@ -595,57 +655,50 @@ Instrucciones:
 				"✓ Asegúrate de citar exactamente ese mismo número en ### 📚 Libros\n"+
 				"✓ Usa **negritas** títulos libros, *itálicas* revistas PubMed\n"+
 				"%s\n",
-			conversationContext, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
+			conversationContext, topicChangeWarning, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
 	} else if integrationMode == "vector_only" {
 		input = fmt.Sprintf(
-			"⚠️⚠️⚠️ INSTRUCCIÓN CRÍTICA OBLIGATORIA - FORMATO MARKDOWN ⚠️⚠️⚠️\n"+
-				"TODAS tus respuestas DEBEN usar formato Markdown estructurado con:\n"+
-				"- ## Título principal (usa SIEMPRE ## no #, tamaño moderado)\n"+
-				"- ## Secciones (Resumen, Análisis, Recomendaciones)\n"+
-				"- CRÍTICO: Agrega DOBLE salto de línea (\\n\\n) ANTES de cada ##\n"+
-				"- Listas con viñetas (-) o numeradas (1.)\n"+
-				"- **Negritas** para términos importantes\n"+
-				"- Sección ## Fuentes AL FINAL (OBLIGATORIA)\n"+
-				"NO escribas texto plano sin estructura. SIEMPRE usa Markdown.\n\n"+
-				"Eres un asistente médico experto. Debes basar tus respuestas ÚNICAMENTE en fuentes verificadas.\n\n"+
+			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
+				"• Usa ## para headers principales (con \\n\\n antes de cada ##)\n"+
+				"• Secciones claras (## Resumen, ## Análisis, ## Recomendaciones)\n"+
+				"• Listas numeradas (1. 2. 3.) o con viñetas (-)\n"+
+				"• **Negritas** para términos clave médicos\n"+
+				"• Sección ## Fuentes AL FINAL (siempre)\n"+
+				"NO usar bloques de código ni XML/HTML. Solo Markdown limpio y profesional.\n\n"+
+				"Asistente médico especializado. Respuestas basadas EXCLUSIVAMENTE en la biblioteca médica proporcionada.\n\n"+
 				"%s"+ // Contexto conversacional si existe
-				"═══ DETECCIÓN DE TIPO DE CONSULTA ═══\n"+
-				"A) CONSULTA CLÍNICA: edad, síntomas, signos, o primera persona ('Tengo X', 'Me duele Y')\n"+
-				"B) CONSULTA TEÓRICA: qué es X, tratamiento de Y, fisiopatología de Z\n\n"+
-				"═══ SI ES CONSULTA CLÍNICA (tipo A) ═══\n"+
-				"RAZONAMIENTO INTERNO (NO MUESTRES AL USUARIO):\n"+
-				"Mentalmente construye: Demografía, Síntomas (TODOS), Duración, Signos alarma, 3 Hipótesis con probabilidad, Decisiones previas\n"+
-				"Reglas: ACUMULA datos de todos los mensajes, NO resetees, 'Ahora supón X empeora' = mantén previos + añade cambios\n"+
-				"MANTÉN coherencia temática: si contexto habla de tema específico, probablemente esta pregunta se refiere al MISMO tema\n\n"+
-				"RESPUESTA AL USUARIO (MÉDICO-A-MÉDICO):\n"+
-				"Lenguaje técnico, terminología médica precisa, tono profesional dirigido a médicos.\n"+
-				"Estructura: Análisis clínico + Diagnósticos diferenciales + Recomendaciones (300-500 palabras).\n"+
-				"NO incluyas marcadores '[STATE]', 'Demografía:', etc. Fluye como discusión entre colegas.\n\n"+
-				"═══ SI ES CONSULTA TEÓRICA (tipo B) ═══\n"+
-				"TONO: MÉDICO-A-MÉDICO (técnico, preciso, sin simplificaciones).\n"+
-				"Estructura: Definición + Fisiopatología + Manifestaciones + Diagnóstico + Tratamiento (300-500 palabras).\n"+
-				"Usa nomenclatura médica internacional, menciona guías clínicas relevantes.\n\n"+
+				"%s"+ // topicChangeWarning
+				"CLASIFICACIÓN DE CONSULTA:\n"+
+				"A) CLÍNICA: edad, síntomas, signos, primera persona ('Tengo X', 'Me duele Y')\n"+
+				"B) TEÓRICA: definiciones, fisiopatología, tratamientos\n\n"+
+				"SI CLÍNICA (A):\n"+
+				"RAZONAMIENTO INTERNO (no mostrar al usuario):\n"+
+				"Construye mentalmente: Demografía, Síntomas completos, Duración, Signos alarma, 3 Hipótesis con probabilidad\n"+
+				"Reglas: ACUMULA datos de mensajes previos, NO resetees, mantén coherencia temática\n\n"+
+				"RESPUESTA (MÉDICO-A-MÉDICO):\n"+
+				"Lenguaje técnico preciso, tono profesional entre colegas médicos.\n"+
+				"Estructura: Análisis clínico → Diferenciales → Recomendaciones (300-500 palabras)\n"+
+				"NO usar marcadores '[STATE]', 'Demografía:', etc. Lenguaje fluido.\n\n"+
+				"SI TEÓRICA (B):\n"+
+				"TONO: Médico-a-médico (técnico, preciso, sin simplificar)\n"+
+				"Estructura: Definición → Fisiopatología → Manifestaciones → Diagnóstico → Tratamiento (300-500 palabras)\n"+
+				"Menciona guías clínicas relevantes cuando corresponda.\n\n"+
 				"Contexto (Biblioteca Médica):\n%s\n\n"+
 				"Pregunta del usuario:\n%s\n\n"+
-				"═══ REGLAS GENERALES ═══\n"+
-				"1. Respuestas completas y técnicamente precisas\n"+
-				"2. SOLO información de la Biblioteca Médica\n"+
-				"3. PROHIBIDO conocimiento general\n"+
-				"4. Tono: PROFESIONAL MÉDICO (no para pacientes)\n"+
-				"5. Si pide N hipótesis/signos → da EXACTAMENTE ese número\n\n"+
-				"═══ FORMATO DE SALIDA — MARKDOWN ESTRUCTURADO ═══\n"+
-				"OBLIGATORIO usar encabezados Markdown (#, ##, ###), listas (-, 1.), negritas **...**, itálicas *...*, y citas con >.\n"+
-				"PROHIBIDO usar bloques de código (```), XML/HTML o JSON en la salida visible.\n"+
-				"NO incluyas etiquetas como [STATE], [INTERNAL], ni preámbulos del tipo 'A continuación...'.\n"+
-				"Extensión: clara y suficiente; evita párrafos kilométricos (máx. 6–8 líneas por párrafo).\n\n"+
-				"Estructura sugerida (adapta nombres según el tema):\n"+
-				"# Título breve y específico\n"+
+				"REGLAS GENERALES:\n"+
+				"1. Respuestas técnicamente precisas y completas\n"+
+				"2. SOLO información de la Biblioteca Médica proporcionada\n"+
+				"3. Tono profesional médico (no dirigido a pacientes)\n"+
+				"4. Si solicita N hipótesis/signos → proporcionar EXACTAMENTE ese número\n"+
+				"5. Evitar párrafos excesivamente largos (máx. 6-8 líneas)\n\n"+
+				"ESTRUCTURA MARKDOWN SUGERIDA:\n"+
+				"## Título Específico\n"+
 				"## Resumen\n"+
 				"- Punto clave 1\n"+
 				"- Punto clave 2\n"+
-				"## Desarrollo/Análisis\n"+
-				"- Hallazgo o razonamiento 1\n"+
+				"## Análisis/Desarrollo\n"+
+				"- Hallazgo 1\n"+
 				"- Hallazgo o razonamiento 2\n"+
 				"> Alerta/nota crítica (si aplica)\n"+
 				"## Recomendaciones / Pasos siguientes\n"+
@@ -660,36 +713,39 @@ Instrucciones:
 				"- Lista TODOS los libros que usaste con viñetas (-).\n"+
 				"- USA **negritas** para títulos.\n"+
 				"%s\n",
-			conversationContext, ctxVec, prompt, apaInstructions,
+			conversationContext, topicChangeWarning, ctxVec, prompt, apaInstructions,
 		)
 	} else {
 		// MODO PUBMED ONLY (OPTIMIZADO)
 		input = fmt.Sprintf(
-			"⚠️ FORMATO MARKDOWN OBLIGATORIO ⚠️\n"+
-				"## Headers (\\n\\n antes), listas (-, 1.), **negritas**, ## Fuentes AL FINAL\n\n"+
-				"Asistente médico experto. SOLO evidencia de PubMed.\n\n"+
+			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
+				"• Usa ## para headers (con \\n\\n antes de cada ##)\n"+
+				"• Listas numeradas (1. 2. 3.) o con viñetas (-)\n"+
+				"• **Negritas** para términos clave\n"+
+				"• Sección ## Fuentes AL FINAL (siempre)\n\n"+
+				"Asistente médico especializado. Respuestas basadas EXCLUSIVAMENTE en evidencia científica de PubMed.\n\n"+
 				"%s"+ // Contexto conversacional
-				"TIPO:\n"+
-				"A) CLÍNICA: síntomas/edad/'Tengo X' → Interno: Demografía, Síntomas TODOS, 3 Hipótesis. Respuesta MÉDICO-A-MÉDICO técnica\n"+
-				"B) TEÓRICA: 'Qué es X' → Definición + Fisio + Manifestaciones + Dx + Tx\n"+
-				"Mantén coherencia temática con contexto previo.\n\n"+
+				"%s"+ // topicChangeWarning
+				"CLASIFICACIÓN:\n"+
+				"A) CLÍNICA: síntomas/edad/'Tengo X' → Razonamiento interno + Hipótesis. MÉDICO-A-MÉDICO, técnico\n"+
+				"B) TEÓRICA: 'Qué es X' → Definición + Fisiopatología + Manifestaciones + Dx + Tx\n"+
+				"Mantén coherencia con contexto previo.\n\n"+
 				"PubMed:\n%s\n\n"+
 				"Referencias:\n%s\n\n"+
 				"Pregunta: %s\n\n"+
 				"REGLAS:\n"+
-				"1. SOLO PubMed arriba\n"+
-				"2. Si pide PMIDs → incluye PMID: ######\n"+
-				"3. Si pide N → da EXACTAMENTE N\n"+
-				"4. Tono: MÉDICO-A-MÉDICO (300-500 palabras)\n"+
-				"5. NO uses [STATE], bloques código, XML/HTML\n\n"+
+				"1. Usar EXCLUSIVAMENTE información de PubMed proporcionada arriba\n"+
+				"2. Si solicita PMIDs → incluir PMID: ######\n"+
+				"3. Si solicita N elementos → proporcionar EXACTAMENTE N\n"+
+				"4. Tono profesional médico (300-500 palabras)\n"+
+				"5. NO usar marcadores [STATE] ni bloques de código\n\n"+
 				"## Fuentes\n"+
 				"### 🔬 PubMed\n"+
-				"**Título.** — *Revista* (PMID: ######, año).\n"+
-				"Lista TODOS los artículos usados.\n",
-			conversationContext, ctxPub, refsBlock, prompt,
+				"**Título del artículo.** — *Nombre de la Revista* (PMID: ######, año).\n"+
+				"Listar TODOS los artículos utilizados de la sección Referencias arriba.\n",
+			conversationContext, topicChangeWarning, ctxPub, refsBlock, prompt,
 		)
 	}
-
 	if err := ctx.Err(); err != nil {
 		log.Printf("[conv][SmartMessage][context.cancelled] thread=%s err=%v", threadID, err)
 		msg := "La consulta tardó demasiado tiempo. Por favor, intenta con una pregunta más específica."
@@ -2400,30 +2456,74 @@ func expandMedicalQuery(query string) string {
 	// Diccionario de expansiones médicas conocidas
 	// Formato: "término principal" → [sinónimos, variantes, nombres alternativos]
 	expansions := map[string][]string{
-		// Tumores pancreáticos
+		// === ESPECIALIDADES MÉDICAS ===
+		"cirugía":        {"procedimientos quirúrgicos", "surgical", "cirugía general", "técnica quirúrgica", "abordaje quirúrgico"},
+		"cirugia":        {"procedimientos quirúrgicos", "surgical", "cirugía general", "técnica quirúrgica"},
+		"cardiología":    {"cardiology", "cardiovascular", "corazón", "cardiac", "cardiaco", "enfermedad cardiovascular"},
+		"cardiologia":    {"cardiology", "cardiovascular", "corazón", "cardiac"},
+		"neurología":     {"neurology", "neurológico", "sistema nervioso", "cerebro", "SNC"},
+		"neurologia":     {"neurology", "neurológico", "sistema nervioso"},
+		"gastro":         {"gastroenterología", "digestivo", "gastrointestinal", "GI tract"},
+		"oncología":      {"oncology", "cáncer", "neoplasia", "tumor maligno", "malignancy"},
+		"oncologia":      {"oncology", "cáncer", "neoplasia", "tumor maligno"},
+		"pediatría":      {"pediatrics", "pediátrico", "niños", "infancia", "neonatal"},
+		"pediatria":      {"pediatrics", "pediátrico", "niños"},
+		"obstetricia":    {"obstetrics", "embarazo", "parto", "gestación", "materno"},
+		"ginecología":    {"gynecology", "ginecológico", "útero", "ovario", "menstrual"},
+		"ginecologia":    {"gynecology", "ginecológico"},
+		"endocrinología": {"endocrinology", "endocrino", "hormonal", "glándula", "metabolismo"},
+		"endocrinologia": {"endocrinology", "endocrino", "hormonal"},
+		"nefrología":     {"nephrology", "renal", "riñón", "kidney", "glomerular"},
+		"nefrologia":     {"nephrology", "renal", "riñón"},
+		"neumología":     {"pulmonology", "respiratorio", "pulmón", "pulmonar", "lung"},
+		"neumologia":     {"pulmonology", "respiratorio", "pulmón"},
+		"reumatología":   {"rheumatology", "reumatoide", "autoinmune", "articulación", "joint"},
+		"reumatologia":   {"rheumatology", "reumatoide", "autoinmune"},
+		"hematología":    {"hematology", "sangre", "coagulación", "anemia", "leucemia"},
+		"hematologia":    {"hematology", "sangre", "coagulación"},
+		"infectología":   {"infectious disease", "infección", "bacteria", "virus", "antimicrobiano"},
+		"infectologia":   {"infectious disease", "infección"},
+		"dermatología":   {"dermatology", "piel", "cutáneo", "skin", "dermatitis"},
+		"dermatologia":   {"dermatology", "piel", "cutáneo"},
+
+		// === TUMORES PANCREÁTICOS ===
 		"frantz":          {"tumor sólido pseudopapilar", "neoplasia de Frantz", "Gruber-Frantz", "solid pseudopapillary neoplasm", "SPN pancreas"},
 		"tumor de frantz": {"tumor sólido pseudopapilar", "neoplasia de Frantz", "Gruber-Frantz", "solid pseudopapillary neoplasm"},
 		"pseudopapilar":   {"Frantz", "solid pseudopapillary", "SPN"},
 
-		// Enfermedades inflamatorias intestinales
+		// === ENFERMEDADES INFLAMATORIAS INTESTINALES ===
 		"crohn":            {"enfermedad de Crohn", "ileítis regional", "enteritis regional", "Crohn disease"},
 		"colitis ulcerosa": {"colitis ulcerativa", "proctocolitis ulcerosa", "ulcerative colitis"},
 		"eii":              {"enfermedad inflamatoria intestinal", "IBD", "Crohn", "colitis ulcerosa"},
 
-		// Síndromes y condiciones con epónimos
+		// === SÍNDROMES CON EPÓNIMOS ===
 		"whipple":   {"lipodistrofia intestinal", "Whipple disease", "enfermedad de Whipple"},
 		"zollinger": {"síndrome de Zollinger-Ellison", "ZES", "gastrinoma"},
 		"barrett":   {"esófago de Barrett", "metaplasia de Barrett", "Barrett esophagus"},
 		"cushing":   {"síndrome de Cushing", "hipercortisolismo", "Cushing syndrome"},
 
-		// Tumores con nombres alternativos
+		// === TUMORES CON NOMBRES ALTERNATIVOS ===
 		"gist":       {"tumor estromal gastrointestinal", "gastrointestinal stromal tumor", "sarcoma estromal"},
 		"carcinoide": {"tumor neuroendocrino", "NET", "neuroendocrine tumor"},
 
-		// Procedimientos quirúrgicos con epónimos
-		"billroth": {"gastrectomía de Billroth", "Billroth I", "Billroth II", "gastrojejunostomía"},
-		"roux":     {"Roux-en-Y", "anastomosis en Y de Roux", "derivación Roux"},
-		"hartmann": {"procedimiento de Hartmann", "colostomía de Hartmann", "Hartmann procedure"},
+		// === PROCEDIMIENTOS QUIRÚRGICOS ===
+		"billroth":          {"gastrectomía de Billroth", "Billroth I", "Billroth II", "gastrojejunostomía"},
+		"roux":              {"Roux-en-Y", "anastomosis en Y de Roux", "derivación Roux"},
+		"hartmann":          {"procedimiento de Hartmann", "colostomía de Hartmann", "Hartmann procedure"},
+		"whipple procedure": {"pancreaticoduodenectomía", "Whipple", "duodenopancreatectomía"},
+
+		// === CONDICIONES CARDIACAS ===
+		"infarto":                {"infarto de miocardio", "IAM", "STEMI", "NSTEMI", "myocardial infarction", "síndrome coronario agudo"},
+		"insuficiencia cardiaca": {"falla cardíaca", "heart failure", "IC", "HF", "disfunción ventricular"},
+		"arritmia":               {"trastorno del ritmo", "arrhythmia", "fibrilación", "taquicardia", "bradicardia"},
+		"hipertensión":           {"HTA", "presión arterial alta", "hypertension", "hipertensión arterial"},
+		"hipertension":           {"HTA", "presión arterial alta", "hypertension"},
+
+		// === CONDICIONES RESPIRATORIAS ===
+		"asma":     {"asthma", "broncoespasmo", "hiperreactividad bronquial", "sibilancias"},
+		"epoc":     {"enfermedad pulmonar obstructiva crónica", "COPD", "bronquitis crónica", "enfisema"},
+		"neumonía": {"pneumonia", "infección pulmonar", "consolidación", "neumonitis"},
+		"neumonia": {"pneumonia", "infección pulmonar"},
 	}
 
 	// Buscar si algún término clave está presente
@@ -2431,7 +2531,7 @@ func expandMedicalQuery(query string) string {
 		if strings.Contains(lower, key) {
 			// Expandir con sinónimos para búsqueda más amplia
 			expanded := query + " OR " + strings.Join(synonyms, " OR ")
-			log.Printf("[conv][expandQuery] original=\"%s\" expanded_with=%d_synonyms", query, len(synonyms))
+			log.Printf("[conv][expandQuery] original=%q expanded_with=%d_synonyms", sanitizePreview(query), len(synonyms))
 			return expanded
 		}
 	}

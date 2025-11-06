@@ -206,9 +206,75 @@ class _ChatMessageAiState extends State<ChatMessageAi>
     );
     final newFormatMatch = newFormatRegex.firstMatch(text);
 
-    if (newFormatMatch != null) {
-      final sourcesSection = newFormatMatch.group(1) ?? '';
+    String? sourcesSection;
 
+    if (newFormatMatch != null) {
+      sourcesSection = newFormatMatch.group(1) ?? '';
+      print('📖 [_extractSources] Encontrado header "## Fuentes"');
+    } else {
+      print(
+        '📖 [_extractSources] NO encontrado header "## Fuentes", buscando subsecciones...',
+      );
+
+      // 1.B. Caso SIN header "## Fuentes" pero CON subsecciones directas (### 📚 Libros, ### 🔬 PubMed)
+      // Captura desde la primera subsección de bibliografía hasta el final
+      final directSubsectionsRegex = RegExp(
+        r'###\s*[📚🔬📖🔍]\s*(?:Libros?|PubMed|Literatura|Artículos?)',
+        caseSensitive: false,
+      );
+
+      print(
+        '📖 [_extractSources] Buscando patrón: ###\\s*[📚🔬📖🔍]\\s*(?:Libros?|PubMed|...)',
+      );
+
+      final directMatch = directSubsectionsRegex.firstMatch(text);
+
+      if (directMatch != null) {
+        // Capturar desde el inicio de la primera subsección hasta el final
+        final matchStart = directMatch.start;
+        sourcesSection = text.substring(matchStart);
+        print(
+          '📖 [_extractSources] ✅ Encontradas subsecciones directas sin header "Fuentes"',
+        );
+        print(
+          '📖 [_extractSources] matchStart: $matchStart, totalLength: ${text.length}',
+        );
+      } else {
+        print('📖 [_extractSources] ❌ NO encontradas subsecciones directas');
+
+        // 1.C. NUEVO: Detectar fuentes ya formateadas (sin subsecciones ###)
+        // Buscar líneas con ** al inicio seguidas de contenido que parece fuente (PMID, Ed., s.f., etc.)
+        // Estas líneas aparecen después del contenido principal
+        final formattedSourcesRegex = RegExp(
+          r'\n\*\*[^*]+\*\*[^\n]*(?:PMID|Ed\.|s\.f\.|—)',
+          multiLine: true,
+        );
+
+        final formattedMatches =
+            formattedSourcesRegex.allMatches(text).toList();
+
+        if (formattedMatches.isNotEmpty) {
+          print(
+            '📖 [_extractSources] ✅ Encontradas ${formattedMatches.length} fuentes ya formateadas',
+          );
+          // Capturar desde la primera fuente formateada hasta el final
+          final firstMatchStart = formattedMatches.first.start;
+          sourcesSection = text.substring(firstMatchStart);
+          print(
+            '📖 [_extractSources] matchStart: $firstMatchStart, totalLength: ${text.length}',
+          );
+        } else {
+          // Debug: mostrar últimos 200 chars para ver qué hay
+          final preview = text.substring(
+            text.length > 200 ? text.length - 200 : 0,
+          );
+          print('📖 [_extractSources] Últimos 200 chars del texto:');
+          print(preview.replaceAll('\n', '⏎\n'));
+        }
+      }
+    }
+
+    if (sourcesSection != null) {
       // Debug: mostrar la sección completa capturada
       print(
         '📖 [_extractSources] Sección capturada (${sourcesSection.length} chars)',
@@ -236,7 +302,7 @@ class _ChatMessageAiState extends State<ChatMessageAi>
         // Solo excluir si la línea es EXACTAMENTE un encabezado de subsección
         // Ejemplos a excluir: "📚 Libros", "🔬 PubMed", "📚 Literatura"
         final isSubsectionHeader = RegExp(
-          r'^#{1,3}\s*[📚🔬📖🔍]?\s*(?:Libros?|PubMed|Literatura|Artículos?)\s*$',
+          r'^#{0,3}\s*[📚🔬📖🔍]?\s*(?:Libros?|PubMed|Literatura|Artículos?)\s*$',
           caseSensitive: false,
         ).hasMatch(content);
 
@@ -324,6 +390,26 @@ class _ChatMessageAiState extends State<ChatMessageAi>
         '',
       );
 
+      // 1.B. Remover subsecciones directas sin header "Fuentes" (### 📚 Libros, ### 🔬 PubMed)
+      content = content.replaceAll(
+        RegExp(
+          r'\n*###\s*[📚🔬📖🔍]\s*(?:Libros?|PubMed|Literatura|Artículos?)\s*\n+[\s\S]*$',
+          caseSensitive: false,
+        ),
+        '',
+      );
+
+      // 1.C. Remover fuentes ya formateadas (líneas con ** seguidas de PMID, Ed., s.f., etc.)
+      // Buscar la primera ocurrencia y remover desde ahí hasta el final
+      final formattedSourcesRegex = RegExp(
+        r'\n+\*\*[^*]+\*\*[^\n]*(?:PMID|Ed\.|s\.f\.|—)',
+        multiLine: true,
+      );
+      final firstMatch = formattedSourcesRegex.firstMatch(content);
+      if (firstMatch != null) {
+        content = content.substring(0, firstMatch.start);
+      }
+
       // 2. Fallback: Remover "Fuentes" sin ## (casos legacy)
       content = content.replaceAll(
         RegExp(r'\n*Fuentes?[^\n]*\n[\s\S]*$', caseSensitive: false),
@@ -353,9 +439,38 @@ class _ChatMessageAiState extends State<ChatMessageAi>
       return const SizedBox.shrink();
     }
 
+    // 🔍 DEBUG: Ver el texto RAW antes de procesar
+    print('🔍 ==================== DEBUG FUENTES ====================');
+    print('🔍 Texto RAW (primeros 800 chars):');
+    print(
+      widget.message.text.substring(
+        0,
+        widget.message.text.length > 800 ? 800 : widget.message.text.length,
+      ),
+    );
+    print('🔍 ');
+    print('🔍 Texto RAW (últimos 800 chars):');
+    final startIdx =
+        widget.message.text.length > 800 ? widget.message.text.length - 800 : 0;
+    print(widget.message.text.substring(startIdx));
+    print('🔍 ');
+    print('🔍 Contiene "\\n" literal: ${widget.message.text.contains(r'\n')}');
+    print(
+      '🔍 Contiene "Fuentes": ${widget.message.text.toLowerCase().contains('fuente')}',
+    );
+    print('🔍 ======================================================');
+
     // Extraer fuentes una sola vez para coordinar con _getMainContent
     final extractedSources = _extractSources(widget.message.text);
     final hasValidSources = extractedSources.isNotEmpty;
+
+    print('🔍 Fuentes extraídas: ${extractedSources.length}');
+    if (extractedSources.isNotEmpty) {
+      for (var i = 0; i < extractedSources.length; i++) {
+        print('🔍   [$i]: ${extractedSources[i]}');
+      }
+    }
+    print('🔍 ======================================================');
 
     // DEBUG: Advertir si el texto contiene "Fuentes" pero no se detectaron
     if (!hasValidSources &&
