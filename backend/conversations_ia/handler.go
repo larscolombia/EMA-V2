@@ -63,6 +63,8 @@ type AIClient interface {
 	GetThreadMessages(ctx context.Context, threadID string, limit int) ([]openai.ThreadMessage, error)
 	// QuickVectorSearch retorna contenido Y el nombre real del archivo (no adivinado)
 	QuickVectorSearch(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
+	// QuickVectorSearchMultiple retorna MÚLTIPLES resultados del vector store (hasta maxResults libros)
+	QuickVectorSearchMultiple(ctx context.Context, vectorStoreID, query string, maxResults int) ([]*openai.VectorSearchResult, error)
 	// ExtractPDFMetadataFromPath analiza un PDF y detecta si tiene texto extraíble
 	ExtractPDFMetadataFromPath(filePath string) *openai.PDFMetadata
 }
@@ -579,12 +581,19 @@ Instrucciones:
 				"3. Si pide PMIDs → incluye PMID: ######\n"+
 				"4. NO inventes fuentes\n\n"+
 				"## Fuentes (OBLIGATORIO)\n\n"+
+				"🚨🚨🚨 REGLA NO NEGOCIABLE - CITACIÓN COMPLETA 🚨🚨🚨\n"+
+				"En la sección ### 📚 Libros DEBES listar CADA UNO de los libros que aparecen en 'Biblioteca:' arriba.\n"+
+				"NO omitas ninguno. Si hay 3 libros en 'Biblioteca:', DEBES citar los 3.\n"+
+				"Aunque hayas usado principalmente uno, los demás también proporcionan contexto complementario.\n\n"+
 				"### 📚 Libros\n"+
-				"**Título.** (año). [Libro texto médico].\n\n"+
+				"[Aquí lista TODOS los libros de 'Biblioteca:' usando formato:]\n"+
+				"**Título exacto como aparece arriba.** (s.f.). [Libro texto médico].\n\n"+
 				"### 🔬 PubMed\n"+
 				"**Título artículo.** — *Revista* (PMID: ######, año).\n\n"+
-				"✓ Lista TODAS las fuentes usadas\n"+
-				"✓ Formato: **negritas** títulos, *itálicas* revistas\n"+
+				"VERIFICACIÓN ANTES DE RESPONDER:\n"+
+				"✓ Cuenta cuántos libros hay en 'Biblioteca:' arriba\n"+
+				"✓ Asegúrate de citar exactamente ese mismo número en ### 📚 Libros\n"+
+				"✓ Usa **negritas** títulos libros, *itálicas* revistas PubMed\n"+
 				"%s\n",
 			conversationContext, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
 		)
@@ -2294,61 +2303,80 @@ func extractSourcesFromAssistantResponse(response string) *SourceExtracted {
 	return result
 }
 
-// buscarVectorConFuentes usa fallback directo por ahora - el problema de fuentes se resolverá a nivel de respuesta
+// buscarVectorConFuentes usa QuickVectorSearchMultiple para obtener MÚLTIPLES libros
+// MEJORA: Ya no se limita a 1 libro, ahora puede devolver 2-3 libros cuando la información aparece en varios
 func (h *Handler) buscarVectorConFuentes(ctx context.Context, vectorID, query string) []Documento {
-	if metaClient, ok := h.AI.(AIClientWithMetadata); ok && strings.TrimSpace(vectorID) != "" {
-		res, err := metaClient.SearchInVectorStoreWithMetadata(ctx, vectorID, query)
-		if err != nil {
-			log.Printf("[conv][buscarVectorConFuentes][metadata_error] vector=%s err=%v", vectorID, err)
-		} else if res != nil && res.HasResult {
-			title := strings.TrimSpace(res.Source)
-			if title == "" {
-				title = "Documento médico"
-			}
-			content := strings.TrimSpace(res.Content)
-			if content == "" && strings.TrimSpace(res.Section) != "" {
-				content = fmt.Sprintf("Sección relevante: %s", strings.TrimSpace(res.Section))
-			}
-			return []Documento{{
-				Titulo:    title,
-				Contenido: content,
-				Fuente:    "vector",
-				Metadata:  res.Metadata, // Incluir metadatos del PDF
-			}}
-		}
-		log.Printf("[conv][buscarVectorConFuentes][metadata_empty] vector=%s", vectorID)
-	}
-	log.Printf("[conv][buscarVectorConFuentes][fallback] vector=%s", vectorID)
+	log.Printf("[conv][buscarVectorConFuentes][start] vector=%s query=%q", vectorID, sanitizePreview(query))
+
+	// MEJORA CRÍTICA: Usar directamente buscarVectorFallback que implementa QuickVectorSearchMultiple
+	// Esto garantiza que siempre buscamos múltiples libros, no solo 1
 	return h.buscarVectorFallback(ctx, vectorID, query)
 }
 
-// buscarVectorFallback usa quickVectorSearch que retorna el nombre REAL del archivo desde el vector store
+// buscarVectorFallback usa QuickVectorSearchMultiple para obtener MÚLTIPLES libros del vector store
+// MEJORA: Ahora puede devolver 2-3 libros diferentes cuando la información aparece en varios
 func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query string) []Documento {
-	log.Printf("[conv][buscarVectorFallback][start] vector=%s", vectorID)
+	log.Printf("[conv][buscarVectorFallback][start] vector=%s query=%q", vectorID, sanitizePreview(query))
 
 	out := []Documento{}
 
-	// Usar quickVectorSearch en lugar de SearchInVectorStore para obtener el FileID y nombre real
-	if result, err := h.AI.QuickVectorSearch(ctx, vectorID, query); err == nil && result.HasResult && strings.TrimSpace(result.Content) != "" {
-		trimmed := strings.TrimSpace(result.Content)
-		if isLikelyNoDataResponse(trimmed) {
-			log.Printf("[conv][buscarVectorFallback][skip_no_data] vector=%s msg=%s", vectorID, sanitizePreview(trimmed))
-			return out
+	// MEJORA: Usar QuickVectorSearchMultiple para obtener hasta 3 libros diferentes
+	// Esto permite citar múltiples fuentes cuando la información aparece en varios libros
+	maxResults := 3
+	results, err := h.AI.QuickVectorSearchMultiple(ctx, vectorID, query, maxResults)
+
+	if err != nil {
+		log.Printf("[conv][buscarVectorFallback][error] vector=%s err=%v", vectorID, err)
+		// Fallback al método antiguo si el nuevo falla
+		if result, err := h.AI.QuickVectorSearch(ctx, vectorID, query); err == nil && result.HasResult && strings.TrimSpace(result.Content) != "" {
+			trimmed := strings.TrimSpace(result.Content)
+			if !isLikelyNoDataResponse(trimmed) {
+				bookTitle := result.Source
+				if strings.TrimSpace(bookTitle) == "" {
+					bookTitle = "Libro de Texto Médico Especializado"
+				}
+				out = append(out, Documento{
+					Titulo:    bookTitle,
+					Contenido: trimmed,
+					Fuente:    "vector",
+					Metadata:  result.Metadata,
+				})
+				log.Printf("[conv][buscarVectorFallback][fallback_ok] books=%d", len(out))
+			}
+		}
+		return out
+	}
+
+	if len(results) == 0 {
+		log.Printf("[conv][buscarVectorFallback][no_results] vector=%s", vectorID)
+		return out
+	}
+
+	// Procesar todos los resultados obtenidos
+	for i, result := range results {
+		if !result.HasResult {
+			continue
 		}
 
-		// Usar el título REAL del archivo obtenido del vector store (no adivinado)
+		trimmed := strings.TrimSpace(result.Content)
+		if trimmed == "" || isLikelyNoDataResponse(trimmed) {
+			log.Printf("[conv][buscarVectorFallback][skip.%d] reason=no_content", i)
+			continue
+		}
+
+		// Usar el título REAL del archivo obtenido del vector store
 		bookTitle := result.Source
 		if strings.TrimSpace(bookTitle) == "" {
 			bookTitle = "Libro de Texto Médico Especializado"
 		}
 
-		// Log mejorado con preview del contenido y título REAL extraído
+		// Log con preview del contenido
 		contentPreview := strings.ReplaceAll(trimmed, "\n", " ")
 		if len(contentPreview) > 200 {
 			contentPreview = contentPreview[:200] + "..."
 		}
-		log.Printf("[conv][buscarVectorFallback][ok] vector=%s result_len=%d real_source=%q content_preview=%q",
-			vectorID, len(trimmed), bookTitle, contentPreview)
+		log.Printf("[conv][buscarVectorFallback][book.%d] vector=%s result_len=%d source=%q section=%q content_preview=%q",
+			i, vectorID, len(trimmed), bookTitle, result.Section, contentPreview)
 
 		out = append(out, Documento{
 			Titulo:    bookTitle,
@@ -2356,9 +2384,11 @@ func (h *Handler) buscarVectorFallback(ctx context.Context, vectorID, query stri
 			Fuente:    "vector",
 			Metadata:  result.Metadata,
 		})
-	} else if err != nil {
-		log.Printf("[conv][buscarVectorFallback][error] vector=%s err=%v", vectorID, err)
 	}
+
+	log.Printf("[conv][buscarVectorFallback][complete] vector=%s total_books=%d query=%q",
+		vectorID, len(out), sanitizePreview(query))
+
 	return out
 }
 
@@ -2432,6 +2462,7 @@ func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
+		log.Printf("[conv][buscarPubMed][empty] query=%q", sanitizePreview(query))
 		return out
 	}
 	if isLikelyNoDataResponse(raw) {
@@ -2454,6 +2485,12 @@ func (h *Handler) buscarPubMed(ctx context.Context, query string) []Documento {
 	}
 	var payload pubmedPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err == nil && len(payload.Studies) > 0 {
+		// MEJORA: Logging detallado de artículos antes de filtrar
+		log.Printf("[conv][buscarPubMed][parsed] total_studies=%d query=%q", len(payload.Studies), sanitizePreview(query))
+		for i, st := range payload.Studies {
+			log.Printf("[conv][buscarPubMed][study.%d] title=%q pmid=%s year=%d journal=%q",
+				i, truncatePreview(st.Title, 80), st.PMID, st.Year, truncatePreview(st.Journal, 40))
+		}
 		refs := make([]string, 0, len(payload.Studies))
 		bodyParts := make([]string, 0, len(payload.Studies)+1)
 		if summary := strings.TrimSpace(payload.Summary); summary != "" {
@@ -2621,12 +2658,29 @@ func buildAPAInstructions(vectorDocs []Documento) string {
 		instructions.WriteString("- Sin autor: Título. (Año). [PDF].\n")
 		instructions.WriteString("- Sin año: Autor. (s.f.). Título. [PDF].\n")
 		instructions.WriteString("- Mínimo: Título. (s.f.). [PDF/Libro de texto médico].\n")
+		instructions.WriteString("- 🔴 CRÍTICO: DEBES citar TODOS los documentos listados arriba (total: " + fmt.Sprintf("%d", len(vectorDocs)) + ")\n")
 		instructions.WriteString("- IMPORTANTE: USA los metadatos proporcionados arriba\n")
+		instructions.WriteString("\nEJEMPLO de citación múltiple (si hay 3 documentos, lista los 3):\n")
+		instructions.WriteString("### 📚 Libros\n")
+		instructions.WriteString("**Documento 1.** (s.f.). [Libro texto médico].\n")
+		instructions.WriteString("**Documento 2.** (s.f.). [Libro texto médico].\n")
+		instructions.WriteString("**Documento 3.** (s.f.). [Libro texto médico].\n")
 	} else if hasTitles {
 		instructions.WriteString("\nFORMATO APA MÍNIMO para ## Fuentes:\n")
 		instructions.WriteString("- Usa el título exacto listado arriba\n")
 		instructions.WriteString("- Formato: Título exacto. (s.f.). [Libro de texto médico].\n")
-		instructions.WriteString("- Ejemplo: Robbins y Cotran. Patología Estructural y Funcional. (s.f.). [Libro de texto médico].\n")
+		instructions.WriteString("- 🔴 CRÍTICO: DEBES citar TODOS los documentos listados arriba (total: " + fmt.Sprintf("%d", len(vectorDocs)) + ")\n")
+		instructions.WriteString("\nEJEMPLO con múltiples libros:\n")
+		instructions.WriteString("### 📚 Libros\n")
+		for i, doc := range vectorDocs {
+			if strings.TrimSpace(doc.Titulo) != "" {
+				instructions.WriteString(fmt.Sprintf("**%s.** (s.f.). [Libro texto médico].\n", doc.Titulo))
+				if i >= 2 { // Mostrar máximo 3 ejemplos
+					break
+				}
+			}
+		}
+		instructions.WriteString("(Lista todos de esta manera)\n")
 	} else {
 		instructions.WriteString("\nNo hay metadatos ni títulos disponibles.\n")
 		instructions.WriteString("FORMATO GENÉRICO para ## Fuentes:\n")
@@ -3076,22 +3130,79 @@ func extractReferenceLines(s string) []string {
 }
 
 // filterRefsByYear filtra referencias que contengan un año >= minYear
+// MEJORA: Mantiene al menos 2 referencias aunque sean anteriores a minYear si no hay suficientes
 func filterRefsByYear(refs []string, minYear int) []string {
-	out := make([]string, 0, len(refs))
+	if len(refs) == 0 {
+		return refs
+	}
+
 	yearRe := regexp.MustCompile(`\b(19|20)\d{2}\b`)
+
+	// Clasificar referencias por año
+	type refWithYear struct {
+		ref  string
+		year int
+	}
+
+	classified := make([]refWithYear, 0, len(refs))
+
 	for _, r := range refs {
 		yrs := yearRe.FindAllString(r, -1)
-		keep := false
+		maxYear := 0
 		for _, ys := range yrs {
-			if y, err := strconv.Atoi(ys); err == nil && y >= minYear {
-				keep = true
-				break
+			if y, err := strconv.Atoi(ys); err == nil && y > maxYear {
+				maxYear = y
 			}
 		}
-		if keep {
-			out = append(out, r)
+		classified = append(classified, refWithYear{ref: r, year: maxYear})
+	}
+
+	// Ordenar por año descendente
+	sort.Slice(classified, func(i, j int) bool {
+		return classified[i].year > classified[j].year
+	})
+
+	// Filtrar por año mínimo
+	out := make([]string, 0, len(refs))
+	discarded := 0
+
+	for _, rwy := range classified {
+		if rwy.year >= minYear {
+			out = append(out, rwy.ref)
+		} else {
+			discarded++
 		}
 	}
+
+	// Logging de filtrado
+	if discarded > 0 {
+		log.Printf("[conv][filterRefsByYear] min_year=%d kept=%d discarded=%d", minYear, len(out), discarded)
+	}
+
+	// MEJORA: Si tenemos menos de 2 referencias recientes, añadir las más recientes que tengamos
+	if len(out) < 2 && len(classified) > 0 {
+		needed := 2 - len(out)
+		log.Printf("[conv][filterRefsByYear][fallback] insufficient_refs, adding_top_%d_regardless_of_year", needed)
+
+		for _, rwy := range classified {
+			if len(out) >= 2 {
+				break
+			}
+			// Verificar que no esté ya incluida
+			alreadyIn := false
+			for _, existing := range out {
+				if existing == rwy.ref {
+					alreadyIn = true
+					break
+				}
+			}
+			if !alreadyIn && rwy.year > 0 {
+				out = append(out, rwy.ref)
+				log.Printf("[conv][filterRefsByYear][added_fallback] year=%d ref=%q", rwy.year, truncatePreview(rwy.ref, 80))
+			}
+		}
+	}
+
 	return out
 }
 

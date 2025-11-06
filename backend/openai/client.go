@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2391,6 +2392,8 @@ func (c *Client) QuickVectorSearch(ctx context.Context, vectorStoreID, query str
 	if len(data.Data) == 0 {
 		return &VectorSearchResult{VectorID: vectorStoreID, HasResult: false}, nil
 	}
+	// CRÍTICO: Solo tomar el primer resultado para mantener compatibilidad con código existente
+	// Para múltiples resultados, usar QuickVectorSearchMultiple
 	entry := data.Data[0]
 	snippet := extractSnippetFromContent(entry.Content)
 	if isLikelyNoDataResponse(snippet) {
@@ -2424,6 +2427,118 @@ func (c *Client) QuickVectorSearch(ctx context.Context, vectorStoreID, query str
 		result.HasResult = true
 	}
 	return result, nil
+}
+
+// QuickVectorSearchMultiple devuelve MÚLTIPLES resultados del vector store (hasta maxResults)
+// Esto permite citar varios libros cuando la información aparece en más de uno
+func (c *Client) QuickVectorSearchMultiple(ctx context.Context, vectorStoreID, query string, maxResults int) ([]*VectorSearchResult, error) {
+	if c.key == "" || strings.TrimSpace(vectorStoreID) == "" {
+		return nil, errors.New("vector store search not configured")
+	}
+
+	if maxResults <= 0 {
+		maxResults = 3 // Default: hasta 3 libros diferentes
+	}
+
+	payload := map[string]any{"query": query}
+	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("vector search failed: %s", string(b))
+	}
+	var data struct {
+		Data []struct {
+			FileID   string          `json:"file_id"`
+			Metadata map[string]any  `json:"metadata"`
+			Content  json.RawMessage `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	if len(data.Data) == 0 {
+		return []*VectorSearchResult{}, nil
+	}
+
+	// Procesar múltiples resultados, deduplicando por nombre de archivo
+	results := make([]*VectorSearchResult, 0, maxResults)
+	seenSources := make(map[string]bool)
+
+	log.Printf("[openai][QuickVectorSearchMultiple] total_results=%d max_results=%d query=%q",
+		len(data.Data), maxResults, sanitizePreview(query))
+
+	for i, entry := range data.Data {
+		if len(results) >= maxResults {
+			break
+		}
+
+		snippet := extractSnippetFromContent(entry.Content)
+		if isLikelyNoDataResponse(snippet) || strings.TrimSpace(snippet) == "" {
+			log.Printf("[openai][QuickVectorSearchMultiple][skip.%d] reason=no_content", i)
+			continue
+		}
+
+		result := &VectorSearchResult{VectorID: vectorStoreID, Content: snippet}
+
+		// Obtener nombre del archivo
+		if entry.FileID != "" {
+			if name, err := c.getFileName(ctx, entry.FileID); err == nil {
+				result.Source = friendlyDocName(name)
+			}
+		}
+
+		// Fallback a metadata si no obtuvimos el nombre del FileID
+		if result.Source == "" && len(entry.Metadata) > 0 {
+			if raw, ok := entry.Metadata["source"].(string); ok {
+				result.Source = friendlyDocName(raw)
+			}
+		}
+
+		// Metadatos adicionales
+		if len(entry.Metadata) > 0 {
+			if section, ok := entry.Metadata["section"].(string); ok {
+				result.Section = strings.TrimSpace(section)
+			}
+			if result.Section == "" {
+				if page, ok := entry.Metadata["page_label"].(string); ok {
+					result.Section = strings.TrimSpace(page)
+				}
+			}
+			if result.Section == "" {
+				if pageNum, ok := entry.Metadata["page"].(float64); ok {
+					result.Section = fmt.Sprintf("Página %d", int(pageNum))
+				}
+			}
+		}
+
+		// CRÍTICO: Deduplicar por nombre de archivo para evitar repetir el mismo libro
+		sourceKey := strings.ToLower(strings.TrimSpace(result.Source))
+		if sourceKey == "" {
+			sourceKey = fmt.Sprintf("unknown_%d", i)
+		}
+
+		if seenSources[sourceKey] {
+			log.Printf("[openai][QuickVectorSearchMultiple][skip.%d] reason=duplicate_source source=%q", i, result.Source)
+			continue
+		}
+
+		seenSources[sourceKey] = true
+		result.HasResult = true
+		results = append(results, result)
+
+		log.Printf("[openai][QuickVectorSearchMultiple][added.%d] source=%q content_len=%d section=%q",
+			i, result.Source, len(result.Content), result.Section)
+	}
+
+	log.Printf("[openai][QuickVectorSearchMultiple][complete] query=%q total_sources=%d unique_sources=%d",
+		sanitizePreview(query), len(data.Data), len(results))
+
+	return results, nil
 }
 
 func extractSnippetFromContent(raw json.RawMessage) string {
@@ -2766,8 +2881,10 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 	defer cancel()
 
 	// PASO 1: Búsqueda en PubMed con E-Search
+	// MEJORA: Aumentar retmax a 8 y cambiar mindate a 2020 para mayor calidad de fuentes
+	// Priorizar revisiones sistemáticas, meta-análisis y guías clínicas
 	searchURL := fmt.Sprintf(
-		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=%s&retmode=json&retmax=5&sort=relevance&datetype=pdat&mindate=2018",
+		"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=%s&retmode=json&retmax=8&sort=relevance&datetype=pdat&mindate=2020",
 		url.QueryEscape(query),
 	)
 
@@ -2828,9 +2945,10 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 	log.Printf("[openai][SearchPubMed][esearch.success] pmids_found=%d count=%s elapsed_ms=%d", len(pmids), searchResult.ESearchResult.Count, time.Since(start).Milliseconds())
 
 	// PASO 2: Obtener detalles de los artículos con E-Fetch (XML)
-	// Limitar a máximo 4 artículos para no sobrecargar
-	if len(pmids) > 4 {
-		pmids = pmids[:4]
+	// MEJORA: Aumentar a 6 artículos para mayor solidez de fuentes
+	// Luego filtraremos por relevancia y diversidad
+	if len(pmids) > 6 {
+		pmids = pmids[:6]
 	}
 
 	pmidList := strings.Join(pmids, ",")
@@ -2894,10 +3012,14 @@ func (c *Client) SearchPubMed(ctx context.Context, query string) (string, error)
 
 	log.Printf("[openai][SearchPubMed][efetch.success] articles_parsed=%d elapsed_ms=%d", len(articles), time.Since(start).Milliseconds())
 
+	// PASO 2.5: Filtrar y priorizar artículos por relevancia y diversidad
+	filteredArticles := filterAndPrioritizeArticles(articles, query)
+	log.Printf("[openai][SearchPubMed][filtered] original=%d filtered=%d", len(articles), len(filteredArticles))
+
 	// PASO 3: Formatear resultados en JSON estructurado
 	result := map[string]interface{}{
-		"summary": generateSummary(articles, query),
-		"studies": articles,
+		"summary": generateSummary(filteredArticles, query),
+		"studies": filteredArticles,
 	}
 
 	jsonData, err := json.Marshal(result)
@@ -3030,7 +3152,7 @@ func parsePubMedXML(xmlData []byte) ([]map[string]interface{}, error) {
 	return results, nil
 }
 
-// extractKeyPoints extrae puntos clave del abstract
+// extractKeyPoints extrae puntos clave del abstract con enfoque en hallazgos principales
 func extractKeyPoints(abstractTexts []string) []string {
 	if len(abstractTexts) == 0 {
 		return []string{}
@@ -3043,16 +3165,63 @@ func extractKeyPoints(abstractTexts []string) []string {
 	// Dividir en oraciones
 	sentences := splitSentences(fullAbstract)
 
-	// Tomar máximo 3 oraciones más relevantes (primeras 2 y última)
+	if len(sentences) == 0 {
+		return []string{}
+	}
+
 	keyPoints := []string{}
+
+	// MEJORA: Priorizar oraciones que contengan hallazgos principales
+	// Detectar secciones RESULTS, CONCLUSIONS, FINDINGS
+	conclusionKeywords := []string{
+		"conclusion", "found that", "showed that", "demonstrated that",
+		"results indicate", "findings suggest", "significantly", "associated with",
+		"increased risk", "reduced risk", "efficacy", "effective",
+	}
+
+	// Buscar oraciones con hallazgos relevantes
+	relevantSentences := []string{}
+	for _, sent := range sentences {
+		lowerSent := strings.ToLower(sent)
+		isRelevant := false
+
+		for _, kw := range conclusionKeywords {
+			if strings.Contains(lowerSent, kw) {
+				isRelevant = true
+				break
+			}
+		}
+
+		if isRelevant {
+			relevantSentences = append(relevantSentences, sent)
+		}
+	}
+
+	// Si encontramos oraciones relevantes, priorizarlas
+	if len(relevantSentences) > 0 {
+		// Tomar hasta 3 oraciones relevantes
+		for i := 0; i < 3 && i < len(relevantSentences); i++ {
+			// MEJORA: Aumentar truncado a 200 chars para mayor contexto
+			keyPoints = append(keyPoints, truncateText(relevantSentences[i], 200))
+		}
+		return keyPoints
+	}
+
+	// Fallback: si no hay oraciones con keywords, tomar inicio y final
+	// Primera oración (contexto)
 	if len(sentences) > 0 {
-		keyPoints = append(keyPoints, truncateText(sentences[0], 150))
+		keyPoints = append(keyPoints, truncateText(sentences[0], 200))
 	}
+
+	// Oración del medio (métodos/resultados)
+	if len(sentences) > 2 {
+		midIndex := len(sentences) / 2
+		keyPoints = append(keyPoints, truncateText(sentences[midIndex], 200))
+	}
+
+	// Última oración (conclusiones)
 	if len(sentences) > 1 {
-		keyPoints = append(keyPoints, truncateText(sentences[1], 150))
-	}
-	if len(sentences) > 3 {
-		keyPoints = append(keyPoints, truncateText(sentences[len(sentences)-1], 150))
+		keyPoints = append(keyPoints, truncateText(sentences[len(sentences)-1], 200))
 	}
 
 	return keyPoints
@@ -3095,6 +3264,201 @@ func truncateText(text string, maxLen int) string {
 		truncated = truncated[:lastSpace]
 	}
 	return truncated + "..."
+}
+
+// filterAndPrioritizeArticles filtra y prioriza artículos por relevancia temática y diversidad
+func filterAndPrioritizeArticles(articles []map[string]interface{}, query string) []map[string]interface{} {
+	if len(articles) == 0 {
+		return articles
+	}
+
+	// Extraer keywords principales de la query (términos médicos significativos)
+	queryKeywords := extractMedicalKeywords(query)
+	log.Printf("[openai][filterArticles] query_keywords=%v", queryKeywords)
+
+	// Calcular score de relevancia para cada artículo
+	type scoredArticle struct {
+		article map[string]interface{}
+		score   int
+		journal string
+		year    int
+	}
+
+	scored := make([]scoredArticle, 0, len(articles))
+	journalCount := make(map[string]int)
+
+	for _, art := range articles {
+		title := ""
+		if t, ok := art["title"].(string); ok {
+			title = strings.ToLower(t)
+		}
+
+		journal := ""
+		if j, ok := art["journal"].(string); ok {
+			journal = j
+		}
+
+		year := 0
+		if y, ok := art["year"].(int); ok {
+			year = y
+		}
+
+		// Calcular score de relevancia
+		score := 0
+
+		// +3 puntos por cada keyword que aparezca en el título
+		for _, kw := range queryKeywords {
+			if strings.Contains(title, strings.ToLower(kw)) {
+				score += 3
+			}
+		}
+
+		// +2 puntos por año reciente (2023-2025)
+		if year >= 2023 {
+			score += 2
+		} else if year >= 2021 {
+			score += 1
+		}
+
+		// +1 punto si tiene DOI (indica artículo formal)
+		if _, hasDOI := art["doi"]; hasDOI {
+			score += 1
+		}
+
+		// Detectar tipo de publicación por keywords en título
+		titleLower := strings.ToLower(title)
+		if strings.Contains(titleLower, "systematic review") || strings.Contains(titleLower, "meta-analysis") {
+			score += 4 // PRIORIZAR revisiones sistemáticas y meta-análisis
+		} else if strings.Contains(titleLower, "guideline") || strings.Contains(titleLower, "consensus") {
+			score += 3 // PRIORIZAR guías clínicas
+		} else if strings.Contains(titleLower, "randomized") || strings.Contains(titleLower, "clinical trial") {
+			score += 2 // PRIORIZAR ensayos clínicos
+		}
+
+		scored = append(scored, scoredArticle{
+			article: art,
+			score:   score,
+			journal: journal,
+			year:    year,
+		})
+
+		journalCount[journal]++
+	}
+
+	// Ordenar por score descendente
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		// Desempate por año (más reciente primero)
+		return scored[i].year > scored[j].year
+	})
+
+	// Seleccionar artículos con diversidad de journals
+	selected := make([]map[string]interface{}, 0, 4)
+	journalsUsed := make(map[string]int)
+	minScore := 0
+
+	// Calcular score mínimo aceptable (promedio - 20%)
+	if len(scored) > 0 {
+		totalScore := 0
+		for _, s := range scored {
+			totalScore += s.score
+		}
+		avgScore := totalScore / len(scored)
+		minScore = int(float64(avgScore) * 0.8)
+		log.Printf("[openai][filterArticles] avg_score=%d min_score=%d", avgScore, minScore)
+	}
+
+	for _, s := range scored {
+		// Criterio de parada: ya tenemos suficientes artículos
+		if len(selected) >= 4 {
+			break
+		}
+
+		// Filtrar artículos con score muy bajo (irrelevantes)
+		if s.score < minScore && len(selected) > 0 {
+			log.Printf("[openai][filterArticles][skip] title=%q score=%d min_score=%d", s.article["title"], s.score, minScore)
+			continue
+		}
+
+		// Diversificar journals: no más de 2 del mismo journal
+		if journalsUsed[s.journal] >= 2 {
+			log.Printf("[openai][filterArticles][skip_journal] title=%q journal=%q count=%d", s.article["title"], s.journal, journalsUsed[s.journal])
+			continue
+		}
+
+		selected = append(selected, s.article)
+		journalsUsed[s.journal]++
+		log.Printf("[openai][filterArticles][selected] title=%q score=%d year=%d journal=%q", s.article["title"], s.score, s.year, s.journal)
+	}
+
+	// Si no hay suficientes artículos de alta calidad, relajar filtros
+	if len(selected) < 2 && len(scored) > 0 {
+		log.Printf("[openai][filterArticles][fallback] selected_count=%d taking_top_2", len(selected))
+		for i := 0; i < 2 && i < len(scored); i++ {
+			alreadySelected := false
+			for _, sel := range selected {
+				if sel["pmid"] == scored[i].article["pmid"] {
+					alreadySelected = true
+					break
+				}
+			}
+			if !alreadySelected {
+				selected = append(selected, scored[i].article)
+			}
+		}
+	}
+
+	return selected
+}
+
+// extractMedicalKeywords extrae términos médicos significativos de una query
+func extractMedicalKeywords(query string) []string {
+	// Limpiar y normalizar
+	lower := strings.ToLower(query)
+
+	// Remover stopwords comunes en español e inglés
+	stopwords := map[string]bool{
+		"el": true, "la": true, "los": true, "las": true, "un": true, "una": true,
+		"de": true, "del": true, "al": true, "en": true, "con": true, "por": true,
+		"para": true, "que": true, "qué": true, "cual": true, "cuál": true,
+		"como": true, "cómo": true, "es": true, "son": true, "sobre": true,
+		"the": true, "and": true, "for": true, "from": true, "with": true,
+		"what": true, "which": true, "how": true, "about": true,
+	}
+
+	// Extraer palabras individuales
+	words := strings.FieldsFunc(lower, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+
+	keywords := []string{}
+	seen := make(map[string]bool)
+
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+
+		// Filtrar palabras muy cortas o stopwords
+		if len(word) < 4 || stopwords[word] {
+			continue
+		}
+
+		// Evitar duplicados
+		if seen[word] {
+			continue
+		}
+		seen[word] = true
+
+		keywords = append(keywords, word)
+
+		// Limitar a 5 keywords principales
+		if len(keywords) >= 5 {
+			break
+		}
+	}
+
+	return keywords
 }
 
 // generateSummary genera un resumen breve basado en los artículos encontrados
