@@ -5,15 +5,17 @@ import 'package:ema_educacion_medica_avanzada/app/quizzes/helper/question_helper
 import 'package:ema_educacion_medica_avanzada/app/quizzes/models/question_type.dart';
 import 'package:uuid/uuid.dart';
 
-
 class QuestionResponseModel {
   final String id;
+
   /// El identificador de la pregunta en el servidor
   final int remoteId;
-  final String quizId; // Se cambiará por parentId para vincularla con chat y con casos clínicos
+  final String
+  quizId; // Se cambiará por parentId para vincularla con chat y con casos clínicos
   final String parentType;
   final String message;
   final String question;
+
   /// Respuesta correcta
   final String? answer;
   final String? userAnswer;
@@ -74,6 +76,7 @@ class QuestionResponseModel {
     List<String>? userAnswers,
     List<String>? options,
     bool? isCorrect,
+    bool updateIsCorrect = false, // Flag para forzar actualización de isCorrect
     String? fit,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -90,7 +93,7 @@ class QuestionResponseModel {
       userAnswers: userAnswers ?? this.userAnswers,
       type: type,
       options: options ?? this.options,
-      isCorrect: isCorrect ?? this.isCorrect,
+      isCorrect: updateIsCorrect ? isCorrect : (isCorrect ?? this.isCorrect),
       fit: fit ?? this.fit,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -122,7 +125,7 @@ class QuestionResponseModel {
       message: message ?? '',
     );
   }
-  
+
   factory QuestionResponseModel.fromApi(Map<String, dynamic> map) {
     final options = QuestionHelper.getOptions(map);
 
@@ -136,11 +139,17 @@ class QuestionResponseModel {
       options: options,
       isCorrect: map['isCorrect'] != null ? map['isCorrect'] == 1 : null,
       fit: map['fit'] == null ? '' : map['fit'] as String,
-      createdAt: map['created_at'] != null ? DateTime.parse(map['created_at'] as String) : DateTime.now(),
-      updatedAt: map['updated_at'] != null ? DateTime.parse(map['updated_at'] as String) : DateTime.now(),
+      createdAt:
+          map['created_at'] != null
+              ? DateTime.parse(map['created_at'] as String)
+              : DateTime.now(),
+      updatedAt:
+          map['updated_at'] != null
+              ? DateTime.parse(map['updated_at'] as String)
+              : DateTime.now(),
     );
   }
-  
+
   factory QuestionResponseModel.fromClinicalCaseApi({
     required String quizId,
     required String feedback,
@@ -148,34 +157,40 @@ class QuestionResponseModel {
   }) {
     final options = QuestionHelper.getOptions(questionMap);
 
-    final rawType = questionMap['type'] ??
+    final rawType =
+        questionMap['type'] ??
         questionMap['question_type'] ??
         questionMap['tipo'] ??
         '';
 
-    final typeName = rawType is String
-        ? rawType.replaceAll('-', '_')
-        : rawType.toString();
+    final typeName =
+        rawType is String ? rawType.replaceAll('-', '_') : rawType.toString();
 
     return QuestionResponseModel(
       id: Uuid().v4(),
-      remoteId: questionMap['id'] is int
-          ? questionMap['id'] as int
-          : int.tryParse(questionMap['id']?.toString() ?? '') ?? 0,
+      remoteId:
+          questionMap['id'] is int
+              ? questionMap['id'] as int
+              : int.tryParse(questionMap['id']?.toString() ?? '') ?? 0,
       quizId: quizId,
-      question: (questionMap['question'] ?? questionMap['texto'] ?? '') as String,
-      answer: questionMap['answer'] != null ? questionMap['answer'] as String : '',
+      question:
+          (questionMap['question'] ?? questionMap['texto'] ?? '') as String,
+      answer:
+          questionMap['answer'] != null ? questionMap['answer'] as String : '',
       type: QuestionType.fromName(typeName),
       options: options,
-      isCorrect: questionMap['isCorrect'] != null ? questionMap['isCorrect'] == 1 : null,
+      isCorrect:
+          questionMap['isCorrect'] != null
+              ? questionMap['isCorrect'] == 1
+              : null,
       fit: feedback,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
       // Nuevos campos para casos clínicos
-      parentType: 'clinical_case'
+      parentType: 'clinical_case',
     );
   }
-  
+
   factory QuestionResponseModel.fromMap(Map<String, dynamic> map) {
     return QuestionResponseModel(
       id: map['id'] as String,
@@ -224,10 +239,10 @@ class QuestionResponseModel {
 
   String toAiQuestionMessage() {
     String resume = '$question  \n';
-    
+
     const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
     var counter = 0;
-    
+
     for (var option in options) {
       resume += ' * ${letters[counter]} - $option  \n';
       counter++;
@@ -235,7 +250,7 @@ class QuestionResponseModel {
 
     return resume;
   }
-  
+
   String toUserAnswerMessage() {
     // const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
     // final index = options.indexOf(userAnswer ?? '');
@@ -243,12 +258,12 @@ class QuestionResponseModel {
   }
 
   String resumeToFeedback() {
-    final optionsStr = options.isNotEmpty
-      ? ' con las opciones ${options.join(', ')}'
-      : '';
+    final optionsStr =
+        options.isNotEmpty ? ' con las opciones ${options.join(', ')}' : '';
 
-    String resume = 'A la pregunta: "$question" ${type.resumeToFeedback()} $optionsStr ';
-    resume += 'el usuario respondió: "$answerdString" '; 
+    String resume =
+        'A la pregunta: "$question" ${type.resumeToFeedback()} $optionsStr ';
+    resume += 'el usuario respondió: "$answerdString" ';
     resume += 'Recibió como respuesta del sistema: "$fit"';
     return resume;
   }

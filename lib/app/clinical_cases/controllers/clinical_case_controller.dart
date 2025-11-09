@@ -342,14 +342,39 @@ class ClinicalCaseController extends GetxController
       clinicalCaseServive.insertMessage(userMessage);
 
       // envía la respuesta al servidor y actualiza la respuesta en local
-      final feedBackAndNewQuestion = await clinicalCaseServive.sendAnswer(
-        questionWithMessage,
-      );
+      final result = await clinicalCaseServive.sendAnswer(questionWithMessage);
+
+      final feedBackAndNewQuestion =
+          result['nextQuestion'] as QuestionResponseModel;
+      final previousIsCorrect = result['previousIsCorrect'] as bool?;
 
       Logger.objectValue(
         'feedBackAndNewQuestion',
         feedBackAndNewQuestion.toString(),
       );
+
+      // CRÍTICO: Actualizar la evaluación de la pregunta que acabamos de responder
+      if (previousIsCorrect != null) {
+        final evaluatedQuestion = questionWithMessage.copyWith(
+          isCorrect: previousIsCorrect,
+          updateIsCorrect: true, // Forzar actualización incluso si es false
+        );
+
+        // Actualizar en la lista de preguntas
+        final questionIndex = questions.indexWhere(
+          (q) => q.id == evaluatedQuestion.id,
+        );
+        if (questionIndex >= 0) {
+          questions[questionIndex] = evaluatedQuestion;
+          // Actualizar en la base de datos local
+          await clinicalCaseServive.updateQuestionEvaluation(evaluatedQuestion);
+        }
+
+        Logger.objectValue(
+          'Evaluated question',
+          'Question "${evaluatedQuestion.question}" marked as ${previousIsCorrect ? "CORRECT" : "INCORRECT"}',
+        );
+      }
 
       // en ese caso se trata del último comentario de la IA
       // para cerrar el caso clínico.

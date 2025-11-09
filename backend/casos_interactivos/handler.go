@@ -109,8 +109,13 @@ func (h *Handler) evaluateLastAnswer(threadID, userAnswer string, explicit *int,
 	log.Printf("[EVAL_DEBUG] thread=%s userAnswer='%s' explicit=%v mappedIdx=%d correctIdx=%d options=%v isCorrect=%v",
 		threadID, userAns, explicit, idx, ci, opts, isCorrect)
 
+	// CRÍTICO: NO modificar el feedback directamente - ese corresponde a la NUEVA pregunta
+	// El frontend ya recibe evaluation.is_correct y lo aplica correctamente
+	// Simplemente almacenar el resultado sin contaminar el feedback de la siguiente pregunta
 	fb, _ := data["feedback"].(string)
-	data["feedback"] = rebuildFeedbackWithEvaluation(fb, isCorrect)
+	log.Printf("[EVAL_FIX] Feedback original (para NUEVA pregunta): %s", fb)
+	// COMENTADO: data["feedback"] = rebuildFeedbackWithEvaluation(fb, isCorrect)
+	// El feedback debe permanecer neutral para la siguiente pregunta
 	h.mu.Lock()
 	if _, pending := data["evaluation_pending"].(bool); !pending {
 		h.evalAnswers[threadID] = h.evalAnswers[threadID] + 1
@@ -1454,13 +1459,24 @@ func sanitizeAIFeedback(original string) string {
 	for _, ln := range lines {
 		trimmed := strings.TrimSpace(ln)
 		upper := strings.ToUpper(trimmed)
-		// Skip lines that start with "Evaluación: CORRECTO" or "Evaluación: INCORRECTO"
-		if strings.HasPrefix(upper, "EVALUACIÓN:") || strings.HasPrefix(upper, "EVALUACION:") {
-			// Log that we're removing an evaluation line
+
+		// Skip lines containing "Evaluación:" followed by "CORRECTO" or "INCORRECTO"
+		// Handles cases like: "Evaluación: CORRECTO", "Tu evaluación: INCORRECTO", etc.
+		if (strings.Contains(upper, "EVALUACIÓN:") || strings.Contains(upper, "EVALUACION:")) &&
+			(strings.Contains(upper, "CORRECTO") || strings.Contains(upper, "INCORRECTO")) {
 			log.Printf("[FEEDBACK_SANITIZE] Removing AI evaluation line: %s", trimmed)
 			continue
 		}
-		// Also skip empty lines at the beginning
+
+		// Skip lines with evaluation patterns in different formats
+		// "Tu respuesta es correcta/incorrecta"
+		if strings.Contains(upper, "TU RESPUESTA ES") &&
+			(strings.Contains(upper, "CORRECTA") || strings.Contains(upper, "INCORRECTA")) {
+			log.Printf("[FEEDBACK_SANITIZE] Removing evaluation phrase: %s", trimmed)
+			continue
+		}
+
+		// Skip empty lines at the beginning
 		if strings.TrimSpace(ln) != "" {
 			cleaned = append(cleaned, ln)
 		}
@@ -1468,9 +1484,18 @@ func sanitizeAIFeedback(original string) string {
 	// Join back and return
 	result := strings.TrimSpace(strings.Join(cleaned, "\n"))
 	if result != strings.TrimSpace(original) {
-		log.Printf("[FEEDBACK_SANITIZE] Original: %q -> Sanitized: %q", original, result)
+		log.Printf("[FEEDBACK_SANITIZE] Original (first 200 chars): %q... -> Sanitized (first 200 chars): %q...",
+			truncateString(original, 200), truncateString(result, 200))
 	}
 	return result
+}
+
+// truncateString helper to safely truncate strings for logging
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // rebuildFeedbackWithEvaluation injects a first line 'Evaluación: CORRECTO/INCORRECTO'

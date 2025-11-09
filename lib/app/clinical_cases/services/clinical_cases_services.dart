@@ -233,26 +233,40 @@ class ClinicalCasesServices {
     await _localQuestionsData.insertOne(question);
   }
 
+  Future<void> updateQuestionEvaluation(QuestionResponseModel question) async {
+    // Actualiza la evaluación de una pregunta en la base de datos local
+    final where = 'id = ?';
+    final whereArgs = [question.id];
+    await _localQuestionsData.update(question, where, whereArgs);
+  }
+
   Future<void> insertMessage(ChatMessageModel message) async {
     // Se inserta la pregunta en la base de datos local
     await _chatMessagesLocalData.insertOne(message);
   }
 
-  Future<QuestionResponseModel> sendAnswer(
+  Future<Map<String, dynamic>> sendAnswer(
     QuestionResponseModel questionWithMessage,
   ) async {
     // Se envía la pregunta actual con la respuesta del usuario, para la respuesta del usuario
     // se utilizan las propiedades answer o answers (para futuras respuestas múltiples)
     // y adicionalmnente se envía la respuesta como mensaje usando el método resumeToInteractiveClinicalCase().
     // Se espera el feedback de la respuesta actual y una nueva pregunta.
-    final feedBackAndNewQuestion = await _apiClinicalCaseData.sendAnswerMessage(
+    final result = await _apiClinicalCaseData.sendAnswerMessage(
       questionWithMessage,
     );
+
+    final feedBackAndNewQuestion =
+        result['nextQuestion'] as QuestionResponseModel;
+    final previousIsCorrect = result['previousIsCorrect'] as bool?;
 
     // Al actualizar, se refiere en actualizar la copia local de la pregunta, la respuesta y el feedback
     _updateAnswer(questionWithMessage);
 
-    return feedBackAndNewQuestion;
+    return {
+      'nextQuestion': feedBackAndNewQuestion,
+      'previousIsCorrect': previousIsCorrect,
+    };
   }
 
   Future<ChatMessageModel> sendMessage(
@@ -414,9 +428,11 @@ IMPORTANTE:
         message: 'Estoy listo para comenzar',
       );
 
-      aiFirsQuestion = await _apiClinicalCaseData.sendAnswerMessage(
+      final result = await _apiClinicalCaseData.sendAnswerMessage(
         userFirstMessage,
       );
+      aiFirsQuestion = result['nextQuestion'] as QuestionResponseModel;
+      // No hay evaluación para el mensaje inicial, así que ignoramos previousIsCorrect
     }
 
     // _localQuestionsData.insertOne(aiFirsQuestion);

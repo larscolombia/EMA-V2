@@ -102,7 +102,7 @@ class ApiClinicalCaseData {
     }
   }
 
-  Future<QuestionResponseModel> sendAnswerMessage(
+  Future<Map<String, dynamic>> sendAnswerMessage(
     QuestionResponseModel questionWithAnswer,
   ) async {
     // Flujo nuevo: /casos-interactivos/mensaje
@@ -138,6 +138,19 @@ class ApiClinicalCaseData {
     if (response.statusCode == 200) {
       final data = response.data['data'] ?? response.data;
       final feedback = data['feedback'] as String? ?? '';
+
+      // Extraer evaluación de la respuesta anterior (si existe)
+      final evaluation = data['evaluation'] as Map<String, dynamic>?;
+      final isCorrect =
+          evaluation != null && evaluation['is_correct'] != null
+              ? (evaluation['is_correct'] as bool)
+              : null;
+
+      Logger.objectValue(
+        'EVALUATION_DEBUG',
+        'evaluation object: $evaluation, is_correct: $isCorrect',
+      );
+
       final next =
           (data['next'] ?? const <String, dynamic>{}) as Map<String, dynamic>;
       final pregunta =
@@ -164,11 +177,22 @@ class ApiClinicalCaseData {
         } catch (_) {}
       }
 
-      return QuestionResponseModel.fromClinicalCaseApi(
+      final nextQuestion = QuestionResponseModel.fromClinicalCaseApi(
         quizId: questionWithAnswer.quizId,
         feedback: feedback,
         questionMap: questionMap,
       );
+
+      Logger.objectValue(
+        'EVALUATION_DEBUG_RESULT',
+        'Returning - previousIsCorrect: $isCorrect, nextQuestion: ${nextQuestion.question}',
+      );
+
+      // Retornar un mapa que contenga tanto la siguiente pregunta como la evaluación
+      return {
+        'nextQuestion': nextQuestion,
+        'previousIsCorrect': isCorrect, // La evaluación de la pregunta anterior
+      };
     } else {
       throw Exception('Error al enviar mensaje');
     }
