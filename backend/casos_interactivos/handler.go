@@ -743,7 +743,7 @@ func (h *Handler) Message(c *gin.Context) {
 	closing := h.closureDue[threadID]
 	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d closing=%v", threadID, curr, maxQuestions, closing)
 
-	// OPTIMIZADO: RAG reducido al mínimo para acelerar
+	// OPTIMIZADO: RAG MUY reducido para máxima velocidad
 	var ragContext string
 	func() {
 		defer func() { _ = recover() }()
@@ -755,17 +755,19 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 		// Query ultra-corto
 		searchQuery := lastQ + " " + req.Mensaje
-		if len(searchQuery) > 150 { // Reducido de 200 a 150
-			searchQuery = searchQuery[:150]
+		if len(searchQuery) > 100 { // Reducido de 150 a 100
+			searchQuery = searchQuery[:100]
 		}
-		ragCtx, ragCancel := context.WithTimeout(ctx, 3*time.Second) // Reducido de 4s a 3s
+		ragCtx, ragCancel := context.WithTimeout(ctx, 2*time.Second) // Reducido de 3s a 2s
 		defer ragCancel()
 		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
 		if strings.TrimSpace(refs) != "" {
-			if len(refs) > 500 { // Reducido de 800 a 500
-				refs = refs[:500]
+			// CRÍTICO: Reducir drásticamente a 200 chars (antes 500)
+			// RAG largo en instructions causa CREATE_RUN de 177s
+			if len(refs) > 200 {
+				refs = refs[:200]
 			}
-			ragContext = "REF:" + refs + "\n"
+			ragContext = "Ref:" + refs
 		}
 	}()
 
@@ -808,14 +810,15 @@ func (h *Handler) Message(c *gin.Context) {
 		}, " ")
 	}
 
-	// CRÍTICO: NO agregar RAG al mensaje del usuario (thread permanente)
-	// En su lugar, agregar RAG a las instructions (efímeras por run)
-	// Esto reduce drásticamente el tamaño del thread y acelera procesamiento
+	// REVERTIDO: Volver a agregar RAG al userPrompt (no a instructions)
+	// Razón: RAG en instructions causa CREATE_RUN de 177s
+	// Con RAG reducido a 200 chars en mensaje, debería ser rápido
+	promptWithContext := userPrompt
 	if ragContext != "" {
-		instr = ragContext + "\n" + instr
+		promptWithContext = ragContext + " RESPUESTA: " + userPrompt
 	}
 
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
+	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, promptWithContext, instr)
 	if err != nil {
 		d := withThread(h.minTurn(), threadID)
 		d["schema_version"] = interactiveSchemaVersion
