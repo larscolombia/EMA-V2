@@ -272,7 +272,7 @@ func (h *Handler) StartCase(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(startTout)*time.Second)
 	defer cancel()
 	// Soft-timeout para responder rápido si el asistente demora demasiado (evita 504 en proxy)
-	startSoft := 20 // segundos aumentado para dar tiempo al AI + evidencia
+	startSoft := 40 // segundos: aumentado para dar margen con prompts optimizados (~25-35s OpenAI)
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_SOFT_TIMEOUT_SEC")); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 10 && v <= 45 {
 			startSoft = v
@@ -888,6 +888,7 @@ func (h *Handler) Message(c *gin.Context) {
 			ci, okCI := h.lastCorrectIndex[threadID]
 			opts := h.lastOptions[threadID]
 			qText := h.lastQuestionText[threadID]
+			log.Printf("[EVAL_PRE] thread=%s stored_ci=%d okCI=%v opts_len=%d", threadID, ci, okCI, len(opts))
 			h.mu.Unlock()
 			// attempt recovery if missing
 			if (!okCI || ci < 0 || ci >= len(opts)) && len(opts) > 0 {
@@ -995,8 +996,15 @@ func (h *Handler) Message(c *gin.Context) {
 			// IMPORTANTE: capturar correct_index y opciones DESPUÉS del shuffle
 			if nx, ok := data["next"].(map[string]any); ok {
 				if pq, ok := nx["pregunta"].(map[string]any); ok {
+					// Capturar correct_index (puede ser int o float64 según si fue shuffleado o viene de AI)
 					if ci, ok := pq["correct_index"].(float64); ok {
+						log.Printf("[STORE_CI] thread=%s storing_ci=%d from_new_question (float64)", threadID, int(ci))
 						h.lastCorrectIndex[threadID] = int(ci)
+					} else if ci, ok := pq["correct_index"].(int); ok {
+						log.Printf("[STORE_CI] thread=%s storing_ci=%d from_new_question (int)", threadID, ci)
+						h.lastCorrectIndex[threadID] = ci
+					} else {
+						log.Printf("[STORE_CI_MISSING] thread=%s correct_index NOT FOUND in new question", threadID)
 					}
 					if txt, ok := pq["texto"].(string); ok {
 						h.lastQuestionText[threadID] = strings.TrimSpace(txt)
