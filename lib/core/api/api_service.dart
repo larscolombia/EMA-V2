@@ -15,8 +15,11 @@ class ApiService extends GetxService {
         'Content-Type': 'application/json',
       },
       // Timeouts generosos para procesamiento de PDFs grandes y operaciones IA
+      // Aumentado a 200s para casos interactivos que pueden tardar hasta 180s en backend
       connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 3), // 180s: permite PDFs grandes
+      receiveTimeout: const Duration(
+        seconds: 200,
+      ), // 200s: margen sobre backend 180s
       sendTimeout: const Duration(minutes: 2), // 120s: permite uploads grandes
     );
     _dio = Dio(options);

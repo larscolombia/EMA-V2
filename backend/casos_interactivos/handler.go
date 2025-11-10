@@ -264,10 +264,11 @@ func (h *Handler) StartCase(c *gin.Context) {
 		return
 	}
 	// Timeouts configurables para evitar 504 a través de Nginx/proxy
-	// INCREMENTADO: De 25s a 60s para dar margen a colas de OpenAI (visto hasta 30s en queue)
-	startTout := 60 // segundos por defecto
+	// INCREMENTADO: De 60s a 120s porque OpenAI puede tardar 105s en primera pregunta con RAG
+	// Logs muestran que runs complejos pueden tardar hasta 1m45s (105s) bajo carga
+	startTout := 120 // segundos por defecto - suficiente para runs con RAG complejo
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 120 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 180 {
 			startTout = v
 		}
 	}
