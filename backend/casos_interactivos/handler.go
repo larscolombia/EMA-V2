@@ -658,9 +658,9 @@ func (h *Handler) Message(c *gin.Context) {
 			msgTout = v
 		}
 	}
-	// Eliminar soft timeout - que cause el feedback vacío
-	// Usar timeout completo como casos_clinico para que OpenAI pueda responder
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(msgTout)*time.Second)
+	// CRÍTICO: NO usar c.Request.Context() porque puede tener timeout de 60s de Nginx
+	// Crear contexto independiente para permitir que OpenAI tarde hasta msgTout segundos
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(msgTout)*time.Second)
 	defer cancel()
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
@@ -754,6 +754,7 @@ func (h *Handler) Message(c *gin.Context) {
 
 	// PASO CRÍTICO: Buscar evidencia RAG (libros + PubMed) ANTES de generar feedback
 	// para fundamentar la evaluación en fuentes confiables
+	// OPTIMIZADO: Reducir tamaño para evitar timeouts
 	var ragContext string
 	func() {
 		defer func() { _ = recover() }()
@@ -765,14 +766,18 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 		// Construir query combinando pregunta + respuesta del usuario
 		searchQuery := lastQ + " " + strings.TrimSpace(req.Mensaje)
-		if len(searchQuery) > 300 {
-			searchQuery = searchQuery[:300]
+		if len(searchQuery) > 200 { // Reducido de 300 a 200
+			searchQuery = searchQuery[:200]
 		}
-		ragCtx, ragCancel := context.WithTimeout(ctx, 6*time.Second)
+		ragCtx, ragCancel := context.WithTimeout(ctx, 4*time.Second) // Reducido de 6s a 4s
 		defer ragCancel()
 		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
 		if strings.TrimSpace(refs) != "" {
-			ragContext = "CONTEXTO MÉDICO DE REFERENCIA (úsalo para fundamentar tu evaluación):\n" + refs + "\n\n"
+			// Limitar tamaño total del contexto RAG
+			if len(refs) > 800 {
+				refs = refs[:800] + "..."
+			}
+			ragContext = "REF: " + refs + "\n" // Simplificado el header
 		}
 	}()
 
@@ -819,20 +824,16 @@ func (h *Handler) Message(c *gin.Context) {
 
 		var feedbackFormat string
 		// Forzar formato single-choice siempre
-		feedbackFormat = "- Pregunta anterior era 'single-choice': NO evalúes si la respuesta es correcta o incorrecta (el sistema lo hará). Proporciona SOLO explicación académica NEUTRAL sobre el concepto médico (120-220 palabras), sin juzgar la elección del usuario."
+		feedbackFormat = "Feedback: explicación académica NEUTRAL (120-180 palabras) sin evaluar la respuesta."
 
 		instr = strings.Join([]string{
-			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
-			"FORMATO FEEDBACK según tipo de pregunta anterior:",
+			"JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
 			feedbackFormat,
-			"⚠️ CRÍTICO - PROHIBIDO ABSOLUTAMENTE: NO escribas 'Evaluación:', 'Evaluación: CORRECTO', 'Evaluación: INCORRECTO', 'Tu respuesta es correcta/incorrecta', ni frases de juicio sobre la respuesta. NUNCA uses estas palabras: 'correcto', 'incorrecto', 'acertado', 'desacertado' en contexto de evaluar la respuesta del usuario. El sistema agregará automáticamente la evaluación binaria. TÚ SOLO proporciona explicación neutral del concepto médico sin evaluar la elección del usuario. Basa tu explicación en el CONTEXTO MÉDICO DE REFERENCIA proporcionado. Cita las fuentes al final con 'Fuente:' + 1-2 referencias (libro/guía con nombre completo o PMID con título del artículo)." + diagnosticInfo,
-			"Cada elemento de 'opciones' debe ser un texto descriptivo clínico; NO uses solo 'A','B','C','D'. El sistema asignará letras externamente.",
-			"IMPORTANTE: Las opciones de respuesta se randomizarán automáticamente, NO pongas siempre la correcta en posición A. Crea 4 opciones balanceadas.",
-			"PROHIBIDO repetir historia clínica inicial. OBLIGATORIO progresar hacia nuevos aspectos diagnósticos o terapéuticos.",
+			"⚠️ NO uses: 'Evaluación:', 'correcto', 'incorrecto' para juzgar respuesta usuario.",
+			"Cita fuentes: 'Fuente:' + 1-2 refs (libro/PMID)." + diagnosticInfo,
+			"4 opciones clínicas descriptivas. Randomizarán automáticamente.",
 			prevList,
-			"VARIEDAD TEMÁTICA OBLIGATORIA: cada pregunta debe abordar aspecto COMPLETAMENTE diferente (diagnóstico→manejo→pronóstico→complicaciones→seguimiento).",
-			"No cierres todavía: siempre finish=0 hasta que el sistema solicite el resumen final.",
-			"Evita repetir preguntas ya hechas. Sin texto fuera del JSON. Idioma: español. No menciones vectores ni IDs internos.",
+			"Progresa: diagnóstico→manejo→pronóstico→complicaciones. finish=0. Español.",
 		}, " ")
 	}
 
@@ -2004,7 +2005,7 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 	if os.Getenv("TESTING") == "1" {
 		return ""
 	}
-	refs := make([]string, 0, 3)
+	refs := make([]string, 0, 2) // Reducido de 3 a 2
 	// 1) Libros (vector fijo configurado en handler)
 	if strings.HasPrefix(strings.TrimSpace(h.vectorID), "vs_") {
 		if res, err := h.ai.SearchInVectorStoreWithMetadata(ctx, h.vectorID, query); err == nil && res != nil && res.HasResult {
@@ -2012,10 +2013,10 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 			sec := strings.TrimSpace(res.Section)
 			snip := strings.TrimSpace(res.Content)
 			if src == "" {
-				src = "Base de conocimiento médico"
+				src = "Base médica"
 			}
-			if len(snip) > 420 {
-				snip = snip[:420] + "…"
+			if len(snip) > 250 { // Reducido de 420 a 250
+				snip = snip[:250] + "…"
 			}
 			line := src
 			if sec != "" {
@@ -2027,27 +2028,30 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 			refs = append(refs, line)
 		} else if txt, err2 := h.ai.SearchInVectorStore(ctx, h.vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
 			t := strings.TrimSpace(txt)
-			if len(t) > 420 {
-				t = t[:420] + "…"
+			if len(t) > 250 { // Reducido de 420 a 250
+				t = t[:250] + "…"
 			}
-			refs = append(refs, "Base de conocimiento médico: \""+t+"\"")
+			refs = append(refs, "Base médica: \""+t+"\"")
 		}
 	}
-	// 2) PubMed
+	// 2) PubMed - DESHABILITADO temporalmente para acelerar respuesta
+	// TODO: Re-habilitar cuando se optimice el timeout
+	/*
 	if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
 		p := strings.TrimSpace(pm)
-		if len(p) > 600 {
-			p = p[:600] + "…"
+		if len(p) > 350 { // Reducido de 600 a 350
+			p = p[:350] + "…"
 		}
 		refs = append(refs, "PubMed: "+p)
 	}
+	*/
 	if len(refs) == 0 {
 		return ""
 	}
 	b := &strings.Builder{}
-	b.WriteString("\n\nReferencias:\n")
+	b.WriteString("\nRefs:\n") // Simplificado
 	for i, r := range refs {
-		if i >= 3 {
+		if i >= 2 { // Reducido de 3 a 2
 			break
 		}
 		b.WriteString("- ")
