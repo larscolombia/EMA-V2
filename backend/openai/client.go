@@ -1302,13 +1302,14 @@ func truncateString(s string, max int) string {
 // checkActiveRun verifica si existe un run activo o en cola en el thread.
 // Retorna: runID, status, error
 // Si no hay run activo, retorna "", "", nil
-// CRÍTICO: Usa contexto independiente con timeout corto para que funcione incluso si ctx padre está cancelado
+// CRÍTICO: Usa contexto independiente con timeout para que funcione incluso si ctx padre está cancelado
 func (c *Client) checkActiveRun(ctx context.Context, threadID string) (string, string, error) {
-	// Crear contexto independiente con timeout de 5s para la verificación
+	// Crear contexto independiente con timeout de 10s para la verificación
+	// Aumentado de 5s a 10s porque OpenAI puede tardar 5-7s en responder bajo carga
 	// Esto permite detectar runs activos incluso cuando el request padre ya timeout
-	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer checkCancel()
-	
+
 	resp, err := c.doJSON(checkCtx, http.MethodGet, "/threads/"+threadID+"/runs?limit=1&order=desc", nil)
 	if err != nil {
 		return "", "", err
@@ -1480,8 +1481,8 @@ func (c *Client) pollAndGetResponse(ctx context.Context, threadID string, runID 
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
 func (c *Client) runAndWait(ctx context.Context, threadID string, instructions string, vectorStoreID string) (string, error) {
 	// Máxima duración interna antes de intentar devolver contenido parcial
-	// Aumentado a 110s para dar margen extra a colas de OpenAI sin conflictos con Nginx
-	const maxRunDuration = 110 * time.Second
+	// Aumentado a 160s porque runs complejos pueden tardar 140-150s bajo carga de OpenAI
+	const maxRunDuration = 160 * time.Second
 	start := time.Now()
 
 	// CRÍTICO: Verificar si ya existe un run activo en este thread

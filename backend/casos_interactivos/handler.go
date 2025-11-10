@@ -640,11 +640,11 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	// Timeout más largo para dar tiempo a OpenAI runs complejos
-	// 150s permite al cliente.runAndWait (110s) + margen para recovery + manejo de reintentos
-	msgTout := 150 // segundos - aumentado para prevenir timeouts durante colas largas de OpenAI
+	// Timeout muy largo para acomodar runs complejos de OpenAI que pueden tardar 140-160s
+	// 180s (3 minutos) permite: cliente.runAndWait (110s) + colas extremas de OpenAI + recovery
+	msgTout := 180 // segundos - 3 minutos para prevenir timeouts en casos complejos
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 180 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 300 {
 			msgTout = v
 		}
 	}
@@ -807,13 +807,14 @@ func (h *Handler) Message(c *gin.Context) {
 		}, " ")
 	}
 
-	// Prefijar contexto RAG al userPrompt para que el asistente lo use
-	promptWithContext := userPrompt
+	// CRÍTICO: NO agregar RAG al mensaje del usuario (thread permanente)
+	// En su lugar, agregar RAG a las instructions (efímeras por run)
+	// Esto reduce drásticamente el tamaño del thread y acelera procesamiento
 	if ragContext != "" {
-		promptWithContext = ragContext + "RESPUESTA DEL USUARIO: " + userPrompt
+		instr = ragContext + "\n" + instr
 	}
 
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, promptWithContext, instr)
+	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
 		d := withThread(h.minTurn(), threadID)
 		d["schema_version"] = interactiveSchemaVersion
