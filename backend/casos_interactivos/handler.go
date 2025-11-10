@@ -44,12 +44,13 @@ type Handler struct {
 	evalAnswers        map[string]int      // thread_id -> total evaluated answers
 	vectorID           string              // knowledge vector id for references
 	// local evaluation support
-	lastCorrectIndex  map[string]int      // thread_id -> correct index of last question
-	lastOptions       map[string][]string // thread_id -> slice of option texts of last question
-	lastQuestionText  map[string]string   // thread_id -> texto de la última pregunta
-	lastQuestionType  map[string]string   // thread_id -> tipo de la última pregunta ('open_ended' o 'single-choice')
-	missingCorrectIdx map[string]int      // thread_id -> veces que faltó correct_index (para métricas)
-	closureDue        map[string]bool     // thread_id -> se alcanzó max y el próximo turno debe ser cierre
+	lastCorrectIndex   map[string]int      // thread_id -> correct index of last question
+	lastOptions        map[string][]string // thread_id -> slice of option texts of last question
+	lastQuestionText   map[string]string   // thread_id -> texto de la última pregunta
+	lastQuestionType   map[string]string   // thread_id -> tipo de la última pregunta ('open_ended' o 'single-choice')
+	missingCorrectIdx  map[string]int      // thread_id -> veces que faltó correct_index (para métricas)
+	closureDue         map[string]bool     // thread_id -> se alcanzó max y el próximo turno debe ser cierre
+	isFallbackQuestion map[string]bool     // thread_id -> true si la pregunta actual es fallback (no cuenta para maxQuestions)
 }
 
 // evaluateLastAnswer realiza evaluación local determinista usando índice explícito (si provisto),
@@ -263,22 +264,19 @@ func (h *Handler) StartCase(c *gin.Context) {
 		return
 	}
 	// Timeouts configurables para evitar 504 a través de Nginx/proxy
-	startTout := 25 // segundos por defecto
+	// INCREMENTADO: De 25s a 60s para dar margen a colas de OpenAI (visto hasta 30s en queue)
+	startTout := 60 // segundos por defecto
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 5 && v <= 90 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 120 {
 			startTout = v
 		}
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(startTout)*time.Second)
 	defer cancel()
-	// Soft-timeout para responder rápido si el asistente demora demasiado (evita 504 en proxy)
-	startSoft := 40 // segundos: aumentado para dar margen con prompts optimizados (~25-35s OpenAI)
-	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_START_SOFT_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 10 && v <= 45 {
-			startSoft = v
-		}
-	}
-	c.Header("X-Interactive-Start-Soft-Timeout", strconv.Itoa(startSoft))
+	// ELIMINADO: Soft-timeout que causaba fallbacks prematuros cuando OpenAI está en cola
+	// Estrategia: SIEMPRE esperar respuesta real del AI, sin fallback genérico
+	// Si OpenAI tarda demasiado, mejor fallar limpio que dar pregunta genérica confusa
+	c.Header("X-Interactive-Start-Strategy", "wait-real-response")
 
 	// Use user's max interactions preference if provided, otherwise use default
 	currentMaxQuestions := h.maxQuestions
@@ -379,40 +377,27 @@ func (h *Handler) StartCase(c *gin.Context) {
 		h.mu.Unlock()
 	}
 
+	// Prompts ultra-optimizados para reducir tiempo de procesamiento en OpenAI
 	userPrompt := strings.Join([]string{
-		"INICIO: Recibirás caso clínico completo. NO comentes, solo guarda para usar después.",
-		"FASE ANAMNESIS: En 'feedback' presenta historia clínica completa con 3-4 párrafos (síntomas, antecedentes, contexto, evolución).",
-		"Incluye motivo consulta, HEA, antecedentes, examen físico. Termina con 'Referencias:' + 1 cita médica.",
-		"Formato JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones:[4], correct_index:0-3}}, finish:0.",
-		"Paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
+		"Caso clínico. Anamnesis (2-3 párrafos): síntomas, antecedentes, examen. Ref: 1 cita.",
+		"JSON: feedback, next{hallazgos{}, pregunta{tipo, texto, opciones[4], correct_index:0-3}}, finish:0.",
+		"Px: " + req.Age + ", " + req.Sex + ", gest=" + boolToStr(req.Pregnant),
 	}, " ")
-	instr := strings.Join([]string{
-		"JSON: feedback, next{hallazgos, pregunta{tipo, texto, opciones, correct_index}}, finish(0).",
-		"'feedback' (200-280 palabras) termina con 'Referencias:' + 1 cita (libro/PMID, sin IDs internos).",
-		"CRÍTICO: tipo='single-choice', opciones=[4 opciones clínicas], correct_index=int válido (0-3).",
-		"Sin null, sin vacíos. hallazgos={} si no hay. finish=0. Español, sin markdown.",
-	}, " ")
+	instr := "JSON: feedback (150-200 palabras + Ref:), next{hallazgos{}, pregunta{tipo:'single-choice', opciones:4, correct_index:0-3}}, finish:0. Sin null."
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
-		c.JSON(http.StatusOK, h.fallbackStart(req, threadID))
+		log.Printf("[InteractiveCase][Start][ERROR] thread=%s err=%v", threadID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate clinical case"})
 		return
 	}
 
-	var content string
-	softTimer := time.NewTimer(time.Duration(startSoft) * time.Second)
-	defer softTimer.Stop()
-	select {
-	case content = <-ch:
-		// ok
-	case <-softTimer.C:
-		// Cancelar operación lenta y devolver fallback inmediato
-		cancel()
-		log.Printf("[InteractiveCase][Start][SoftTimeout] thread=%s soft=%ds", threadID, startSoft)
-		c.JSON(http.StatusOK, h.fallbackStart(req, threadID))
-		return
-	case <-ctx.Done():
-		c.JSON(http.StatusOK, h.fallbackStart(req, threadID))
+	// ESTRATEGIA NUEVA: Esperar SIEMPRE la respuesta real (no fallback)
+	// Si OpenAI tarda mucho → timeout natural del contexto → error limpio
+	content, ok := <-ch
+	if !ok || content == "" {
+		log.Printf("[InteractiveCase][Start][NO_CONTENT] thread=%s", threadID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI response empty or timeout"})
 		return
 	}
 
@@ -756,9 +741,7 @@ func (h *Handler) Message(c *gin.Context) {
 	closing := h.closureDue[threadID]
 	log.Printf("[InteractiveCase][Message][Begin] thread=%s curr=%d max=%d closing=%v", threadID, curr, maxQuestions, closing)
 
-	// PASO CRÍTICO: Buscar evidencia RAG (libros + PubMed) ANTES de generar feedback
-	// para fundamentar la evaluación en fuentes confiables
-	// OPTIMIZADO: Reducir tamaño para evitar timeouts
+	// OPTIMIZADO: RAG reducido al mínimo para acelerar
 	var ragContext string
 	func() {
 		defer func() { _ = recover() }()
@@ -768,33 +751,27 @@ func (h *Handler) Message(c *gin.Context) {
 		if strings.TrimSpace(lastQ) == "" {
 			return
 		}
-		// Construir query combinando pregunta + respuesta del usuario
-		searchQuery := lastQ + " " + strings.TrimSpace(req.Mensaje)
-		if len(searchQuery) > 200 { // Reducido de 300 a 200
-			searchQuery = searchQuery[:200]
+		// Query ultra-corto
+		searchQuery := lastQ + " " + req.Mensaje
+		if len(searchQuery) > 150 { // Reducido de 200 a 150
+			searchQuery = searchQuery[:150]
 		}
-		ragCtx, ragCancel := context.WithTimeout(ctx, 4*time.Second) // Reducido de 6s a 4s
+		ragCtx, ragCancel := context.WithTimeout(ctx, 3*time.Second) // Reducido de 4s a 3s
 		defer ragCancel()
 		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
 		if strings.TrimSpace(refs) != "" {
-			// Limitar tamaño total del contexto RAG
-			if len(refs) > 800 {
-				refs = refs[:800] + "..."
+			if len(refs) > 500 { // Reducido de 800 a 500
+				refs = refs[:500]
 			}
-			ragContext = "REF: " + refs + "\n" // Simplificado el header
+			ragContext = "REF:" + refs + "\n"
 		}
 	}()
 
 	userPrompt := req.Mensaje
 	var instr string
 	if closing {
-		instr = strings.Join([]string{
-			"Responde SOLO en JSON válido con: feedback, next{hallazgos{}, pregunta{}}, finish(1).",
-			"Formato 'feedback': primera línea 'Resumen Final:'; luego síntesis (≤80 palabras) con diagnóstico probable, diferenciales clave, manejo inicial.",
-			"NO incluyas línea 'Puntaje:' (el sistema la añadirá).",
-			"Finalmente línea 'Referencias:' con 1-2 citas (primera de libro/guía, opcional PMID). NO menciones vectores ni IDs. Sin nueva pregunta. finish=1.",
-			"Idioma: español. Sin texto fuera del JSON.",
-		}, " ")
+		// OPTIMIZADO: Prompt de cierre más corto
+		instr = "JSON: feedback, next{}, finish:1. Feedback: 'Resumen:' + síntesis (≤60 palabras) + diagnóstico. Ref: 1 cita. finish=1."
 	} else {
 		// Build a short memory of prior questions to discourage repetition
 		var prevQs []string
@@ -811,33 +788,21 @@ func (h *Handler) Message(c *gin.Context) {
 			for i, q := range prevQs {
 				prevQs[i] = strings.TrimSpace(q)
 			}
-			prevList = "PREGUNTAS YA HECHAS (JAMÁS repetir estos temas ni variantes): " + strings.Join(prevQs, " | ") + ". PROGRESA a temas NUEVOS completamente diferentes."
+			// OPTIMIZADO: Reducir tamaño del prevList para acelerar
+			prevList = "Ya preguntado: " + strings.Join(prevQs, " | ") + ". NO repetir."
 		}
 
 		// Obtener información diagnóstica progresiva
 		currentTurn := h.getCount(threadID) + 1
 		diagnosticInfo := generateProgressiveDiagnostics(currentTurn, threadID)
 
-		// Obtener tipo de pregunta anterior para determinar formato de feedback
-		h.mu.Lock()
-		lastType := h.lastQuestionType[threadID]
-		h.mu.Unlock()
-		if lastType == "" {
-			lastType = "open_ended" // default si no hay info
-		}
-
-		var feedbackFormat string
-		// Forzar formato single-choice siempre
-		feedbackFormat = "Feedback: explicación académica NEUTRAL (120-180 palabras) sin evaluar la respuesta."
-
+		// PROMPTS ULTRA-OPTIMIZADOS: Reducir a lo esencial para acelerar OpenAI
 		instr = strings.Join([]string{
-			"JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones, correct_index}}, finish(0).",
-			feedbackFormat,
-			"⚠️ NO uses: 'Evaluación:', 'correcto', 'incorrecto' para juzgar respuesta usuario.",
-			"Cita fuentes: 'Fuente:' + 1-2 refs (libro/PMID)." + diagnosticInfo,
-			"4 opciones clínicas descriptivas. Randomizarán automáticamente.",
+			"JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', opciones[4], correct_index:0-3}}, finish:0.",
+			"Feedback NEUTRAL (100-150 palabras) SIN evaluar. NO uses 'correcto/incorrecto'.",
+			"Fuente: 1-2 refs." + diagnosticInfo,
 			prevList,
-			"Progresa: diagnóstico→manejo→pronóstico→complicaciones. finish=0. Español.",
+			"Progresa. finish=0.",
 		}, " ")
 	}
 
@@ -1042,9 +1007,31 @@ func (h *Handler) Message(c *gin.Context) {
 			}
 			h.mu.Unlock()
 		}
-		// Incrementar sólo si NO estamos en un turno marcado previamente para cierre diferido
+		// Incrementar contador de preguntas SOLO si:
+		// 1. NO estamos en cierre diferido
+		// 2. La pregunta ANTERIOR NO era fallback (si era fallback, esta es la primera pregunta real)
+		h.mu.Lock()
+		wasFallback := h.isFallbackQuestion[threadID]
+		if wasFallback {
+			// La pregunta anterior era fallback, ahora limpiar el flag
+			delete(h.isFallbackQuestion, threadID)
+			log.Printf("[Message][CLEARING_FALLBACK] thread=%s - primera pregunta real se generó", threadID)
+		}
+		h.mu.Unlock()
+
 		if !h.closureDue[threadID] {
-			h.incrementCount(threadID)
+			if !wasFallback {
+				// Pregunta anterior era real, incrementar normalmente
+				h.incrementCount(threadID)
+				log.Printf("[Message][INCREMENT] thread=%s new_count=%d (pregunta real anterior)", threadID, h.getCount(threadID))
+			} else {
+				// Pregunta anterior era fallback, esta es la primera pregunta REAL
+				// Asignar turnCount = 1 (primera pregunta real)
+				h.mu.Lock()
+				h.turnCount[threadID] = 1
+				h.mu.Unlock()
+				log.Printf("[Message][FIRST_REAL] thread=%s count=1 (primera pregunta real tras fallback)", threadID)
+			}
 		}
 		cnt := h.getCount(threadID)
 		// Lógica de progresión: nunca establecer finish=1 aquí; sólo marcar closureDue cuando cnt == maxQuestions
@@ -1158,9 +1145,18 @@ func (h *Handler) fallbackStart(req startReq, threadID string) map[string]any {
 	minData := h.minTurn()
 
 	// CRÍTICO: Almacenar estado inicial para que el primer mensaje pueda evaluar correctamente
+	// PERO marcar como pregunta fallback (NO cuenta para maxQuestions)
 	if threadID != "" {
 		h.mu.Lock()
-		h.turnCount[threadID] = 1
+		// NO incrementar turnCount aquí - el fallback no cuenta como pregunta real
+		// turnCount permanece en 0 hasta que se envíe la primera pregunta real del AI
+
+		// Marcar esta pregunta como fallback
+		if h.isFallbackQuestion == nil {
+			h.isFallbackQuestion = make(map[string]bool)
+		}
+		h.isFallbackQuestion[threadID] = true
+		log.Printf("[fallbackStart][MARKED_FALLBACK] thread=%s - pregunta genérica NO cuenta para maxQuestions", threadID)
 
 		// Extraer y almacenar correct_index y opciones del minTurn
 		if nx, ok := minData["next"].(map[string]any); ok {
