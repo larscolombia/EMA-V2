@@ -1299,12 +1299,189 @@ func truncateString(s string, max int) string {
 
 // addMessageWithAttachment posts a user message with a file attachment (for file_search tool).
 
+// checkActiveRun verifica si existe un run activo o en cola en el thread.
+// Retorna: runID, status, error
+// Si no hay run activo, retorna "", "", nil
+func (c *Client) checkActiveRun(ctx context.Context, threadID string) (string, string, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/runs?limit=1&order=desc", nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", err
+	}
+
+	// Si hay runs y el más reciente está activo/en cola, retornarlo
+	if len(result.Data) > 0 {
+		latestRun := result.Data[0]
+		// Estados activos que indican que el run está procesando
+		if latestRun.Status == "queued" || latestRun.Status == "in_progress" || latestRun.Status == "requires_action" {
+			return latestRun.ID, latestRun.Status, nil
+		}
+	}
+
+	return "", "", nil
+}
+
+// pollAndGetResponse espera a que un run existente termine y retorna su respuesta.
+// Reutiliza la lógica de polling del runAndWait original.
+func (c *Client) pollAndGetResponse(ctx context.Context, threadID string, runID string, start time.Time, maxRunDuration time.Duration) (string, error) {
+	pollStart := time.Now()
+	pollCount := 0
+	lastStatus := ""
+
+	for {
+		pollCount++
+		time.Sleep(400 * time.Millisecond) // Mismo intervalo que runAndWait
+
+		// Si excedemos la duración máxima, intentamos devolver lo que haya
+		if time.Since(start) > maxRunDuration {
+			mresp, merr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+			if merr == nil {
+				var ml struct {
+					Data []struct {
+						Role    string `json:"role"`
+						Content []struct {
+							Type string `json:"type"`
+							Text struct {
+								Value string `json:"value"`
+							} `json:"text"`
+						} `json:"content"`
+					} `json:"data"`
+				}
+				_ = json.NewDecoder(mresp.Body).Decode(&ml)
+				mresp.Body.Close()
+				for _, m := range ml.Data {
+					if m.Role == "assistant" {
+						var buf bytes.Buffer
+						for _, cpart := range m.Content {
+							if cpart.Type == "text" {
+								buf.WriteString(cpart.Text.Value)
+							}
+						}
+						text := cleanAssistantAnnotations(buf.String())
+						if strings.TrimSpace(text) != "" {
+							return text, nil
+						}
+					}
+				}
+			}
+		}
+
+		pollCheckStart := time.Now()
+		rresp, rerr := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/runs/"+runID, nil)
+		if rerr != nil {
+			log.Printf("[pollAndGetResponse][POLL_ERROR] thread=%s run_id=%s poll#%d err=%v", threadID, runID, pollCount, rerr)
+			return "", rerr
+		}
+		var r struct {
+			Status    string `json:"status"`
+			LastError struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"last_error"`
+		}
+		_ = json.NewDecoder(rresp.Body).Decode(&r)
+		rresp.Body.Close()
+
+		if r.Status != lastStatus {
+			log.Printf("[pollAndGetResponse][STATUS_CHANGE] thread=%s run_id=%s poll#%d elapsed=%v status: %s→%s",
+				threadID, runID, pollCount, time.Since(pollStart), lastStatus, r.Status)
+			lastStatus = r.Status
+		}
+
+		if pollCount%30 == 0 && r.Status != "completed" {
+			log.Printf("[pollAndGetResponse][STILL_RUNNING] thread=%s run_id=%s poll#%d elapsed=%v status=%s api_latency=%v",
+				threadID, runID, pollCount, time.Since(pollStart), r.Status, time.Since(pollCheckStart))
+		}
+
+		if r.Status == "completed" {
+			log.Printf("[pollAndGetResponse][COMPLETED] thread=%s run_id=%s total_polls=%d total_elapsed=%v",
+				threadID, runID, pollCount, time.Since(pollStart))
+			break
+		}
+		if r.Status == "failed" || r.Status == "cancelled" || r.Status == "expired" {
+			errorMsg := r.Status
+			if r.LastError.Message != "" {
+				errorMsg = fmt.Sprintf("%s: %s (code: %s)", r.Status, r.LastError.Message, r.LastError.Code)
+			}
+			log.Printf("[pollAndGetResponse][ERROR] thread=%s run_id=%s status=%s last_error=%+v", threadID, runID, r.Status, r.LastError)
+			return "", fmt.Errorf("run status: %s", errorMsg)
+		}
+	}
+
+	// Fetch la respuesta final
+	fetchStart := time.Now()
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer fetchCancel()
+
+	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+	if merr != nil {
+		log.Printf("[pollAndGetResponse][GetMessages][ERROR] thread=%s elapsed_ms=%d err=%v", threadID, time.Since(fetchStart).Milliseconds(), merr)
+		return "", merr
+	}
+	log.Printf("[pollAndGetResponse][GetMessages][SUCCESS] thread=%s elapsed_ms=%d", threadID, time.Since(fetchStart).Milliseconds())
+	defer mresp.Body.Close()
+
+	var ml struct {
+		Data []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text struct {
+					Value string `json:"value"`
+				} `json:"text"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(mresp.Body).Decode(&ml); err != nil {
+		return "", err
+	}
+
+	for _, m := range ml.Data {
+		if m.Role == "assistant" {
+			var buf bytes.Buffer
+			for i, c := range m.Content {
+				log.Printf("DEBUG: Content part %d: type=%s, value_length=%d", i, c.Type, len(c.Text.Value))
+				if c.Type == "text" && c.Text.Value != "" {
+					buf.WriteString(c.Text.Value)
+				}
+			}
+			finalText := cleanAssistantAnnotations(buf.String())
+			if s := finalText; s != "" {
+				return s, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
 func (c *Client) runAndWait(ctx context.Context, threadID string, instructions string, vectorStoreID string) (string, error) {
 	// Máxima duración interna antes de intentar devolver contenido parcial
-	// Aumentado a 90s para dar más tiempo a runs complejos con libros grandes
-	const maxRunDuration = 90 * time.Second
+	// Aumentado a 110s para dar margen extra a colas de OpenAI sin conflictos con Nginx
+	const maxRunDuration = 110 * time.Second
 	start := time.Now()
+
+	// CRÍTICO: Verificar si ya existe un run activo en este thread
+	// Esto previene crear runs duplicados cuando el usuario reintenta
+	existingRunID, existingStatus, err := c.checkActiveRun(ctx, threadID)
+	if err == nil && existingRunID != "" {
+		log.Printf("[runAndWait][ACTIVE_RUN_FOUND] thread=%s existing_run=%s status=%s - reutilizando en lugar de crear nuevo",
+			threadID, existingRunID, existingStatus)
+		// Esperar el run existente en lugar de crear uno nuevo
+		return c.pollAndGetResponse(ctx, threadID, existingRunID, start, maxRunDuration)
+	}
+
 	// create run
 	payload := map[string]any{"assistant_id": c.AssistantID}
 

@@ -640,10 +640,11 @@ func (h *Handler) Message(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	// Timeout más largo como en casos_clinico para dar tiempo a OpenAI
-	msgTout := 90 // segundos - igual que casos_clinico
+	// Timeout más largo para dar tiempo a OpenAI runs complejos
+	// 120s permite al cliente.runAndWait (110s) intentar recuperación parcial antes de expirar
+	msgTout := 120 // segundos - suficiente para runs con colas largas en OpenAI
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_TIMEOUT_SEC")); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 120 {
+		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 180 {
 			msgTout = v
 		}
 	}
