@@ -2037,13 +2037,13 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 	// 2) PubMed - DESHABILITADO temporalmente para acelerar respuesta
 	// TODO: Re-habilitar cuando se optimice el timeout
 	/*
-	if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
-		p := strings.TrimSpace(pm)
-		if len(p) > 350 { // Reducido de 600 a 350
-			p = p[:350] + "…"
+		if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
+			p := strings.TrimSpace(pm)
+			if len(p) > 350 { // Reducido de 600 a 350
+				p = p[:350] + "…"
+			}
+			refs = append(refs, "PubMed: "+p)
 		}
-		refs = append(refs, "PubMed: "+p)
-	}
 	*/
 	if len(refs) == 0 {
 		return ""
