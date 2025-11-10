@@ -382,11 +382,13 @@ func (h *Handler) StartCase(c *gin.Context) {
 
 	// Prompts ultra-optimizados para reducir tiempo de procesamiento en OpenAI
 	userPrompt := strings.Join([]string{
-		"Caso clínico. Anamnesis (2-3 párrafos): síntomas, antecedentes, examen. Ref: 1 cita.",
+		"Presenta caso clínico inicial.",
+		"Anamnesis (2-3 párrafos): síntomas actuales, tiempo evolución, antecedentes relevantes.",
+		"Redacta como PRESENTACIÓN DE PACIENTE (no como quiz).",
 		"JSON: feedback, next{hallazgos{}, pregunta{tipo, texto, opciones[4], correct_index:0-3}}, finish:0.",
 		"Px: " + req.Age + ", " + req.Sex + ", gest=" + boolToStr(req.Pregnant),
 	}, " ")
-	instr := "JSON: feedback (150-200 palabras + Ref:), next{hallazgos{}, pregunta{tipo:'single-choice', opciones:4, correct_index:0-3}}, finish:0. Sin null."
+	instr := "JSON: feedback (150-200 palabras narrativas tipo caso clínico + Ref:), next{hallazgos{}, pregunta{tipo:'single-choice', texto tipo razonamiento clínico, opciones:4, correct_index:0-3}}, finish:0. Sin null."
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
@@ -760,7 +762,7 @@ func (h *Handler) Message(c *gin.Context) {
 		if len(searchQuery) > 100 { // Reducido de 150 a 100
 			searchQuery = searchQuery[:100]
 		}
-		ragCtx, ragCancel := context.WithTimeout(ctx, 2*time.Second) // Reducido de 3s a 2s
+		ragCtx, ragCancel := context.WithTimeout(ctx, 5*time.Second) // Aumentado 2s→5s por latencia OpenAI
 		defer ragCancel()
 		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
 		if strings.TrimSpace(refs) != "" {
@@ -777,7 +779,7 @@ func (h *Handler) Message(c *gin.Context) {
 	var instr string
 	if closing {
 		// OPTIMIZADO: Prompt de cierre más corto
-		instr = "JSON: feedback, next{}, finish:1. Feedback: 'Resumen:' + síntesis (≤60 palabras) + diagnóstico. Ref: 1 cita. finish=1."
+		instr = "JSON: feedback, next{}, finish:1. Feedback: Resumen del caso clínico (≤60 palabras) + diagnóstico final + justificación breve. Ref: 1 cita. finish=1."
 	} else {
 		// Build a short memory of prior questions to discourage repetition
 		var prevQs []string
@@ -805,10 +807,12 @@ func (h *Handler) Message(c *gin.Context) {
 		// PROMPTS ULTRA-OPTIMIZADOS: Reducir a lo esencial para acelerar OpenAI
 		instr = strings.Join([]string{
 			"JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', opciones[4], correct_index:0-3}}, finish:0.",
-			"Feedback NEUTRAL (100-150 palabras) SIN evaluar. NO uses 'correcto/incorrecto'.",
+			"Feedback: Razonamiento clínico EDUCATIVO (100-150 palabras) sobre la respuesta del estudiante.",
+			"Explica conceptos médicos relevantes SIN decir 'correcto/incorrecto' explícitamente.",
+			"Pregunta: Tipo razonamiento clínico (¿Qué haría? ¿Qué estudios? ¿Qué diagnóstico diferencial?).",
 			"Fuente: 1-2 refs." + diagnosticInfo,
 			prevList,
-			"Progresa. finish=0.",
+			"Progresa hacia diagnóstico. finish=0.",
 		}, " ")
 	}
 
