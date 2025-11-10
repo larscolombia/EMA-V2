@@ -272,7 +272,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 			startTout = v
 		}
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(startTout)*time.Second)
+	// CRÍTICO: NO usar c.Request.Context() porque tiene timeout de 60s de Nginx/frontend
+	// Crear contexto independiente para permitir que OpenAI tarde hasta startTout segundos
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(startTout)*time.Second)
 	defer cancel()
 	// ELIMINADO: Soft-timeout que causaba fallbacks prematuros cuando OpenAI está en cola
 	// Estrategia: SIEMPRE esperar respuesta real del AI, sin fallback genérico
