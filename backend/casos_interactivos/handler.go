@@ -641,8 +641,8 @@ func (h *Handler) Message(c *gin.Context) {
 		return
 	}
 	// Timeout más largo para dar tiempo a OpenAI runs complejos
-	// 120s permite al cliente.runAndWait (110s) intentar recuperación parcial antes de expirar
-	msgTout := 120 // segundos - suficiente para runs con colas largas en OpenAI
+	// 150s permite al cliente.runAndWait (110s) + margen para recovery + manejo de reintentos
+	msgTout := 150 // segundos - aumentado para prevenir timeouts durante colas largas de OpenAI
 	if s := strings.TrimSpace(os.Getenv("INTERACTIVE_MESSAGE_TIMEOUT_SEC")); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 15 && v <= 180 {
 			msgTout = v

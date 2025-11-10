@@ -1302,8 +1302,14 @@ func truncateString(s string, max int) string {
 // checkActiveRun verifica si existe un run activo o en cola en el thread.
 // Retorna: runID, status, error
 // Si no hay run activo, retorna "", "", nil
+// CRÍTICO: Usa contexto independiente con timeout corto para que funcione incluso si ctx padre está cancelado
 func (c *Client) checkActiveRun(ctx context.Context, threadID string) (string, string, error) {
-	resp, err := c.doJSON(ctx, http.MethodGet, "/threads/"+threadID+"/runs?limit=1&order=desc", nil)
+	// Crear contexto independiente con timeout de 5s para la verificación
+	// Esto permite detectar runs activos incluso cuando el request padre ya timeout
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer checkCancel()
+	
+	resp, err := c.doJSON(checkCtx, http.MethodGet, "/threads/"+threadID+"/runs?limit=1&order=desc", nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -1325,8 +1331,14 @@ func (c *Client) checkActiveRun(ctx context.Context, threadID string) (string, s
 		latestRun := result.Data[0]
 		// Estados activos que indican que el run está procesando
 		if latestRun.Status == "queued" || latestRun.Status == "in_progress" || latestRun.Status == "requires_action" {
+			log.Printf("[checkActiveRun][FOUND] thread=%s run_id=%s status=%s - será reutilizado",
+				threadID, latestRun.ID, latestRun.Status)
 			return latestRun.ID, latestRun.Status, nil
 		}
+		log.Printf("[checkActiveRun][COMPLETED] thread=%s latest_run=%s status=%s - creará nuevo run",
+			threadID, latestRun.ID, latestRun.Status)
+	} else {
+		log.Printf("[checkActiveRun][NO_RUNS] thread=%s - creará primer run", threadID)
 	}
 
 	return "", "", nil
@@ -1475,6 +1487,10 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 	// CRÍTICO: Verificar si ya existe un run activo en este thread
 	// Esto previene crear runs duplicados cuando el usuario reintenta
 	existingRunID, existingStatus, err := c.checkActiveRun(ctx, threadID)
+	if err != nil {
+		// Log error pero continúa creando nuevo run
+		log.Printf("[runAndWait][CHECK_ACTIVE_ERROR] thread=%s err=%v - continuará creando nuevo run", threadID, err)
+	}
 	if err == nil && existingRunID != "" {
 		log.Printf("[runAndWait][ACTIVE_RUN_FOUND] thread=%s existing_run=%s status=%s - reutilizando en lugar de crear nuevo",
 			threadID, existingRunID, existingStatus)
