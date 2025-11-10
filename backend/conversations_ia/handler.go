@@ -588,171 +588,78 @@ Instrucciones:
 	topicChangeWarning := ""
 	if topicChanged {
 		topicChangeWarning = fmt.Sprintf(
-			"⚠️⚠️⚠️ ALERTA DE CAMBIO TEMÁTICO ⚠️⚠️⚠️\n"+
-				"El tema de esta pregunta (%v) es DIFERENTE al tema previo (%v).\n"+
-				"Las fuentes (Biblioteca y PubMed) SE HAN REGENERADO específicamente para el tema ACTUAL.\n"+
-				"PROHIBIDO citar fuentes del tema anterior. USA EXCLUSIVAMENTE las fuentes listadas abajo.\n\n",
+			"🚨🚨🚨 ALERTA CRÍTICA DE CAMBIO TEMÁTICO 🚨🚨🚨\n"+
+				"El tema de esta pregunta (%v) es COMPLETAMENTE DIFERENTE al tema previo (%v).\n"+
+				"Las fuentes (Biblioteca y PubMed) SE HAN REGENERADO específicamente para el tema ACTUAL.\n\n"+
+				"⚠️ PROHIBICIONES ABSOLUTAS - NO NEGOCIABLES:\n"+
+				"1. NO reutilices fuentes del tema anterior\n"+
+				"2. NO cites libros que solo eran relevantes para %v\n"+
+				"3. USA EXCLUSIVAMENTE las fuentes de 'Biblioteca:' y 'PubMed:' listadas ABAJO para %v\n"+
+				"4. Cada cambio de tema requiere un SET COMPLETAMENTE NUEVO de fuentes\n"+
+				"5. Si un libro aparece en 'Biblioteca:' pero NO lo usaste, NO lo cites\n\n"+
+				"VERIFICACIÓN: Antes de citar, pregúntate '¿Esta fuente habla de %v o de %v?'\n"+
+				"Solo cita si habla del tema ACTUAL: %v\n\n",
 			currentKeywords, snap.Keywords,
+			snap.Keywords, currentKeywords,
+			currentKeywords, snap.Keywords, currentKeywords,
 		)
 	}
 
 	// Construir prompt adaptado al modo de integración
 	var input string
 	if integrationMode == "hybrid" {
-		// MODO HÍBRIDO: Integrar vector store y PubMed (VERSIÓN OPTIMIZADA)
+		// MODO HÍBRIDO OPTIMIZADO: Prompt compacto (~50% más corto)
 		input = fmt.Sprintf(
-			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
-				"• Usa ## para headers principales (con \\n\\n antes)\n"+
-				"• Listas numeradas (1. 2. 3.) o con viñetas (-, •)\n"+
-				"• **Negritas** para términos clave\n"+
-				"• Sección ## Fuentes AL FINAL (siempre)\n\n"+
-				"Eres un asistente médico académico especializado. Tu audiencia son médicos, residentes y profesionales de la salud.\n"+
-				"TONO REQUERIDO: Profesional académico, similar a revisiones médicas especializadas (UpToDate, DynaMed).\n"+
-				"LENGUAJE: Técnico, preciso, sin coloquialismos. Evita simplificaciones excesivas.\n"+
-				"ESTILO: Directo y objetivo, sin preámbulos innecesarios ni frases de relleno.\n\n"+
-				"%s"+ // Contexto conversacional
-				"%s"+ // topicChangeWarning
-				"CLASIFICACIÓN DE CONSULTA:\n"+
-				"A) CLÍNICA: Presentación de caso, síntomas, signos, datos demográficos\n"+
-				"B) TEÓRICA: Definiciones, fisiopatología, diagnóstico, tratamiento\n\n"+
-				"SI CLÍNICA (A):\n"+
-				"ANÁLISIS INTERNO (no mostrar explícitamente):\n"+
-				"• Datos demográficos relevantes\n"+
-				"• Síntomas y signos presentes\n"+
-				"• Signos de alarma (red flags)\n"+
-				"• Diagnósticos diferenciales prioritarios (mínimo 3, con fundamento clínico)\n"+
-				"RESPUESTA:\n"+
-				"• Tono: Presentación de caso clínico en revista médica\n"+
-				"• Estructura: Análisis del cuadro → Diagnósticos diferenciales (con criterios) → Abordaje diagnóstico → Manejo recomendado\n"+
-				"• Extensión: 400-600 palabras, bien estructuradas\n"+
-				"• Citar guías clínicas cuando aplique (AHA/ACC, IDSA, ASCO, ESMO, etc.)\n\n"+
-				"SI TEÓRICA (B):\n"+
-				"CONTEXTO IMPORTANTE: Si el contexto previo refiere a un tema específico (ej: 'tumor de Frantz') y la pregunta es genérica\n"+
-				"('¿cuál es el tratamiento?'), DEBES contextualizar la respuesta al tema específico previo (tratamiento del tumor de Frantz).\n"+
-				"RESPUESTA:\n"+
-				"• Tono: Revisión académica especializada (similar a capítulo de libro médico o UpToDate)\n"+
-				"• Estructura: Definición precisa → Epidemiología (si relevante) → Fisiopatología → Manifestaciones clínicas → Criterios diagnósticos → Tratamiento basado en evidencia → Pronóstico\n"+
-				"• Extensión: 400-600 palabras, distribución equilibrada entre secciones\n"+
-				"• Terminología: Nomenclatura internacional actualizada (ICD, WHO, clasificaciones específicas)\n"+
-				"• Referencias a guías: Menciona guías relevantes (AHA/ACC, NCCN, ASCO, ESMO, KDIGO, etc.)\n"+
-				"• Niveles de evidencia: Cuando sea pertinente, indica grado de recomendación (I, IIa, IIb) y nivel de evidencia (A, B, C)\n\n"+
-				"FUENTES:\n"+
-				"Biblioteca:\n%s\n\n"+
-				"PubMed:\n%s\n\n"+
-				"Referencias:\n%s\n\n"+
-				"Pregunta: %s\n\n"+
-				"🚨 REGLAS CRÍTICAS DE CITACIÓN - NO NEGOCIABLES 🚨\n"+
-				"1. USA EXCLUSIVAMENTE la información de las secciones 'Biblioteca:' y 'PubMed:' DE ARRIBA\n"+
-				"2. PROHIBIDO citar fuentes de mensajes anteriores o del contexto conversacional\n"+
-				"3. Si cambió el tema médico respecto a mensajes previos, las fuentes también DEBEN cambiar\n"+
-				"4. PRIORIZA libros de 'Biblioteca:' + COMPLEMENTA con 'PubMed:'\n"+
-				"5. Si solicita PMIDs → incluye PMID: ######\n"+
-				"6. NO inventes ni reutilices fuentes de respuestas anteriores\n\n"+
-				"IMPORTANTE: Cada pregunta tiene su propio conjunto de fuentes. No arrastres citas de temas previos.\n\n"+
-				"## Fuentes\n\n"+
-				"REGLA OBLIGATORIA - CITACIÓN COMPLETA:\n"+
-				"En la sección ### 📚 Libros DEBES listar CADA UNO de los libros que aparecen en 'Biblioteca:' arriba.\n"+
-				"NO omitas ninguno. Si hay 3 libros en 'Biblioteca:', DEBES citar los 3.\n"+
-				"Aunque hayas usado principalmente uno, los demás también proporcionan contexto complementario.\n\n"+
-				"### 📚 Libros\n"+
-				"[Aquí lista TODOS los libros de 'Biblioteca:' usando formato:]\n"+
-				"**Título exacto como aparece arriba.** (s.f.). [Libro texto médico].\n\n"+
-				"### 🔬 PubMed\n"+
-				"**Título artículo.** — *Revista* (PMID: ######, año).\n\n"+
-				"VERIFICACIÓN ANTES DE RESPONDER:\n"+
-				"✓ Cuenta cuántos libros hay en 'Biblioteca:' arriba\n"+
-				"✓ Asegúrate de citar exactamente ese mismo número en ### 📚 Libros\n"+
-				"✓ Usa **negritas** títulos libros, *itálicas* revistas PubMed\n"+
-				"%s\n",
-			conversationContext, topicChangeWarning, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
-		)
-	} else if integrationMode == "vector_only" {
-		input = fmt.Sprintf(
-			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
-				"• Usa ## para headers principales (con \\n\\n antes de cada ##)\n"+
-				"• Secciones claras (## Resumen, ## Análisis, ## Recomendaciones)\n"+
-				"• Listas numeradas (1. 2. 3.) o con viñetas (-)\n"+
-				"• **Negritas** para términos clave médicos\n"+
-				"• Sección ## Fuentes AL FINAL (siempre)\n"+
-				"NO usar bloques de código ni XML/HTML. Solo Markdown limpio y profesional.\n\n"+
-				"Asistente médico especializado. Respuestas basadas EXCLUSIVAMENTE en la biblioteca médica proporcionada.\n\n"+
-				"%s"+ // Contexto conversacional si existe
-				"%s"+ // topicChangeWarning
-				"CLASIFICACIÓN DE CONSULTA:\n"+
-				"A) CLÍNICA: edad, síntomas, signos, primera persona ('Tengo X', 'Me duele Y')\n"+
-				"B) TEÓRICA: definiciones, fisiopatología, tratamientos\n\n"+
-				"SI CLÍNICA (A):\n"+
-				"RAZONAMIENTO INTERNO (no mostrar al usuario):\n"+
-				"Construye mentalmente: Demografía, Síntomas completos, Duración, Signos alarma, 3 Hipótesis con probabilidad\n"+
-				"Reglas: ACUMULA datos de mensajes previos, NO resetees, mantén coherencia temática\n\n"+
-				"RESPUESTA (MÉDICO-A-MÉDICO):\n"+
-				"Lenguaje técnico preciso, tono profesional entre colegas médicos.\n"+
-				"Estructura: Análisis clínico → Diferenciales → Recomendaciones (300-500 palabras)\n"+
-				"NO usar marcadores '[STATE]', 'Demografía:', etc. Lenguaje fluido.\n\n"+
-				"SI TEÓRICA (B):\n"+
-				"TONO: Médico-a-médico (técnico, preciso, sin simplificar)\n"+
-				"Estructura: Definición → Fisiopatología → Manifestaciones → Diagnóstico → Tratamiento (300-500 palabras)\n"+
-				"Menciona guías clínicas relevantes cuando corresponda.\n\n"+
-				"Contexto (Biblioteca Médica):\n%s\n\n"+
-				"Pregunta del usuario:\n%s\n\n"+
-				"REGLAS GENERALES:\n"+
-				"1. Respuestas técnicamente precisas y completas\n"+
-				"2. SOLO información de la Biblioteca Médica proporcionada\n"+
-				"3. Tono profesional médico (no dirigido a pacientes)\n"+
-				"4. Si solicita N hipótesis/signos → proporcionar EXACTAMENTE ese número\n"+
-				"5. Evitar párrafos excesivamente largos (máx. 6-8 líneas)\n\n"+
-				"ESTRUCTURA MARKDOWN SUGERIDA:\n"+
-				"## Título Específico\n"+
-				"## Resumen\n"+
-				"- Punto clave 1\n"+
-				"- Punto clave 2\n"+
-				"## Análisis/Desarrollo\n"+
-				"- Hallazgo 1\n"+
-				"- Hallazgo o razonamiento 2\n"+
-				"> Alerta/nota crítica (si aplica)\n"+
-				"## Recomendaciones / Pasos siguientes\n"+
-				"- Acción 1\n"+
-				"- Acción 2\n\n"+
-				"═══ BIBLIOGRAFÍA — NUNCA OMITIR ═══\n"+
-				"⚠️ REGLA CRÍTICA: Tu respuesta DEBE terminar con la sección ## Fuentes.\n"+
-				"NO es opcional. SIEMPRE incluye esta sección, aunque uses una sola fuente.\n\n"+
-				"## Fuentes\n\n"+
-				"### 📚 Libros de Texto Médico\n"+
-				"- Formato: **Título del libro.** (año). [Libro de texto médico].\n"+
-				"- Lista TODOS los libros que usaste con viñetas (-).\n"+
-				"- USA **negritas** para títulos.\n"+
-				"%s\n",
-			conversationContext, topicChangeWarning, ctxVec, prompt, apaInstructions,
-		)
-	} else {
-		// MODO PUBMED ONLY (OPTIMIZADO)
-		input = fmt.Sprintf(
-			"FORMATO MARKDOWN PROFESIONAL - OBLIGATORIO:\n"+
-				"• Usa ## para headers (con \\n\\n antes de cada ##)\n"+
-				"• Listas numeradas (1. 2. 3.) o con viñetas (-)\n"+
-				"• **Negritas** para términos clave\n"+
-				"• Sección ## Fuentes AL FINAL (siempre)\n\n"+
-				"Asistente médico especializado. Respuestas basadas EXCLUSIVAMENTE en evidencia científica de PubMed.\n\n"+
-				"%s"+ // Contexto conversacional
-				"%s"+ // topicChangeWarning
-				"CLASIFICACIÓN:\n"+
-				"A) CLÍNICA: síntomas/edad/'Tengo X' → Razonamiento interno + Hipótesis. MÉDICO-A-MÉDICO, técnico\n"+
-				"B) TEÓRICA: 'Qué es X' → Definición + Fisiopatología + Manifestaciones + Dx + Tx\n"+
-				"Mantén coherencia con contexto previo.\n\n"+
-				"PubMed:\n%s\n\n"+
-				"Referencias:\n%s\n\n"+
+			"Asistente médico académico para profesionales. Tono: técnico preciso (UpToDate-style). Markdown: ##headers, **negritas**, listas.\n\n"+
+				"%s"+ // topicChangeWarning (solo si cambió tema)
+				"%s"+ // Contexto conversacional (solo si NO cambió tema)
+				"FUENTES:\nBiblioteca:\n%s\n\nPubMed:\n%s\n\nRefs:\n%s\n\n"+
 				"Pregunta: %s\n\n"+
 				"REGLAS:\n"+
-				"1. Usar EXCLUSIVAMENTE información de PubMed proporcionada arriba\n"+
-				"2. Si solicita PMIDs → incluir PMID: ######\n"+
-				"3. Si solicita N elementos → proporcionar EXACTAMENTE N\n"+
-				"4. Tono profesional médico (300-500 palabras)\n"+
-				"5. NO usar marcadores [STATE] ni bloques de código\n\n"+
+				"1. USA SOLO info de Biblioteca/PubMed arriba\n"+
+				"2. NO cites fuentes de mensajes previos si cambió tema\n"+
+				"3. Prioriza Biblioteca + complementa PubMed\n"+
+				"4. 400-600 palabras, estructura: Definición→Fisiopatología→Clínica→Dx→Tx\n"+
+				"5. Guías clínicas (AHA/ACC, NCCN, etc.) cuando aplique\n\n"+
 				"## Fuentes\n"+
-				"### 🔬 PubMed\n"+
-				"**Título del artículo.** — *Nombre de la Revista* (PMID: ######, año).\n"+
-				"Listar TODOS los artículos utilizados de la sección Referencias arriba.\n",
-			conversationContext, topicChangeWarning, ctxPub, refsBlock, prompt,
+				"OBLIGATORIO: Cita SOLO libros que USASTE directamente (no tangenciales).\n"+
+				"### 📚 Libros\n**Título usado.** (s.f.). [Libro médico].\n"+
+				"### 🔬 PubMed\n**Título.** — *Revista* (PMID: ####, año).\n"+
+				"%s",
+			topicChangeWarning, conversationContext, ctxVec, ctxPub, refsBlock, prompt, apaInstructions,
+		)
+	} else if integrationMode == "vector_only" {
+		// MODO VECTOR OPTIMIZADO: Prompt compacto
+		input = fmt.Sprintf(
+			"Asistente médico especializado. Markdown: ##headers, **negritas**, listas. SOLO usa biblioteca médica.\n\n"+
+				"%s"+ // topicChangeWarning
+				"%s"+ // Contexto conversacional
+				"Biblioteca:\n%s\n\nPregunta: %s\n\n"+
+				"REGLAS:\n"+
+				"1. SOLO info de Biblioteca (no inventes)\n"+
+				"2. Tono médico-a-médico, técnico preciso\n"+
+				"3. Estructura: Def→Fisiopato→Clínica→Dx→Tx (300-500 palabras)\n"+
+				"4. Guías clínicas cuando aplique\n\n"+
+				"## Fuentes\n"+
+				"### 📚 Libros\nCita SOLO libros que USASTE. Precisión > Cantidad.\n"+
+				"**Título.** (s.f.). [Libro médico].\n"+
+				"%s",
+			topicChangeWarning, conversationContext, ctxVec, prompt, apaInstructions,
+		)
+	} else {
+		// MODO PUBMED OPTIMIZADO
+		input = fmt.Sprintf(
+			"Asistente médico. Markdown: ##headers, **negritas**. SOLO evidencia PubMed.\n\n"+
+				"%s"+ // topicChangeWarning
+				"%s"+ // Contexto conversacional
+				"PubMed:\n%s\n\nRefs:\n%s\n\nPregunta: %s\n\n"+
+				"REGLAS:\n"+
+				"1. SOLO info PubMed (no inventes)\n"+
+				"2. Tono médico-profesional (300-500 palabras)\n"+
+				"3. Si pide PMIDs → incluye PMID: ####\n\n"+
+				"## Fuentes\n### 🔬 PubMed\n**Título.** — *Revista* (PMID: ####, año).\n"+
+				"Cita TODOS los artículos de Referencias arriba.",
+			topicChangeWarning, conversationContext, ctxPub, refsBlock, prompt,
 		)
 	}
 	if err := ctx.Err(); err != nil {
