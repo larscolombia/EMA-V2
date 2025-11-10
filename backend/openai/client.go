@@ -1434,10 +1434,10 @@ func (c *Client) pollAndGetResponse(ctx context.Context, threadID string, runID 
 
 	// Fetch la respuesta final
 	fetchStart := time.Now()
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer fetchCancel()
 
-	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=5&order=desc", nil)
 	if merr != nil {
 		log.Printf("[pollAndGetResponse][GetMessages][ERROR] thread=%s elapsed_ms=%d err=%v", threadID, time.Since(fetchStart).Milliseconds(), merr)
 		return "", merr
@@ -1662,13 +1662,13 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 		}
 	}
 	// fetch last assistant message
-	// CRÍTICO: Usar contexto independiente porque GetMessages puede tardar 60-90s en threads grandes
-	// y el contexto del run puede estar cerca de expirar
+	// CRÍTICO: Usar contexto independiente porque GetMessages puede tardar mucho en threads grandes
+	// Reducido de 90s→30s y limit 10→5 para optimizar threads acumulados
 	fetchStart := time.Now()
-	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer fetchCancel()
 
-	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=10&order=desc", nil)
+	mresp, merr := c.doJSON(fetchCtx, http.MethodGet, "/threads/"+threadID+"/messages?limit=5&order=desc", nil)
 	if merr != nil {
 		log.Printf("[runAndWait][GetMessages][ERROR] thread=%s elapsed_ms=%d err=%v", threadID, time.Since(fetchStart).Milliseconds(), merr)
 		return "", merr
