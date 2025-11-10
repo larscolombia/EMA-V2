@@ -380,19 +380,17 @@ func (h *Handler) StartCase(c *gin.Context) {
 	}
 
 	userPrompt := strings.Join([]string{
-		"INICIO DE SESIÓN (rol system): Recibirás el caso clínico completo y NO comentarás. Guarda para usar más adelante.",
-		"FASE DE ANAMNESIS: En 'feedback' muestra la historia clínica completa (síntomas, antecedentes, contexto social/familiar, evolución) con 3-4 párrafos detallados.",
-		"Incluye motivo de consulta, historia de la enfermedad actual, antecedentes, examen físico inicial. Al final del feedback añade una línea 'Referencias:' seguida de UNA cita abreviada basada en el vector " + h.vectorID + " (no menciones el id) o un PMID.",
-		"Formato estricto: JSON con keys: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones:[4 opciones claras], correct_index:0..3}}, finish:0. La pregunta debe ser de OPCIÓN MÚLTIPLE (single-choice).",
+		"INICIO: Recibirás caso clínico completo. NO comentes, solo guarda para usar después.",
+		"FASE ANAMNESIS: En 'feedback' presenta historia clínica completa con 3-4 párrafos (síntomas, antecedentes, contexto, evolución).",
+		"Incluye motivo consulta, HEA, antecedentes, examen físico. Termina con 'Referencias:' + 1 cita médica.",
+		"Formato JSON: feedback, next{hallazgos{}, pregunta{tipo:'single-choice', texto, opciones:[4], correct_index:0-3}}, finish:0.",
 		"Paciente: edad=" + strings.TrimSpace(req.Age) + ", sexo=" + strings.TrimSpace(req.Sex) + ", gestante=" + boolToStr(req.Pregnant) + ".",
 	}, " ")
 	instr := strings.Join([]string{
-		"Responde SOLO en JSON válido con claves: feedback, next{hallazgos, pregunta{tipo, texto, opciones, correct_index}}, finish.",
-		"'feedback' (200-300 palabras) termina con una línea 'Referencias:' y 1 cita (libro guía o PMID) sin mencionar vectores ni IDs internos.",
-		"CRÍTICO: 'tipo' debe ser exactamente 'single-choice', 'opciones' debe ser un array con 4 opciones clínicas claras y 'correct_index' un entero válido.",
-		"La pregunta debe ser de opción múltiple (una sola correcta), no abierta.",
-		"No omitas claves ni uses nombres distintos. Sin null ni cadenas vacías. Usa {} si no hay hallazgos. finish=0.",
-		"Cada pregunta debe ser única y coherente con el caso. Idioma: español. Sin markdown.",
+		"JSON: feedback, next{hallazgos, pregunta{tipo, texto, opciones, correct_index}}, finish(0).",
+		"'feedback' (200-280 palabras) termina con 'Referencias:' + 1 cita (libro/PMID, sin IDs internos).",
+		"CRÍTICO: tipo='single-choice', opciones=[4 opciones clínicas], correct_index=int válido (0-3).",
+		"Sin null, sin vacíos. hallazgos={} si no hay. finish=0. Español, sin markdown.",
 	}, " ")
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
@@ -524,6 +522,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 					}
 					if len(opts) > 0 {
 						h.lastOptions[threadID] = opts
+						log.Printf("[StartCase][STORE_OPTIONS] thread=%s stored %d options", threadID, len(opts))
+					} else {
+						log.Printf("[StartCase][STORE_OPTIONS_EMPTY] thread=%s rawOpts exists but no valid strings", threadID)
 					}
 				} else if rawStr, ok := pq["opciones"].([]string); ok {
 					var opts []string
@@ -532,7 +533,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 					}
 					if len(opts) > 0 {
 						h.lastOptions[threadID] = opts
+						log.Printf("[StartCase][STORE_OPTIONS] thread=%s stored %d options (string array)", threadID, len(opts))
 					}
+				} else {
+					log.Printf("[StartCase][STORE_OPTIONS_MISSING] thread=%s opciones field not found or wrong type", threadID)
 				}
 			}
 		}
@@ -1022,6 +1026,7 @@ func (h *Handler) Message(c *gin.Context) {
 						}
 						if len(opts) > 0 {
 							h.lastOptions[threadID] = opts
+							log.Printf("[STORE_OPTIONS] thread=%s stored %d options from new question", threadID, len(opts))
 						}
 					} else if rawStr, ok := pq["opciones"].([]string); ok {
 						var opts []string
@@ -1030,6 +1035,7 @@ func (h *Handler) Message(c *gin.Context) {
 						}
 						if len(opts) > 0 {
 							h.lastOptions[threadID] = opts
+							log.Printf("[STORE_OPTIONS] thread=%s stored %d options (string array) from new question", threadID, len(opts))
 						}
 					}
 				}
@@ -1149,6 +1155,61 @@ func (h *Handler) Message(c *gin.Context) {
 
 // fallbackStart builds a minimal but valid response when assistant fails
 func (h *Handler) fallbackStart(req startReq, threadID string) map[string]any {
+	minData := h.minTurn()
+
+	// CRÍTICO: Almacenar estado inicial para que el primer mensaje pueda evaluar correctamente
+	if threadID != "" {
+		h.mu.Lock()
+		h.turnCount[threadID] = 1
+
+		// Extraer y almacenar correct_index y opciones del minTurn
+		if nx, ok := minData["next"].(map[string]any); ok {
+			if pq, ok := nx["pregunta"].(map[string]any); ok {
+				if ci, ok := pq["correct_index"].(float64); ok {
+					h.lastCorrectIndex[threadID] = int(ci)
+					log.Printf("[fallbackStart][STORE_CI] thread=%s storing_ci=%d from fallback", threadID, int(ci))
+				} else if ci2, ok := pq["correct_index"].(int); ok {
+					h.lastCorrectIndex[threadID] = ci2
+					log.Printf("[fallbackStart][STORE_CI] thread=%s storing_ci=%d from fallback (int)", threadID, ci2)
+				}
+
+				if txt, ok := pq["texto"].(string); ok {
+					h.lastQuestionText[threadID] = strings.TrimSpace(txt)
+				}
+
+				h.lastQuestionType[threadID] = "single-choice"
+
+				// Almacenar opciones
+				if rawOpts, ok := pq["opciones"].([]any); ok {
+					var opts []string
+					for _, v := range rawOpts {
+						if s, ok := v.(string); ok {
+							opts = append(opts, strings.TrimSpace(s))
+						}
+					}
+					if len(opts) > 0 {
+						h.lastOptions[threadID] = opts
+						log.Printf("[fallbackStart][STORE_OPTIONS] thread=%s stored %d options from fallback", threadID, len(opts))
+					}
+				} else if rawStr, ok := pq["opciones"].([]string); ok {
+					var opts []string
+					for _, s := range rawStr {
+						opts = append(opts, strings.TrimSpace(s))
+					}
+					if len(opts) > 0 {
+						h.lastOptions[threadID] = opts
+						log.Printf("[fallbackStart][STORE_OPTIONS] thread=%s stored %d options (string array) from fallback", threadID, len(opts))
+					}
+				}
+
+				if q := extractQuestionText(minData); q != "" {
+					h.askedQuestions[threadID] = append(h.askedQuestions[threadID], q)
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+
 	return map[string]any{
 		"case": map[string]any{
 			"id":                   0,
@@ -1164,7 +1225,7 @@ func (h *Handler) fallbackStart(req startReq, threadID string) map[string]any {
 			"final_diagnosis":      "",
 			"management":           "",
 		},
-		"data":           h.minTurn(),
+		"data":           minData,
 		"thread_id":      threadID,
 		"schema_version": interactiveSchemaVersion,
 	}
