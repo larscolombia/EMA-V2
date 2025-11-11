@@ -381,14 +381,34 @@ func (h *Handler) StartCase(c *gin.Context) {
 	}
 
 	// Prompts ultra-optimizados para reducir tiempo de procesamiento en OpenAI
+	// Generar variabilidad en los casos para evitar repetición
+	// Usar timestamp para seed de variación (diferentes casos en diferentes momentos)
+	seed := time.Now().Unix() % 100
+	var caseVariety string
+	switch {
+	case seed < 20:
+		caseVariety = "Caso de emergencia aguda."
+	case seed < 40:
+		caseVariety = "Caso de medicina interna con evolución subaguda."
+	case seed < 60:
+		caseVariety = "Caso con síntomas atípicos o presentación inusual."
+	case seed < 80:
+		caseVariety = "Caso de atención primaria con diagnóstico diferencial amplio."
+	default:
+		caseVariety = "Caso complejo multisistémico."
+	}
+
 	userPrompt := strings.Join([]string{
-		"Presenta caso clínico inicial.",
+		caseVariety,
+		"Presenta caso clínico inicial DIVERSO y realista.",
 		"Anamnesis (2-3 párrafos): síntomas actuales, tiempo evolución, antecedentes relevantes.",
+		"EVITA casos repetitivos comunes (fiebre simple, apendicitis típica si ya generaste muchos).",
+		"Usa patologías variadas según edad: pediátricos (bronquiolitis, invaginación, Kawasaki), adultos (IAM, TEP, stroke, pancreatitis), geriátricos (fractura cadera, neumonía, ICC).",
 		"Redacta como PRESENTACIÓN DE PACIENTE (no como quiz).",
 		"JSON: feedback, next{hallazgos{}, pregunta{tipo, texto, opciones[4], correct_index:0-3}}, finish:0.",
 		"Px: " + req.Age + ", " + req.Sex + ", gest=" + boolToStr(req.Pregnant),
 	}, " ")
-	instr := "JSON: feedback (150-200 palabras narrativas tipo caso clínico), next{hallazgos{}, pregunta{tipo:'single-choice', texto tipo razonamiento clínico, opciones:4, correct_index:0-3}}, finish:0. Sin null. NO incluyas referencias en feedback."
+	instr := "JSON: feedback (150-200 palabras narrativas tipo caso clínico), next{hallazgos{}, pregunta{tipo:'single-choice', texto tipo razonamiento clínico, opciones:4, correct_index:0-3}}, finish:0. Sin null. NO incluyas referencias en feedback. GENERA CASOS VARIADOS, evita repetir siempre las mismas patologías."
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
@@ -1405,29 +1425,10 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
 
-	// Normalizar referencias: siempre sanitizar el feedback y extraer solo citas válidas
-	sanitized := sanitizeReferences(fbOriginal)
-	hasValidRefs := false
-
-	// Buscar si hay líneas después de "Referencias:" que sean citas válidas
-	lines := strings.Split(sanitized, "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "referencias:") {
-			// Revisar las siguientes líneas para ver si hay referencias válidas
-			for j := i + 1; j < len(lines) && j < i+10; j++ {
-				refLine := strings.TrimSpace(lines[j])
-				if refLine != "" && !strings.HasSuffix(refLine, ":") {
-					hasValidRefs = true
-					break
-				}
-			}
-			break
-		}
-	}
-
-	if !hasValidRefs {
-		finalLines = append(finalLines, "Referencias: Fuente clínica estándar")
-	}
+	// CRÍTICO: NO agregar sección de referencias en el resumen final
+	// Las referencias ya están en el feedback acumulado de cada turno
+	// Agregar una sección duplicada aquí genera confusión
+	// El frontend ya muestra las referencias de cada mensaje individual
 
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
@@ -2127,37 +2128,58 @@ func sanitizeReferences(s string) string {
 		// Verificar si la línea parece una referencia válida
 		isValidRef := false
 
-		// Indicadores de referencia válida:
-		// 1. Contiene año (4 dígitos)
-		if regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed) {
-			isValidRef = true
+		// PRIMERO: Rechazar explícitamente líneas que son claramente texto narrativo, NO referencias
+		invalidPatterns := []string{
+			"questions (", "question:", "pregunta", "dificultad para", "sus padres",
+			"desarrolló", "presentó", "el paciente", "la paciente", "acudió", "consulta",
+			"hace varios", "durante la semana", "tenía un dolor", "impedía hacer",
+			"criterios:", "hipertrofia", "adenopatías", "ausencia de", "edad:", "tabla",
+			"entidades propias", "causantes de", "manual terapéutica",
 		}
-		// 2. Contiene PMID o DOI
-		if strings.Contains(lower, "pmid") || strings.Contains(lower, "doi") {
-			isValidRef = true
-		}
-		// 3. Contiene URL
-		if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") {
-			isValidRef = true
-		}
-		// 4. Empieza con guion o número (lista de referencias)
-		if regexp.MustCompile(`^\s*[-•*]\s+`).MatchString(trimmed) || regexp.MustCompile(`^\s*\d+[\.\)]\s+`).MatchString(trimmed) {
-			// Verificar que tenga contenido sustancial (no solo "- Texto genérico")
-			if len(trimmed) > 20 && (strings.Contains(trimmed, ":") || strings.Contains(trimmed, ";") || regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed)) {
-				isValidRef = true
-			}
-		}
-		// 5. Contiene nombres de libros médicos comunes (Harrison, Robbins, Cecil, etc.)
-		medicalBooks := []string{"harrison", "robbins", "cecil", "tintinalli", "nelson", "williams", "guyton", "netter", "sabiston", "schwartz", "uptodate"}
-		for _, book := range medicalBooks {
-			if strings.Contains(lower, book) {
-				isValidRef = true
+		for _, pattern := range invalidPatterns {
+			if strings.Contains(lower, pattern) {
+				isValidRef = false
 				break
 			}
 		}
-		// 6. Contiene "Base médica:" o "PubMed:" (referencias RAG)
-		if strings.Contains(trimmed, "Base médica:") || strings.Contains(lower, "pubmed:") {
-			isValidRef = true
+
+		// Solo si no fue rechazado, verificar indicadores positivos
+		if !isValidRef {
+			// Indicadores de referencia válida:
+			// 1. Contiene año (4 dígitos) Y algo más característico de cita
+			if regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed) {
+				// Debe tener también punto y coma, dos puntos, o punto (formato de cita)
+				if strings.Contains(trimmed, ";") || strings.Count(trimmed, ":") >= 1 || strings.Count(trimmed, ".") >= 2 {
+					isValidRef = true
+				}
+			}
+			// 2. Contiene PMID o DOI (muy específico de referencias)
+			if strings.Contains(lower, "pmid") || strings.Contains(lower, "doi") {
+				isValidRef = true
+			}
+			// 3. Contiene URL (muy específico de referencias)
+			if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") {
+				isValidRef = true
+			}
+			// 4. Empieza con guion o número (lista de referencias) Y tiene formato de cita
+			if regexp.MustCompile(`^\s*[-•*]\s+`).MatchString(trimmed) || regexp.MustCompile(`^\s*\d+[\.\)]\s+`).MatchString(trimmed) {
+				// Verificar que tenga contenido sustancial Y formato de cita (año, puntuación de journal)
+				if len(trimmed) > 30 && (regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed) || strings.Contains(trimmed, "vol") || strings.Contains(lower, "ed.")) {
+					isValidRef = true
+				}
+			}
+			// 5. Contiene nombres de libros médicos comunes (muy específico)
+			medicalBooks := []string{"harrison", "robbins", "cecil", "tintinalli", "nelson", "williams", "guyton", "netter", "sabiston", "schwartz", "uptodate", "kumar", "goldman"}
+			for _, book := range medicalBooks {
+				if strings.Contains(lower, book) {
+					isValidRef = true
+					break
+				}
+			}
+			// 6. Contiene "Base médica:" o "PubMed:" (referencias RAG generadas por el sistema)
+			if strings.Contains(trimmed, "Base médica:") || strings.Contains(lower, "pubmed:") || strings.Contains(lower, "fuente clínica") {
+				isValidRef = true
+			}
 		}
 
 		if isValidRef {
