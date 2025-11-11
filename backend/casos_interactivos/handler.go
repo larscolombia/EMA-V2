@@ -2320,11 +2320,77 @@ func (h *Handler) collectInteractiveEvidenceRaw(ctx context.Context, query strin
 	// 2) PubMed - Habilitado para enriquecer referencias bibliográficas
 	if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
 		log.Printf("[collectInteractiveEvidence] encontrado en PubMed, len=%d", len(pm))
-		p := strings.TrimSpace(pm)
-		if len(p) > 200 { // Reducir para mantener velocidad
-			p = p[:200] + "…"
+
+		// Parsear JSON de PubMed para formatear correctamente
+		var pmData map[string]any
+		if err := json.Unmarshal([]byte(pm), &pmData); err == nil {
+			// Extraer estudios del JSON
+			if studies, ok := pmData["studies"].([]any); ok && len(studies) > 0 {
+				// Tomar solo el primer estudio más relevante
+				if study, ok := studies[0].(map[string]any); ok {
+					// Formatear: "Autores (año). Título. Journal"
+					authors := ""
+					if authList, ok := study["authors"].([]any); ok && len(authList) > 0 {
+						if firstAuthor, ok := authList[0].(map[string]any); ok {
+							if ln, ok := firstAuthor["LastName"].(string); ok {
+								authors = ln
+								// Si hay más autores, agregar "et al."
+								if len(authList) > 1 {
+									authors += " et al."
+								}
+							}
+						}
+					}
+
+					year := ""
+					if y, ok := study["year"].(string); ok {
+						year = y
+					}
+
+					title := ""
+					if t, ok := study["title"].(string); ok {
+						title = strings.TrimSpace(t)
+						// Limitar título a 80 caracteres
+						if len(title) > 80 {
+							title = title[:77] + "..."
+						}
+					}
+
+					journal := ""
+					if j, ok := study["journal"].(string); ok {
+						journal = strings.TrimSpace(j)
+						// Limitar journal a 40 caracteres
+						if len(journal) > 40 {
+							journal = journal[:37] + "..."
+						}
+					}
+
+					// Construir referencia formateada
+					var parts []string
+					if authors != "" && year != "" {
+						parts = append(parts, fmt.Sprintf("%s (%s)", authors, year))
+					} else if authors != "" {
+						parts = append(parts, authors)
+					}
+
+					if title != "" {
+						parts = append(parts, title)
+					}
+
+					if journal != "" {
+						parts = append(parts, journal)
+					}
+
+					if len(parts) > 0 {
+						formatted := strings.Join(parts, ". ")
+						refs = append(refs, formatted)
+						log.Printf("[collectInteractiveEvidence] PubMed formateado: %s", formatted)
+					}
+				}
+			}
+		} else {
+			log.Printf("[collectInteractiveEvidence] error parseando JSON de PubMed: %v", err)
 		}
-		refs = append(refs, "PubMed: "+p)
 	} else if err != nil {
 		log.Printf("[collectInteractiveEvidence] error SearchPubMed: %v", err)
 	}
