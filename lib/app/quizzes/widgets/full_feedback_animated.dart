@@ -96,7 +96,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
     if (parsed.scoreBlock.isNotEmpty) {
       children.add(
         Text(
-          'Evaluación Final:',
+          'Puntaje y Calificacion:',
           style: labelStyle,
           textAlign: TextAlign.justify,
         ),

@@ -1065,32 +1065,7 @@ func (h *Handler) Message(c *gin.Context) {
 			data["finish"] = 0.0
 		}
 
-		// Añadir referencias también en turnos intermedios (no solo en cierre)
-		func() {
-			defer func() { _ = recover() }()
-			fb := toStringSafe(data["feedback"])
-			q := fb
-			if strings.TrimSpace(q) == "" {
-				q = extractQuestionText(data)
-			}
-			if strings.TrimSpace(q) == "" {
-				q = req.Mensaje
-			}
-			if strings.TrimSpace(q) == "" {
-				log.Printf("[Message][REFS] thread=%s: query vacío, sin referencias", threadID)
-				return
-			}
-			log.Printf("[Message][REFS] thread=%s: buscando referencias con query len=%d", threadID, len(q))
-			refs := h.collectInteractiveEvidence(ctx, q)
-			if strings.TrimSpace(refs) == "" {
-				log.Printf("[Message][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
-				return
-			}
-			log.Printf("[Message][REFS] thread=%s: referencias encontradas, agregando al feedback", threadID)
-			withRefs := appendRefs(fb, refs)
-			// Limpiar referencias duplicadas y normalizar formato
-			data["feedback"] = sanitizeReferences(withRefs)
-		}()
+		// NO agregar referencias en turnos intermedios (solo al final en resumen)
 	} else {
 		// Evaluar también la última respuesta antes de cerrar si procede
 		_, _ = h.evaluateLastAnswer(threadID, req.Mensaje, req.AnswerIndex, data)
