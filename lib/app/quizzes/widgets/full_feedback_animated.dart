@@ -190,7 +190,8 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
     // References (markdown) - Solo mostrar si hay contenido REAL (no solo encabezado vacío)
     final cleanRefs = parsed.references.trim();
-    if (cleanRefs.isNotEmpty && cleanRefs.length > 10) {  // Al menos 10 caracteres para evitar solo "Referencias:"
+    if (cleanRefs.isNotEmpty && cleanRefs.length > 10) {
+      // Al menos 10 caracteres para evitar solo "Referencias:"
       final mdRef = _normalizeMarkdown(cleanRefs);
       final startsWithHeading = RegExp(r'^\s{0,3}#{1,6}\s').hasMatch(mdRef);
       if (!startsWithHeading) {
@@ -426,37 +427,39 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
   _Parsed _parseFitGlobal(String s) {
     final norm = s.replaceAll('\r\n', '\n');
-    
+
     // Estrategia mejorada: buscar índices de secciones principales
     final lines = norm.split('\n');
     String score = '';
     String feedback = '';
     String references = '';
-    
+
     int refStartIdx = -1;
     int scoreStartIdx = -1;
     int retroStartIdx = -1;
-    
+
     // Primera pasada: identificar índices de inicio de cada sección
     for (int i = 0; i < lines.length; i++) {
       final trimmed = lines[i].trim();
       final lower = trimmed.toLowerCase();
-      
+
       if (lower.startsWith('referencias:') && refStartIdx == -1) {
         refStartIdx = i;
       } else if ((lower.startsWith('puntaje y calificación') ||
-          lower.startsWith('puntaje y calificacion') ||
-          lower.startsWith('puntuación') ||
-          lower.startsWith('puntuacion') ||
-          lower.startsWith('calificación') ||
-          lower.startsWith('calificacion')) && scoreStartIdx == -1) {
+              lower.startsWith('puntaje y calificacion') ||
+              lower.startsWith('puntuación') ||
+              lower.startsWith('puntuacion') ||
+              lower.startsWith('calificación') ||
+              lower.startsWith('calificacion')) &&
+          scoreStartIdx == -1) {
         scoreStartIdx = i;
       } else if ((lower.startsWith('retroalimentación') ||
-          lower.startsWith('retroalimentacion')) && retroStartIdx == -1) {
+              lower.startsWith('retroalimentacion')) &&
+          retroStartIdx == -1) {
         retroStartIdx = i;
       }
     }
-    
+
     // Segunda pasada: extraer contenido de cada sección
     if (scoreStartIdx >= 0) {
       final scoreLines = <String>[];
@@ -464,31 +467,37 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
         if (i == refStartIdx || i == retroStartIdx) break;
         scoreLines.add(lines[i]);
       }
-      score = scoreLines.join('\n')
-          .replaceFirst(
-            RegExp(
-              r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
-              caseSensitive: false,
-            ),
-            '',
-          )
-          .trim();
+      score =
+          scoreLines
+              .join('\n')
+              .replaceFirst(
+                RegExp(
+                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
+                  caseSensitive: false,
+                ),
+                '',
+              )
+              .trim();
     }
-    
+
     if (retroStartIdx >= 0) {
       final feedbackLines = <String>[];
       for (int i = retroStartIdx; i < lines.length; i++) {
-        if (i == refStartIdx || (scoreStartIdx > retroStartIdx && i == scoreStartIdx)) break;
+        if (i == refStartIdx ||
+            (scoreStartIdx > retroStartIdx && i == scoreStartIdx))
+          break;
         feedbackLines.add(lines[i]);
       }
-      feedback = feedbackLines.join('\n')
-          .replaceFirst(
-            RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
-            '',
-          )
-          .trim();
+      feedback =
+          feedbackLines
+              .join('\n')
+              .replaceFirst(
+                RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
+                '',
+              )
+              .trim();
     }
-    
+
     if (refStartIdx >= 0) {
       final refLines = <String>[];
       // Tomar TODAS las líneas después de "Referencias:" hasta el final
@@ -505,7 +514,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       }
       references = refLines.join('\n').trim();
     }
-    
+
     // Fallback: si no se detectaron secciones, usar lógica original por bloques
     if (score.isEmpty && feedback.isEmpty && references.isEmpty) {
       final parts = norm.split('\n\n');
@@ -520,32 +529,35 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
             lt.startsWith('puntuacion') ||
             lt.startsWith('calificación') ||
             lt.startsWith('calificacion')) {
-          score = t
-              .replaceFirst(
-                RegExp(
-                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
-                  caseSensitive: false,
-                ),
-                '',
-              )
-              .trim();
+          score =
+              t
+                  .replaceFirst(
+                    RegExp(
+                      r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
+                      caseSensitive: false,
+                    ),
+                    '',
+                  )
+                  .trim();
         } else if (lt.startsWith('retroalimentación') ||
             lt.startsWith('retroalimentacion')) {
-          final clean = t
-              .replaceFirst(
-                RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
-                '',
-              )
-              .trim();
+          final clean =
+              t
+                  .replaceFirst(
+                    RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
+                    '',
+                  )
+                  .trim();
           if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
           bufFeedback.write(clean);
         } else if (lt.startsWith('referencias')) {
-          references = t
-              .replaceFirst(
-                RegExp(r'^referencias:\s*', caseSensitive: false),
-                '',
-              )
-              .trim();
+          references =
+              t
+                  .replaceFirst(
+                    RegExp(r'^referencias:\s*', caseSensitive: false),
+                    '',
+                  )
+                  .trim();
         } else {
           if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
           bufFeedback.write(t);
@@ -553,7 +565,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       }
       feedback = bufFeedback.toString();
     }
-    
+
     return _Parsed(
       scoreBlock: score,
       feedbackBlock: feedback,

@@ -597,7 +597,7 @@ func (h *Handler) StartCase(c *gin.Context) {
 	// ELIMINADO: Ya NO anexar referencias al campo anamnesis
 	// Las referencias ahora se manejan en el frontend de forma separada
 	// para evitar que aparezca texto mezclado en la presentación del caso
-	
+
 	// Count the very first question delivered in StartCase as one interaction
 	if threadID != "" {
 		h.mu.Lock()
