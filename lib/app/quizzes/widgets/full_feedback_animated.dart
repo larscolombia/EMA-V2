@@ -92,21 +92,21 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
     final children = <Widget>[];
     void addSpacing([double h = 16]) => children.add(SizedBox(height: h));
 
-    // Score block (plain text)
+    // Score block (como markdown para mostrar subsecciones con formato)
     if (parsed.scoreBlock.isNotEmpty) {
       children.add(
         Text(
-          'Puntaje y Calificación:',
+          'Evaluación Final:',
           style: labelStyle,
           textAlign: TextAlign.justify,
         ),
       );
       children.add(const SizedBox(height: 8));
+      final mdScore = _normalizeMarkdown(parsed.scoreBlock.trim());
       children.add(
-        SelectableText(
-          parsed.scoreBlock.trim(),
-          style: bodyStyle,
-          textAlign: TextAlign.justify,
+        Theme(
+          data: _markdownTheme(context, mdBaseStyle.color),
+          child: ChatMarkdownWrapper(text: mdScore, style: mdBaseStyle),
         ),
       );
       addSpacing();
@@ -230,6 +230,9 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       'Resumen clínico': 'Resumen Clínico',
       'Desempeño global': 'Desempeño Global',
       'Desempeño Global': 'Desempeño Global',
+      'Desempeño': 'Desempeño',
+      'Síntesis': 'Síntesis',
+      'Sintesis': 'Síntesis',
       'Fortaleza\\s*s?': 'Fortalezas',
       'Áreas de mejor\\s*a': 'Áreas de Mejora',
       'Areas de mejora': 'Áreas de Mejora',
@@ -240,6 +243,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       'Errores Críticos': 'Errores Críticos',
       'Puntuación': 'Puntuación',
       'Puntuacion': 'Puntuación',
+      'Puntaje': 'Puntaje',
       'Referencias': 'Referencias',
     };
 
@@ -394,7 +398,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
     // Puntaje y Calificación
     if (parsed.scoreBlock.isNotEmpty) {
-      add('Puntaje y Calificación:\n', labelStyle);
+      add('Evaluación Final:\n', labelStyle);
       add(parsed.scoreBlock.trim() + '\n\n', bodyStyle);
     }
     // Retroalimentación
@@ -450,7 +454,9 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
               lower.startsWith('puntuación') ||
               lower.startsWith('puntuacion') ||
               lower.startsWith('calificación') ||
-              lower.startsWith('calificacion')) &&
+              lower.startsWith('calificacion') ||
+              lower.startsWith('resumen final:') || // Formato backend nuevo
+              lower.startsWith('puntaje:')) && // Línea de puntaje directo
           scoreStartIdx == -1) {
         scoreStartIdx = i;
       } else if ((lower.startsWith('retroalimentación') ||
@@ -461,9 +467,11 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
     }
 
     // Segunda pasada: extraer contenido de cada sección
+    // SCORE: captura TODO hasta referencias o retroalimentación
     if (scoreStartIdx >= 0) {
       final scoreLines = <String>[];
       for (int i = scoreStartIdx; i < lines.length; i++) {
+        // Detener solo en secciones diferentes (Referencias, Retroalimentación)
         if (i == refStartIdx || i == retroStartIdx) break;
         scoreLines.add(lines[i]);
       }
@@ -472,7 +480,7 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
               .join('\n')
               .replaceFirst(
                 RegExp(
-                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
+                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n|resumen final)\s*:\s*',
                   caseSensitive: false,
                 ),
                 '',
@@ -503,11 +511,9 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       // Tomar TODAS las líneas después de "Referencias:" hasta el final
       for (int i = refStartIdx + 1; i < lines.length; i++) {
         final trimmed = lines[i].trim();
-        // Detener si encontramos otra sección principal
-        if (trimmed.toLowerCase().startsWith('puntaje') ||
-            trimmed.toLowerCase().startsWith('puntuación') ||
-            trimmed.toLowerCase().startsWith('retroalimentación') ||
-            trimmed.toLowerCase().startsWith('calificación')) {
+        // Detener solo si encontramos otra sección PRINCIPAL (no subsecciones)
+        if (trimmed.toLowerCase().startsWith('resumen final:') ||
+            trimmed.toLowerCase().startsWith('retroalimentación:')) {
           break;
         }
         refLines.add(lines[i]);

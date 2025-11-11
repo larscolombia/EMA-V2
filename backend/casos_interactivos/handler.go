@@ -1080,12 +1080,16 @@ func (h *Handler) Message(c *gin.Context) {
 				q = req.Mensaje
 			}
 			if strings.TrimSpace(q) == "" {
+				log.Printf("[Message][REFS] thread=%s: query vacío, sin referencias", threadID)
 				return
 			}
+			log.Printf("[Message][REFS] thread=%s: buscando referencias con query len=%d", threadID, len(q))
 			refs := h.collectInteractiveEvidence(ctx, q)
 			if strings.TrimSpace(refs) == "" {
+				log.Printf("[Message][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
 				return
 			}
+			log.Printf("[Message][REFS] thread=%s: referencias encontradas, agregando al feedback", threadID)
 			withRefs := appendRefs(fb, refs)
 			// Limpiar referencias duplicadas y normalizar formato
 			data["feedback"] = sanitizeReferences(withRefs)
@@ -1409,10 +1413,6 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
 
-	// CRÍTICO: NO agregar sección de referencias en el resumen final
-	// Las referencias ya están en el feedback acumulado de cada turno
-	// Agregar una sección duplicada aquí genera confusión
-	// El frontend ya muestra las referencias de cada mensaje individual
 
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
@@ -2224,10 +2224,13 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 	if os.Getenv("TESTING") == "1" {
 		return ""
 	}
+	log.Printf("[collectInteractiveEvidence] vectorID=%s query_len=%d", h.vectorID, len(query))
 	refs := make([]string, 0, 2) // Reducido de 3 a 2
 	// 1) Libros (vector fijo configurado en handler)
 	if strings.HasPrefix(strings.TrimSpace(h.vectorID), "vs_") {
+		log.Printf("[collectInteractiveEvidence] buscando en vector store...")
 		if res, err := h.ai.SearchInVectorStoreWithMetadata(ctx, h.vectorID, query); err == nil && res != nil && res.HasResult {
+			log.Printf("[collectInteractiveEvidence] encontrado con metadata: source=%s", res.Source)
 			src := strings.TrimSpace(res.Source)
 			sec := strings.TrimSpace(res.Section)
 			snip := strings.TrimSpace(res.Content)
@@ -2246,12 +2249,23 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 			}
 			refs = append(refs, line)
 		} else if txt, err2 := h.ai.SearchInVectorStore(ctx, h.vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
+			log.Printf("[collectInteractiveEvidence] encontrado sin metadata, len=%d", len(txt))
 			t := strings.TrimSpace(txt)
 			if len(t) > 250 { // Reducido de 420 a 250
 				t = t[:250] + "…"
 			}
 			refs = append(refs, "Base médica: \""+t+"\"")
+		} else {
+			if err != nil {
+				log.Printf("[collectInteractiveEvidence] error SearchWithMetadata: %v", err)
+			}
+			if err2 != nil {
+				log.Printf("[collectInteractiveEvidence] error SearchInVectorStore: %v", err2)
+			}
+			log.Printf("[collectInteractiveEvidence] no se encontraron resultados en vector store")
 		}
+	} else {
+		log.Printf("[collectInteractiveEvidence] vectorID inválido o vacío: '%s'", h.vectorID)
 	}
 	// 2) PubMed - DESHABILITADO temporalmente para acelerar respuesta
 	// TODO: Re-habilitar cuando se optimice el timeout
@@ -2265,8 +2279,10 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 		}
 	*/
 	if len(refs) == 0 {
+		log.Printf("[collectInteractiveEvidence] no hay referencias para retornar")
 		return ""
 	}
+	log.Printf("[collectInteractiveEvidence] retornando %d referencias", len(refs))
 	b := &strings.Builder{}
 	b.WriteString("\nReferencias:\n") // Normalizado a "Referencias:"
 	for i, r := range refs {
