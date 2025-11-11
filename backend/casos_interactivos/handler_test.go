@@ -520,7 +520,7 @@ func TestScoreOverride(t *testing.T) {
 		"next":     map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{"tipo": "", "texto": "", "opciones": []string{}}},
 		"finish":   float64(0),
 	}
-	forceFinishInteractive(data, threadID, h)
+	forceFinishInteractive(data, threadID, h, context.Background())
 	fb, _ := data["feedback"].(string)
 	if !strings.Contains(fb, "Puntaje: 1/2") {
 		t.Fatalf("expected computed score 1/2 in feedback, got: %s", fb)
@@ -541,7 +541,7 @@ func TestFinalEvaluationFormat(t *testing.T) {
 		"next":     map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{"tipo": "", "texto": "", "opciones": []string{}}},
 		"finish":   float64(0),
 	}
-	forceFinishInteractive(data, threadID, h)
+	forceFinishInteractive(data, threadID, h, context.Background())
 	fb, _ := data["feedback"].(string)
 	if !strings.Contains(fb, "Resumen Final:") {
 		t.Fatalf("missing 'Resumen Final:' line")
@@ -627,7 +627,7 @@ func TestEvaluationPendingAndRecovery(t *testing.T) {
 	// métrica de missing_correct_index_events debe ser >=1 al cierre
 	// forzamos cierre manual para inspeccionar final_evaluation
 	dataForce := map[string]any{"feedback": "", "next": map[string]any{"hallazgos": map[string]any{}, "pregunta": map[string]any{"tipo": "", "texto": "", "opciones": []string{}}}, "finish": float64(0)}
-	forceFinishInteractive(dataForce, threadID, h)
+	forceFinishInteractive(dataForce, threadID, h, context.Background())
 	fe := dataForce["final_evaluation"].(map[string]any)
 	if v, _ := fe["missing_correct_index_events"].(int); v < 1 {
 		t.Fatalf("expected missing_correct_index_events >=1, got %v", fe["missing_correct_index_events"])
