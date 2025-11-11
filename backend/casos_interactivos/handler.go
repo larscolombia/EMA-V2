@@ -686,7 +686,7 @@ func (h *Handler) Message(c *gin.Context) {
 		// Cierre si ya marcado o se alcanzó el máximo
 		if closing || curr >= maxQuestions {
 			data := h.minTurn()
-			forceFinishInteractive(data, threadID, h)
+			forceFinishInteractive(data, threadID, h, c.Request.Context())
 			// Asegurar pregunta final vacía
 			if nx, ok := data["next"].(map[string]any); ok {
 				nx["pregunta"] = finalQuestion()
@@ -1069,33 +1069,7 @@ func (h *Handler) Message(c *gin.Context) {
 	} else {
 		// Evaluar también la última respuesta antes de cerrar si procede
 		_, _ = h.evaluateLastAnswer(threadID, req.Mensaje, req.AnswerIndex, data)
-		forceFinishInteractive(data, threadID, h)
-		// Añadir referencias en el cierre (feedback final)
-		func() {
-			defer func() { _ = recover() }()
-			fb := toStringSafe(data["feedback"])
-			q := fb
-			if strings.TrimSpace(q) == "" {
-				q = extractQuestionText(data)
-			}
-			if strings.TrimSpace(q) == "" {
-				q = req.Mensaje
-			}
-			if strings.TrimSpace(q) == "" {
-				log.Printf("[Message][REFS] thread=%s: query vacío, sin referencias", threadID)
-				return
-			}
-			log.Printf("[Message][REFS] thread=%s: buscando referencias con query len=%d", threadID, len(q))
-			refs := h.collectInteractiveEvidence(ctx, q)
-			if strings.TrimSpace(refs) == "" {
-				log.Printf("[Message][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
-				return
-			}
-			log.Printf("[Message][REFS] thread=%s: referencias encontradas, agregando al feedback", threadID)
-			withRefs := appendRefs(fb, refs)
-			// Limpiar referencias duplicadas y normalizar formato
-			data["feedback"] = sanitizeReferences(withRefs)
-		}()
+		forceFinishInteractive(data, threadID, h, c.Request.Context())
 		// limpiar flag
 		h.mu.Lock()
 		delete(h.closureDue, threadID)
@@ -1362,7 +1336,7 @@ func extractQuestionText(data map[string]any) string {
 }
 
 // forceFinishInteractive normaliza estructura de cierre y agrega puntaje si hay datos.
-func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
+func forceFinishInteractive(data map[string]any, threadID string, h *Handler, ctx context.Context) {
 	fq := finalQuestion()
 	if nx, ok := data["next"].(map[string]any); ok {
 		nx["hallazgos"] = map[string]any{}
@@ -1414,6 +1388,25 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Síntesis: "+coreSummary)
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
+
+	// Agregar referencias bibliográficas del caso completo
+	if ctx != nil {
+		query := fmt.Sprintf("Resumen del caso clínico completo: %s. Puntaje: %d/%d. %s. %s",
+			coreSummary, corr, total, strengths, improvements)
+		if len(query) > 1000 {
+			query = query[:1000]
+		}
+		log.Printf("[forceFinishInteractive][REFS] thread=%s: recolectando referencias finales query_len=%d", threadID, len(query))
+		refs := h.collectInteractiveEvidence(ctx, query)
+		if strings.TrimSpace(refs) != "" {
+			log.Printf("[forceFinishInteractive][REFS] thread=%s: agregando referencias al resumen final", threadID)
+			finalLines = append(finalLines, "")
+			// collectInteractiveEvidence ya incluye el encabezado "Referencias:"
+			finalLines = append(finalLines, strings.TrimSpace(refs))
+		} else {
+			log.Printf("[forceFinishInteractive][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
+		}
+	}
 
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
