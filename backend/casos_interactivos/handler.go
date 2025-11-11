@@ -51,6 +51,7 @@ type Handler struct {
 	missingCorrectIdx  map[string]int      // thread_id -> veces que faltó correct_index (para métricas)
 	closureDue         map[string]bool     // thread_id -> se alcanzó max y el próximo turno debe ser cierre
 	isFallbackQuestion map[string]bool     // thread_id -> true si la pregunta actual es fallback (no cuenta para maxQuestions)
+	collectedRefs      map[string][]string // thread_id -> referencias recolectadas en cada turno
 }
 
 // evaluateLastAnswer realiza evaluación local determinista usando índice explícito (si provisto),
@@ -174,6 +175,7 @@ func DefaultHandler() *Handler {
 		lastQuestionType:   make(map[string]string),
 		missingCorrectIdx:  make(map[string]int),
 		closureDue:         make(map[string]bool),
+		collectedRefs:      make(map[string][]string),
 	}
 }
 
@@ -770,14 +772,36 @@ func (h *Handler) Message(c *gin.Context) {
 		}
 		ragCtx, ragCancel := context.WithTimeout(ctx, 5*time.Second) // Aumentado 2s→5s por latencia OpenAI
 		defer ragCancel()
-		refs := h.collectInteractiveEvidence(ragCtx, searchQuery)
-		if strings.TrimSpace(refs) != "" {
-			// CRÍTICO: Reducir drásticamente a 200 chars (antes 500)
-			// RAG largo en instructions causa CREATE_RUN de 177s
-			if len(refs) > 200 {
-				refs = refs[:200]
+
+		// Recolectar referencias RAW para almacenarlas
+		rawRefs := h.collectInteractiveEvidenceRaw(ragCtx, searchQuery)
+		if len(rawRefs) > 0 {
+			// Almacenar referencias en el thread para consolidación final
+			h.mu.Lock()
+			h.collectedRefs[threadID] = append(h.collectedRefs[threadID], rawRefs...)
+			totalRefs := len(h.collectedRefs[threadID])
+			h.mu.Unlock()
+
+			log.Printf("[Message][REFS] thread=%s: almacenadas %d nuevas referencias (total=%d)", threadID, len(rawRefs), totalRefs)
+
+			// Formatear para RAG context (limitado a 200 chars)
+			var refBuilder strings.Builder
+			refBuilder.WriteString("\n")
+			for _, ref := range rawRefs {
+				refBuilder.WriteString("- ")
+				refBuilder.WriteString(ref)
+				refBuilder.WriteString("\n")
 			}
-			ragContext = "Referencias:" + refs
+			refs := refBuilder.String()
+
+			if strings.TrimSpace(refs) != "" {
+				// CRÍTICO: Reducir drásticamente a 200 chars (antes 500)
+				// RAG largo en instructions causa CREATE_RUN de 177s
+				if len(refs) > 200 {
+					refs = refs[:200]
+				}
+				ragContext = "Referencias:" + refs
+			}
 		}
 	}()
 
@@ -1389,23 +1413,41 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler, ct
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
 
-	// Agregar referencias bibliográficas del caso completo
-	if ctx != nil {
+	// Consolidar TODAS las referencias recolectadas durante el caso
+	h.mu.Lock()
+	allRefs := h.collectedRefs[threadID]
+	h.mu.Unlock()
+
+	// Deduplicar referencias (mantener solo únicas)
+	uniqueRefs := make(map[string]bool)
+	var consolidatedRefs []string
+	for _, ref := range allRefs {
+		if !uniqueRefs[ref] {
+			uniqueRefs[ref] = true
+			consolidatedRefs = append(consolidatedRefs, ref)
+		}
+	}
+
+	// Si no hay referencias consolidadas, hacer búsqueda final como fallback
+	if len(consolidatedRefs) == 0 && ctx != nil {
 		query := fmt.Sprintf("Resumen del caso clínico completo: %s. Puntaje: %d/%d. %s. %s",
 			coreSummary, corr, total, strengths, improvements)
 		if len(query) > 1000 {
 			query = query[:1000]
 		}
-		log.Printf("[forceFinishInteractive][REFS] thread=%s: recolectando referencias finales query_len=%d", threadID, len(query))
-		refs := h.collectInteractiveEvidence(ctx, query)
-		if strings.TrimSpace(refs) != "" {
-			log.Printf("[forceFinishInteractive][REFS] thread=%s: agregando referencias al resumen final", threadID)
-			finalLines = append(finalLines, "")
-			// collectInteractiveEvidence ya incluye el encabezado "Referencias:"
-			finalLines = append(finalLines, strings.TrimSpace(refs))
-		} else {
-			log.Printf("[forceFinishInteractive][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
+		log.Printf("[forceFinishInteractive][REFS] thread=%s: no hay referencias consolidadas, buscando con query_len=%d", threadID, len(query))
+		consolidatedRefs = h.collectInteractiveEvidenceRaw(ctx, query)
+	}
+
+	if len(consolidatedRefs) > 0 {
+		log.Printf("[forceFinishInteractive][REFS] thread=%s: agregando %d referencias únicas al resumen final", threadID, len(consolidatedRefs))
+		finalLines = append(finalLines, "")
+		finalLines = append(finalLines, "Referencias:")
+		for _, ref := range consolidatedRefs {
+			finalLines = append(finalLines, "- "+ref)
 		}
+	} else {
+		log.Printf("[forceFinishInteractive][REFS] thread=%s: no hay referencias para agregar", threadID)
 	}
 
 	data["feedback"] = strings.Join(finalLines, "\n")
@@ -2214,12 +2256,31 @@ func buildInteractiveCaseQuery(caseMap map[string]any) string {
 
 // collectInteractiveEvidence consulta primero el vector de libros fijo (handler.vectorID) y luego PubMed
 func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) string {
-	// En modo pruebas, evitar llamadas externas que alargan la ejecución
-	if os.Getenv("TESTING") == "1" {
+	refs := h.collectInteractiveEvidenceRaw(ctx, query)
+	if len(refs) == 0 {
 		return ""
 	}
+	b := &strings.Builder{}
+	b.WriteString("\nReferencias:\n")
+	for i, r := range refs {
+		if i >= 2 {
+			break
+		}
+		b.WriteString("- ")
+		b.WriteString(r)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// collectInteractiveEvidenceRaw devuelve las referencias como slice sin formato
+func (h *Handler) collectInteractiveEvidenceRaw(ctx context.Context, query string) []string {
+	// En modo pruebas, evitar llamadas externas que alargan la ejecución
+	if os.Getenv("TESTING") == "1" {
+		return nil
+	}
 	log.Printf("[collectInteractiveEvidence] vectorID=%s query_len=%d", h.vectorID, len(query))
-	refs := make([]string, 0, 2) // Reducido de 3 a 2
+	refs := make([]string, 0, 2)
 	// 1) Libros (vector fijo configurado en handler)
 	if strings.HasPrefix(strings.TrimSpace(h.vectorID), "vs_") {
 		log.Printf("[collectInteractiveEvidence] buscando en vector store...")
@@ -2230,10 +2291,14 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 			if src == "" {
 				src = "Base médica"
 			}
-			// Formato simple: Libro — Sección (si existe)
-			line := src
+			// Formato mejorado: siempre indicar que es un libro médico
+			line := ""
 			if sec != "" {
-				line += " — " + sec
+				// Con sección: "Libro — Sección"
+				line = fmt.Sprintf("%s — %s", src, sec)
+			} else {
+				// Sin sección: "Libro [referencia médica]" para claridad
+				line = fmt.Sprintf("%s (referencia médica)", src)
 			}
 			refs = append(refs, line)
 		} else if txt, err2 := h.ai.SearchInVectorStore(ctx, h.vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
@@ -2263,22 +2328,8 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 	} else if err != nil {
 		log.Printf("[collectInteractiveEvidence] error SearchPubMed: %v", err)
 	}
-	if len(refs) == 0 {
-		log.Printf("[collectInteractiveEvidence] no hay referencias para retornar")
-		return ""
-	}
 	log.Printf("[collectInteractiveEvidence] retornando %d referencias", len(refs))
-	b := &strings.Builder{}
-	b.WriteString("\nReferencias:\n") // Normalizado a "Referencias:"
-	for i, r := range refs {
-		if i >= 2 { // Reducido de 3 a 2
-			break
-		}
-		b.WriteString("- ")
-		b.WriteString(r)
-		b.WriteString("\n")
-	}
-	return b.String()
+	return refs
 }
 
 // shuffleOptionsWithCorrectIndex randomiza las opciones y actualiza el índice correcto
