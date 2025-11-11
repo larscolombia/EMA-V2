@@ -1064,6 +1064,33 @@ func (h *Handler) Message(c *gin.Context) {
 		default:
 			data["finish"] = 0.0
 		}
+
+		// Añadir referencias también en turnos intermedios (no solo en cierre)
+		func() {
+			defer func() { _ = recover() }()
+			fb := toStringSafe(data["feedback"])
+			q := fb
+			if strings.TrimSpace(q) == "" {
+				q = extractQuestionText(data)
+			}
+			if strings.TrimSpace(q) == "" {
+				q = req.Mensaje
+			}
+			if strings.TrimSpace(q) == "" {
+				log.Printf("[Message][REFS] thread=%s: query vacío, sin referencias", threadID)
+				return
+			}
+			log.Printf("[Message][REFS] thread=%s: buscando referencias con query len=%d", threadID, len(q))
+			refs := h.collectInteractiveEvidence(ctx, q)
+			if strings.TrimSpace(refs) == "" {
+				log.Printf("[Message][REFS] thread=%s: collectInteractiveEvidence retornó vacío", threadID)
+				return
+			}
+			log.Printf("[Message][REFS] thread=%s: referencias encontradas, agregando al feedback", threadID)
+			withRefs := appendRefs(fb, refs)
+			// Limpiar referencias duplicadas y normalizar formato
+			data["feedback"] = sanitizeReferences(withRefs)
+		}()
 	} else {
 		// Evaluar también la última respuesta antes de cerrar si procede
 		_, _ = h.evaluateLastAnswer(threadID, req.Mensaje, req.AnswerIndex, data)
@@ -2257,17 +2284,17 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 	} else {
 		log.Printf("[collectInteractiveEvidence] vectorID inválido o vacío: '%s'", h.vectorID)
 	}
-	// 2) PubMed - DESHABILITADO temporalmente para acelerar respuesta
-	// TODO: Re-habilitar cuando se optimice el timeout
-	/*
-		if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
-			p := strings.TrimSpace(pm)
-			if len(p) > 350 { // Reducido de 600 a 350
-				p = p[:350] + "…"
-			}
-			refs = append(refs, "PubMed: "+p)
+	// 2) PubMed - Habilitado para enriquecer referencias bibliográficas
+	if pm, err := h.ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
+		log.Printf("[collectInteractiveEvidence] encontrado en PubMed, len=%d", len(pm))
+		p := strings.TrimSpace(pm)
+		if len(p) > 200 { // Reducir para mantener velocidad
+			p = p[:200] + "…"
 		}
-	*/
+		refs = append(refs, "PubMed: "+p)
+	} else if err != nil {
+		log.Printf("[collectInteractiveEvidence] error SearchPubMed: %v", err)
+	}
 	if len(refs) == 0 {
 		log.Printf("[collectInteractiveEvidence] no hay referencias para retornar")
 		return ""
