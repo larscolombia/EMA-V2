@@ -31,6 +31,26 @@ class ApiClinicalCaseData {
 
       final response = await _dio.post(url, data: body);
 
+      // ===== DEBUG: VER RESPUESTA COMPLETA DEL BACKEND (INICIO DE CASO) =====
+      if (clinicalCase.type == ClinicalCaseType.interactive) {
+        print(
+          '╔═══════════════════════════════════════════════════════════════════',
+        );
+        print('║ RESPUESTA COMPLETA DEL BACKEND /casos-interactivos/iniciar');
+        print(
+          '╠═══════════════════════════════════════════════════════════════════',
+        );
+        print('║ Status Code: ${response.statusCode}');
+        print(
+          '╟───────────────────────────────────────────────────────────────────',
+        );
+        print('║ Response.data COMPLETO:');
+        print('║ ${const JsonEncoder.withIndent('  ').convert(response.data)}');
+        print(
+          '╚═══════════════════════════════════════════════════════════════════',
+        );
+      }
+
       final generateClinicalCase = ClinicalCaseModel.fromApi(response.data);
 
       final completeClinicalCase = generateClinicalCase.copyWith(
@@ -135,9 +155,45 @@ class ApiClinicalCaseData {
 
     final response = await _dio.post('/casos-interactivos/mensaje', data: body);
 
+    // ===== DEBUG: VER RESPUESTA COMPLETA DEL BACKEND =====
+    print(
+      '╔═══════════════════════════════════════════════════════════════════',
+    );
+    print('║ RESPUESTA COMPLETA DEL BACKEND /casos-interactivos/mensaje');
+    print(
+      '╠═══════════════════════════════════════════════════════════════════',
+    );
+    print('║ Status Code: ${response.statusCode}');
+    print(
+      '╟───────────────────────────────────────────────────────────────────',
+    );
+    print('║ Response.data COMPLETO:');
+    print('║ ${const JsonEncoder.withIndent('  ').convert(response.data)}');
+    print(
+      '╚═══════════════════════════════════════════════════════════════════',
+    );
+
     if (response.statusCode == 200) {
       final data = response.data['data'] ?? response.data;
       final feedback = data['feedback'] as String? ?? '';
+
+      // ===== DEBUG: EXTRAER Y MOSTRAR FEEDBACK =====
+      print(
+        '╔═══════════════════════════════════════════════════════════════════',
+      );
+      print('║ FEEDBACK EXTRAÍDO DE LA RESPUESTA');
+      print(
+        '╠═══════════════════════════════════════════════════════════════════',
+      );
+      print('║ Longitud del feedback: ${feedback.length} caracteres');
+      print(
+        '╟───────────────────────────────────────────────────────────────────',
+      );
+      print('║ CONTENIDO DEL FEEDBACK:');
+      print('║ $feedback');
+      print(
+        '╚═══════════════════════════════════════════════════════════════════',
+      );
 
       // Extraer evaluación de la respuesta anterior (si existe)
       final evaluation = data['evaluation'] as Map<String, dynamic>?;
@@ -156,6 +212,28 @@ class ApiClinicalCaseData {
       final pregunta =
           (next['pregunta'] ?? const <String, dynamic>{})
               as Map<String, dynamic>;
+
+      // ===== DEBUG: ESTRUCTURA DE LA SIGUIENTE PREGUNTA =====
+      print(
+        '╔═══════════════════════════════════════════════════════════════════',
+      );
+      print('║ ESTRUCTURA DE LA SIGUIENTE PREGUNTA');
+      print(
+        '╠═══════════════════════════════════════════════════════════════════',
+      );
+      print(
+        '║ next object: ${const JsonEncoder.withIndent('  ').convert(next)}',
+      );
+      print(
+        '╟───────────────────────────────────────────────────────────────────',
+      );
+      print(
+        '║ pregunta object: ${const JsonEncoder.withIndent('  ').convert(pregunta)}',
+      );
+      print(
+        '╚═══════════════════════════════════════════════════════════════════',
+      );
+
       final questionMap = {
         'id': 0,
         'question': pregunta['texto'] ?? '',

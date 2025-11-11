@@ -388,7 +388,7 @@ func (h *Handler) StartCase(c *gin.Context) {
 		"JSON: feedback, next{hallazgos{}, pregunta{tipo, texto, opciones[4], correct_index:0-3}}, finish:0.",
 		"Px: " + req.Age + ", " + req.Sex + ", gest=" + boolToStr(req.Pregnant),
 	}, " ")
-	instr := "JSON: feedback (150-200 palabras narrativas tipo caso clínico + Ref:), next{hallazgos{}, pregunta{tipo:'single-choice', texto tipo razonamiento clínico, opciones:4, correct_index:0-3}}, finish:0. Sin null."
+	instr := "JSON: feedback (150-200 palabras narrativas tipo caso clínico), next{hallazgos{}, pregunta{tipo:'single-choice', texto tipo razonamiento clínico, opciones:4, correct_index:0-3}}, finish:0. Sin null. NO incluyas referencias en feedback."
 
 	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
@@ -587,7 +587,9 @@ func (h *Handler) StartCase(c *gin.Context) {
 				refs := h.collectInteractiveEvidence(ctx, q)
 				if strings.TrimSpace(refs) != "" {
 					an := strings.TrimSpace(fmt.Sprint(cs["anamnesis"]))
-					cs["anamnesis"] = appendRefs(an, refs)
+					withRefs := appendRefs(an, refs)
+					// Limpiar referencias duplicadas y normalizar formato
+					cs["anamnesis"] = sanitizeReferences(withRefs)
 				}
 			}
 		}
@@ -771,7 +773,7 @@ func (h *Handler) Message(c *gin.Context) {
 			if len(refs) > 200 {
 				refs = refs[:200]
 			}
-			ragContext = "Ref:" + refs
+			ragContext = "Referencias:" + refs
 		}
 	}()
 
@@ -779,7 +781,7 @@ func (h *Handler) Message(c *gin.Context) {
 	var instr string
 	if closing {
 		// OPTIMIZADO: Prompt de cierre más corto
-		instr = "JSON: feedback, next{}, finish:1. Feedback: Resumen del caso clínico (≤60 palabras) + diagnóstico final + justificación breve. Ref: 1 cita. finish=1."
+		instr = "JSON: feedback, next{}, finish:1. Feedback: Resumen del caso clínico (≤60 palabras) + diagnóstico final + justificación breve. finish=1. NO incluyas referencias en feedback."
 	} else {
 		// Build a short memory of prior questions to discourage repetition
 		var prevQs []string
@@ -810,9 +812,9 @@ func (h *Handler) Message(c *gin.Context) {
 			"Feedback: Razonamiento clínico EDUCATIVO (100-150 palabras) sobre la respuesta del estudiante.",
 			"Explica conceptos médicos relevantes SIN decir 'correcto/incorrecto' explícitamente.",
 			"Pregunta: Tipo razonamiento clínico (¿Qué haría? ¿Qué estudios? ¿Qué diagnóstico diferencial?).",
-			"Fuente: 1-2 refs." + diagnosticInfo,
+			diagnosticInfo,
 			prevList,
-			"Progresa hacia diagnóstico. finish=0.",
+			"Progresa hacia diagnóstico. finish=0. NO incluyas referencias en feedback.",
 		}, " ")
 	}
 
@@ -1080,7 +1082,9 @@ func (h *Handler) Message(c *gin.Context) {
 			if strings.TrimSpace(refs) == "" {
 				return
 			}
-			data["feedback"] = appendRefs(fb, refs)
+			withRefs := appendRefs(fb, refs)
+			// Limpiar referencias duplicadas y normalizar formato
+			data["feedback"] = sanitizeReferences(withRefs)
 		}()
 		// limpiar flag
 		h.mu.Lock()
@@ -1400,9 +1404,31 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Síntesis: "+coreSummary)
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
-	if !strings.Contains(strings.ToLower(fbOriginal), "referencias:") {
+	
+	// Normalizar referencias: siempre sanitizar el feedback y extraer solo citas válidas
+	sanitized := sanitizeReferences(fbOriginal)
+	hasValidRefs := false
+	
+	// Buscar si hay líneas después de "Referencias:" que sean citas válidas
+	lines := strings.Split(sanitized, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "referencias:") {
+			// Revisar las siguientes líneas para ver si hay referencias válidas
+			for j := i + 1; j < len(lines) && j < i+10; j++ {
+				refLine := strings.TrimSpace(lines[j])
+				if refLine != "" && !strings.HasSuffix(refLine, ":") {
+					hasValidRefs = true
+					break
+				}
+			}
+			break
+		}
+	}
+	
+	if !hasValidRefs {
 		finalLines = append(finalLines, "Referencias: Fuente clínica estándar")
 	}
+	
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
 	// include metric of missing correct_index events if present
@@ -2043,6 +2069,116 @@ func appendRefs(s, refs string) string {
 	return strings.TrimRight(s, "\n ") + refs
 }
 
+// sanitizeReferences limpia el texto de referencias duplicadas y normaliza formato
+// Convierte "Ref:" y "Refs:" a "Referencias:", elimina texto explicativo que no sean citas
+func sanitizeReferences(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+
+	// Paso 1: Normalizar variaciones de "Ref:", "Refs:", "Referencia:" a "Referencias:"
+	normalized := s
+	// Buscar patrones con regex para normalizar encabezados
+	refHeaderPattern := regexp.MustCompile(`(?i)\n\s*(Ref|Refs|Referencia)s?\s*:\s*\n`)
+	normalized = refHeaderPattern.ReplaceAllString(normalized, "\nReferencias:\n")
+
+	// También normalizar cuando aparece al inicio
+	normalized = regexp.MustCompile(`(?i)^(Ref|Refs|Referencia)s?\s*:\s*`).ReplaceAllString(normalized, "Referencias: ")
+
+	// Paso 2: Extraer solo las líneas que parecen referencias reales (citas bibliográficas)
+	// Una referencia válida debe contener al menos uno de estos indicadores:
+	// - Nombres de libros médicos conocidos
+	// - Años entre paréntesis o dígitos de año
+	// - PMID, DOI, http/https
+	// - Formato de journal con punto y coma o dos puntos
+	lines := strings.Split(normalized, "\n")
+	var cleanedLines []string
+	inRefSection := false
+	var refLines []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		// Detectar inicio de sección de referencias
+		if strings.HasPrefix(lower, "referencias:") {
+			inRefSection = true
+			cleanedLines = append(cleanedLines, line)
+			continue
+		}
+
+		if !inRefSection {
+			cleanedLines = append(cleanedLines, line)
+			continue
+		}
+
+		// Estamos en sección de referencias: filtrar líneas
+		if trimmed == "" {
+			// Línea vacía termina sección de referencias
+			if len(refLines) > 0 {
+				cleanedLines = append(cleanedLines, refLines...)
+				refLines = nil
+			}
+			cleanedLines = append(cleanedLines, line)
+			inRefSection = false
+			continue
+		}
+
+		// Verificar si la línea parece una referencia válida
+		isValidRef := false
+
+		// Indicadores de referencia válida:
+		// 1. Contiene año (4 dígitos)
+		if regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed) {
+			isValidRef = true
+		}
+		// 2. Contiene PMID o DOI
+		if strings.Contains(lower, "pmid") || strings.Contains(lower, "doi") {
+			isValidRef = true
+		}
+		// 3. Contiene URL
+		if strings.Contains(lower, "http://") || strings.Contains(lower, "https://") {
+			isValidRef = true
+		}
+		// 4. Empieza con guion o número (lista de referencias)
+		if regexp.MustCompile(`^\s*[-•*]\s+`).MatchString(trimmed) || regexp.MustCompile(`^\s*\d+[\.\)]\s+`).MatchString(trimmed) {
+			// Verificar que tenga contenido sustancial (no solo "- Texto genérico")
+			if len(trimmed) > 20 && (strings.Contains(trimmed, ":") || strings.Contains(trimmed, ";") || regexp.MustCompile(`\b(19|20)\d{2}\b`).MatchString(trimmed)) {
+				isValidRef = true
+			}
+		}
+		// 5. Contiene nombres de libros médicos comunes (Harrison, Robbins, Cecil, etc.)
+		medicalBooks := []string{"harrison", "robbins", "cecil", "tintinalli", "nelson", "williams", "guyton", "netter", "sabiston", "schwartz", "uptodate"}
+		for _, book := range medicalBooks {
+			if strings.Contains(lower, book) {
+				isValidRef = true
+				break
+			}
+		}
+		// 6. Contiene "Base médica:" o "PubMed:" (referencias RAG)
+		if strings.Contains(trimmed, "Base médica:") || strings.Contains(lower, "pubmed:") {
+			isValidRef = true
+		}
+
+		if isValidRef {
+			refLines = append(refLines, line)
+		}
+		// Si no es referencia válida, se descarta (era texto explicativo)
+	}
+
+	// Agregar referencias pendientes al final
+	if len(refLines) > 0 {
+		cleanedLines = append(cleanedLines, refLines...)
+	}
+
+	result := strings.Join(cleanedLines, "\n")
+
+	// Paso 3: Eliminar secciones de "Referencias:" vacías o con solo texto genérico
+	result = regexp.MustCompile(`(?i)Referencias:\s*\n\s*\n`).ReplaceAllString(result, "")
+
+	return result
+}
+
 // extractFirstLine obtiene la primera línea no vacía de un bloque de texto
 func extractFirstLine(s string) string {
 	for _, ln := range strings.Split(strings.TrimSpace(s), "\n") {
@@ -2126,7 +2262,7 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 		return ""
 	}
 	b := &strings.Builder{}
-	b.WriteString("\nRefs:\n") // Simplificado
+	b.WriteString("\nReferencias:\n") // Normalizado a "Referencias:"
 	for i, r := range refs {
 		if i >= 2 { // Reducido de 3 a 2
 			break
