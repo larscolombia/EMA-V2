@@ -2232,28 +2232,19 @@ func (h *Handler) collectInteractiveEvidence(ctx context.Context, query string) 
 			log.Printf("[collectInteractiveEvidence] encontrado con metadata: source=%s", res.Source)
 			src := strings.TrimSpace(res.Source)
 			sec := strings.TrimSpace(res.Section)
-			snip := strings.TrimSpace(res.Content)
 			if src == "" {
 				src = "Base médica"
 			}
-			if len(snip) > 250 { // Reducido de 420 a 250
-				snip = snip[:250] + "…"
-			}
+			// Formato simple: Libro — Sección (si existe)
 			line := src
 			if sec != "" {
 				line += " — " + sec
 			}
-			if snip != "" {
-				line += ": \"" + snip + "\""
-			}
 			refs = append(refs, line)
 		} else if txt, err2 := h.ai.SearchInVectorStore(ctx, h.vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
 			log.Printf("[collectInteractiveEvidence] encontrado sin metadata, len=%d", len(txt))
-			t := strings.TrimSpace(txt)
-			if len(t) > 250 { // Reducido de 420 a 250
-				t = t[:250] + "…"
-			}
-			refs = append(refs, "Base médica: \""+t+"\"")
+			// Sin metadata, solo indicar que viene de la base médica
+			refs = append(refs, "Base médica")
 		} else {
 			if err != nil {
 				log.Printf("[collectInteractiveEvidence] error SearchWithMetadata: %v", err)
