@@ -1413,7 +1413,6 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
 
-
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
 	// include metric of missing correct_index events if present
