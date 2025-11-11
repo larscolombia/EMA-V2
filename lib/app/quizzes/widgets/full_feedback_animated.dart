@@ -188,9 +188,10 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       addSpacing();
     }
 
-    // References (markdown)
-    if (parsed.references.isNotEmpty) {
-      final mdRef = _normalizeMarkdown(parsed.references.trim());
+    // References (markdown) - Solo mostrar si hay contenido REAL (no solo encabezado vacío)
+    final cleanRefs = parsed.references.trim();
+    if (cleanRefs.isNotEmpty && cleanRefs.length > 10) {  // Al menos 10 caracteres para evitar solo "Referencias:"
+      final mdRef = _normalizeMarkdown(cleanRefs);
       final startsWithHeading = RegExp(r'^\s{0,3}#{1,6}\s').hasMatch(mdRef);
       if (!startsWithHeading) {
         children.add(
@@ -425,58 +426,137 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
   _Parsed _parseFitGlobal(String s) {
     final norm = s.replaceAll('\r\n', '\n');
-    final parts = norm.split('\n\n');
+    
+    // Estrategia mejorada: buscar índices de secciones principales
+    final lines = norm.split('\n');
     String score = '';
-    // feedback se construye en bufFeedback; variable temporal innecesaria eliminada
+    String feedback = '';
     String references = '';
-    final bufFeedback = StringBuffer();
-    for (final p in parts) {
-      final t = p.trim();
-      if (t.isEmpty) continue;
-      final lt = t.toLowerCase();
-      if (lt.startsWith('puntaje y calificación') ||
-          lt.startsWith('puntaje y calificacion') ||
-          lt.startsWith('puntuación') ||
-          lt.startsWith('puntuacion') ||
-          lt.startsWith('calificación') ||
-          lt.startsWith('calificacion')) {
-        score =
-            t
-                .replaceFirst(
-                  RegExp(
-                    r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
-                    caseSensitive: false,
-                  ),
-                  '',
-                )
-                .trim();
-      } else if (lt.startsWith('retroalimentación') ||
-          lt.startsWith('retroalimentacion')) {
-        final clean =
-            t
-                .replaceFirst(
-                  RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
-                  '',
-                )
-                .trim();
-        if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
-        bufFeedback.write(clean);
-      } else if (lt.startsWith('referencias')) {
-        references =
-            t
-                .replaceFirst(
-                  RegExp(r'^referencias:\s*', caseSensitive: false),
-                  '',
-                )
-                .trim();
-      } else {
-        if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
-        bufFeedback.write(t);
+    
+    int refStartIdx = -1;
+    int scoreStartIdx = -1;
+    int retroStartIdx = -1;
+    
+    // Primera pasada: identificar índices de inicio de cada sección
+    for (int i = 0; i < lines.length; i++) {
+      final trimmed = lines[i].trim();
+      final lower = trimmed.toLowerCase();
+      
+      if (lower.startsWith('referencias:') && refStartIdx == -1) {
+        refStartIdx = i;
+      } else if ((lower.startsWith('puntaje y calificación') ||
+          lower.startsWith('puntaje y calificacion') ||
+          lower.startsWith('puntuación') ||
+          lower.startsWith('puntuacion') ||
+          lower.startsWith('calificación') ||
+          lower.startsWith('calificacion')) && scoreStartIdx == -1) {
+        scoreStartIdx = i;
+      } else if ((lower.startsWith('retroalimentación') ||
+          lower.startsWith('retroalimentacion')) && retroStartIdx == -1) {
+        retroStartIdx = i;
       }
     }
+    
+    // Segunda pasada: extraer contenido de cada sección
+    if (scoreStartIdx >= 0) {
+      final scoreLines = <String>[];
+      for (int i = scoreStartIdx; i < lines.length; i++) {
+        if (i == refStartIdx || i == retroStartIdx) break;
+        scoreLines.add(lines[i]);
+      }
+      score = scoreLines.join('\n')
+          .replaceFirst(
+            RegExp(
+              r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
+              caseSensitive: false,
+            ),
+            '',
+          )
+          .trim();
+    }
+    
+    if (retroStartIdx >= 0) {
+      final feedbackLines = <String>[];
+      for (int i = retroStartIdx; i < lines.length; i++) {
+        if (i == refStartIdx || (scoreStartIdx > retroStartIdx && i == scoreStartIdx)) break;
+        feedbackLines.add(lines[i]);
+      }
+      feedback = feedbackLines.join('\n')
+          .replaceFirst(
+            RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
+            '',
+          )
+          .trim();
+    }
+    
+    if (refStartIdx >= 0) {
+      final refLines = <String>[];
+      // Tomar TODAS las líneas después de "Referencias:" hasta el final
+      for (int i = refStartIdx + 1; i < lines.length; i++) {
+        final trimmed = lines[i].trim();
+        // Detener si encontramos otra sección principal
+        if (trimmed.toLowerCase().startsWith('puntaje') ||
+            trimmed.toLowerCase().startsWith('puntuación') ||
+            trimmed.toLowerCase().startsWith('retroalimentación') ||
+            trimmed.toLowerCase().startsWith('calificación')) {
+          break;
+        }
+        refLines.add(lines[i]);
+      }
+      references = refLines.join('\n').trim();
+    }
+    
+    // Fallback: si no se detectaron secciones, usar lógica original por bloques
+    if (score.isEmpty && feedback.isEmpty && references.isEmpty) {
+      final parts = norm.split('\n\n');
+      final bufFeedback = StringBuffer();
+      for (final p in parts) {
+        final t = p.trim();
+        if (t.isEmpty) continue;
+        final lt = t.toLowerCase();
+        if (lt.startsWith('puntaje y calificación') ||
+            lt.startsWith('puntaje y calificacion') ||
+            lt.startsWith('puntuación') ||
+            lt.startsWith('puntuacion') ||
+            lt.startsWith('calificación') ||
+            lt.startsWith('calificacion')) {
+          score = t
+              .replaceFirst(
+                RegExp(
+                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n)\s*:\s*',
+                  caseSensitive: false,
+                ),
+                '',
+              )
+              .trim();
+        } else if (lt.startsWith('retroalimentación') ||
+            lt.startsWith('retroalimentacion')) {
+          final clean = t
+              .replaceFirst(
+                RegExp(r'^retroalimentaci[oó]n:\s*', caseSensitive: false),
+                '',
+              )
+              .trim();
+          if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
+          bufFeedback.write(clean);
+        } else if (lt.startsWith('referencias')) {
+          references = t
+              .replaceFirst(
+                RegExp(r'^referencias:\s*', caseSensitive: false),
+                '',
+              )
+              .trim();
+        } else {
+          if (bufFeedback.isNotEmpty) bufFeedback.writeln('\n');
+          bufFeedback.write(t);
+        }
+      }
+      feedback = bufFeedback.toString();
+    }
+    
     return _Parsed(
       scoreBlock: score,
-      feedbackBlock: bufFeedback.toString(),
+      feedbackBlock: feedback,
       references: references,
     );
   }

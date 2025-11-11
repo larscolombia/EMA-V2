@@ -594,26 +594,10 @@ func (h *Handler) StartCase(c *gin.Context) {
 		"thread_id":      threadID,
 		"schema_version": interactiveSchemaVersion,
 	}
-	// Anexar referencias al inicio en el campo anamnesis (o management si prefieres)
-	func() {
-		defer func() { _ = recover() }()
-		if cs, ok := resp["case"].(map[string]any); ok {
-			// construir query usando título/diagnóstico si existe; fallback a primeros renglones de la anamnesis
-			q := buildInteractiveCaseQuery(cs)
-			if strings.TrimSpace(q) == "" {
-				q = extractFirstLine(clinicalHistory)
-			}
-			if strings.TrimSpace(q) != "" {
-				refs := h.collectInteractiveEvidence(ctx, q)
-				if strings.TrimSpace(refs) != "" {
-					an := strings.TrimSpace(fmt.Sprint(cs["anamnesis"]))
-					withRefs := appendRefs(an, refs)
-					// Limpiar referencias duplicadas y normalizar formato
-					cs["anamnesis"] = sanitizeReferences(withRefs)
-				}
-			}
-		}
-	}()
+	// ELIMINADO: Ya NO anexar referencias al campo anamnesis
+	// Las referencias ahora se manejan en el frontend de forma separada
+	// para evitar que aparezca texto mezclado en la presentación del caso
+	
 	// Count the very first question delivered in StartCase as one interaction
 	if threadID != "" {
 		h.mu.Lock()
