@@ -1404,11 +1404,11 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 	finalLines = append(finalLines, "Síntesis: "+coreSummary)
 	finalLines = append(finalLines, "Fortalezas: "+strengths)
 	finalLines = append(finalLines, "Áreas de mejora: "+improvements)
-	
+
 	// Normalizar referencias: siempre sanitizar el feedback y extraer solo citas válidas
 	sanitized := sanitizeReferences(fbOriginal)
 	hasValidRefs := false
-	
+
 	// Buscar si hay líneas después de "Referencias:" que sean citas válidas
 	lines := strings.Split(sanitized, "\n")
 	for i, line := range lines {
@@ -1424,11 +1424,11 @@ func forceFinishInteractive(data map[string]any, threadID string, h *Handler) {
 			break
 		}
 	}
-	
+
 	if !hasValidRefs {
 		finalLines = append(finalLines, "Referencias: Fuente clínica estándar")
 	}
-	
+
 	data["feedback"] = strings.Join(finalLines, "\n")
 	data["status"] = "finished"
 	// include metric of missing correct_index events if present
