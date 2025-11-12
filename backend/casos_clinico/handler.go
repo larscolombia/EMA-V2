@@ -373,54 +373,58 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	if isEvaluation {
 		// EVALUACIÓN FINAL: Instrucciones específicas SIN pregunta final
 		// CRÍTICO: Usar saltos de línea reales para mostrar formato ejemplo
-		instr = `MARKDOWN estructurado (NO JSON). Sigue EXACTAMENTE el formato solicitado.
-
-FORMATO EXACTO:
+		instr = `RESPONDE EN MARKDOWN PURO (NO JSON). SIGUE EXACTAMENTE ESTE FORMATO:
 
 # Resumen Clínico
 
-(2-4 frases resumiendo caso y abordaje del usuario)
+El caso presenta... (2-4 frases resumiendo caso y abordaje del usuario)
 
 ## Desempeño Global
 
-(2-3 frases sobre razonamiento, estructura, priorización)
+El usuario demostró... (2-3 frases sobre razonamiento, estructura, priorización)
 
 ## Fortalezas
 
-- (bullets con fortalezas específicas)
+- Uso adecuado de...
+- Identificación correcta de...
+- Razonamiento estructurado...
 
 ## Áreas de Mejora
 
-- (bullets específicas)
+- Mayor profundización en...
+- Inclusión de datos objetivos...
+- Clarificar la transición entre...
 
 ## Recomendaciones
 
-- (bullets concretas)
+- Profundizar en la interpretación de...
+- Revisar y sistematizar...
+- Refinar el razonamiento clínico...
 
 ## Errores Críticos
 
-- (detallar específicamente o indicar "Ninguno identificado")
+Ninguno identificado.
 
 ## Puntuación
 
-Puntuación: NN/100
+Puntuación: 85/100
 
-(1-2 líneas de justificación clara)
+La evaluación destaca un razonamiento sólido y estructurado, aunque se recomienda mayor detalle en la integración de pruebas diagnósticas.
 
 ## Referencias
 
-- Autor (año). Título.
-- Autor (año). Título.
-
-(2-4 fuentes en formato APA simplificado: SOLO autor, año, título. SIN abstract ni explicaciones adicionales)
+- Manual de Urgencias (2020). Síndrome Coronario Agudo.
+- Guía ESC (2021). Manejo del Infarto Agudo de Miocardio.
 
 INSTRUCCIONES CRÍTICAS:
-- Respetar EXACTAMENTE este formato con líneas en blanco entre secciones
-- Usar # para el título principal
-- Usar ## para cada subsección
+- DEBES dejar UNA LÍNEA EN BLANCO después de cada encabezado (# o ##)
+- DEBES dejar UNA LÍNEA EN BLANCO entre cada sección
+- Usar # SOLO para "Resumen Clínico" (título principal)
+- Usar ## para TODAS las demás secciones
 - NO incluir preguntas al final
-- Referencias: SOLO citas bibliográficas (autor, año, título) - NO agregar texto explicativo
-- Idioma: español`
+- Referencias: SOLO formato "Autor (año). Título." - SIN texto explicativo adicional
+- Idioma: español
+- NO devolver JSON, solo MARKDOWN plano`
 	} else {
 		// MENSAJE NORMAL: Instrucciones optimizadas (reducidas ~60%)
 		instr = strings.Join([]string{

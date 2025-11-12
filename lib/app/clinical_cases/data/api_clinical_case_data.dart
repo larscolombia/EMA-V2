@@ -388,52 +388,74 @@ class ApiClinicalCaseData {
   bool _detectMarkdownFormat(String text) {
     final lower = text.toLowerCase();
 
-    // CRITERIO PRINCIPAL: Debe contener indicadores ESPECÍFICOS de evaluación
-    // No basta con tener headers Markdown (## Análisis) - eso es chat normal
+    print('[DETECT_MD] 🔍 Analizando texto...');
+    print('[DETECT_MD] 📝 Longitud: ${text.length} chars');
 
     // Indicador 1: Prompt de evaluación oculto (más confiable)
     if (text.contains('[[HIDDEN_EVAL_PROMPT]]')) {
+      print('[DETECT_MD] ✅ Detectado: HIDDEN_EVAL_PROMPT');
       return true;
     }
 
-    // Indicador 2: Headers de evaluación ESPECÍFICOS (# Resumen Clínico con #, no ##)
-    final hasEvaluationHeader =
-        text.contains(
-          RegExp(
-            r'^#\s+Resumen Clínico',
-            multiLine: true,
-            caseSensitive: false,
-          ),
-        ) ||
-        text.contains(
-          RegExp(
-            r'^#\s+Resumen Clinico',
-            multiLine: true,
-            caseSensitive: false,
-          ),
-        );
+    // Indicador 2: Headers de evaluación ESPECÍFICOS
+    // Buscar "# Resumen Clínico" o "# Resumen Clinico" (con o sin salto de línea después)
+    final hasEvaluationHeader = text.contains(
+      RegExp(
+        r'#\s*Resumen\s+Cl[ií]nico',
+        multiLine: true,
+        caseSensitive: false,
+      ),
+    );
 
-    // Indicador 3: Secciones MÚLTIPLES de evaluación (no solo una)
+    print('[DETECT_MD] 📋 Header "Resumen Clínico": $hasEvaluationHeader');
+
+    // Indicador 3: Secciones MÚLTIPLES de evaluación
+    final hasDesempeno =
+        lower.contains('desempeño') || lower.contains('desempeno');
+    final hasFortalezas = lower.contains('fortalezas');
+    final hasMejoras =
+        lower.contains('áreas de mejora') || lower.contains('areas de mejora');
+    final hasRecomendaciones = lower.contains('recomendaciones');
+    final hasErrores =
+        lower.contains('errores críticos') ||
+        lower.contains('errores criticos');
+    final hasPuntuacion =
+        lower.contains('puntuación') || lower.contains('puntuacion');
+
     final sectionCount =
         [
-          lower.contains('desempeño') || lower.contains('desempeno'),
-          lower.contains('fortalezas'),
-          lower.contains('áreas de mejora') ||
-              lower.contains('areas de mejora'),
-          lower.contains('recomendaciones'),
-          lower.contains('errores críticos') ||
-              lower.contains('errores criticos'),
-          lower.contains('puntuación') || lower.contains('puntuacion'),
+          hasDesempeno,
+          hasFortalezas,
+          hasMejoras,
+          hasRecomendaciones,
+          hasErrores,
+          hasPuntuacion,
         ].where((hasSection) => hasSection).length;
 
-    // Indicador 4: Longitud (evaluaciones son largas >2000 chars)
-    final isVeryLong = text.length > 2000;
+    print('[DETECT_MD] 📊 Secciones encontradas: $sectionCount');
+    print('[DETECT_MD]   - Desempeño: $hasDesempeno');
+    print('[DETECT_MD]   - Fortalezas: $hasFortalezas');
+    print('[DETECT_MD]   - Mejoras: $hasMejoras');
+    print('[DETECT_MD]   - Recomendaciones: $hasRecomendaciones');
+    print('[DETECT_MD]   - Errores: $hasErrores');
+    print('[DETECT_MD]   - Puntuación: $hasPuntuacion');
 
-    // REGLA: Es evaluación si:
-    // - Tiene header "# Resumen Clínico" (nivel 1, no 2) Y
-    // - Tiene al menos 3 secciones de evaluación Y
-    // - Es muy largo (>2000 chars)
-    return hasEvaluationHeader && sectionCount >= 3 && isVeryLong;
+    // Indicador 4: Longitud (evaluaciones son largas >1800 chars)
+    final isLongEnough = text.length > 1800;
+    print('[DETECT_MD] 📏 Longitud suficiente (>1800): $isLongEnough');
+
+    // REGLA FLEXIBLE: Es evaluación si:
+    // - Tiene header "# Resumen Clínico" Y al menos 3 secciones Y >1800 chars
+    // O bien: Tiene al menos 4 secciones Y >1800 chars (sin header por formato incorrecto)
+    final isEvaluation =
+        (hasEvaluationHeader && sectionCount >= 3 && isLongEnough) ||
+        (sectionCount >= 4 && isLongEnough);
+
+    print(
+      '[DETECT_MD] ${isEvaluation ? "✅ ES EVALUACIÓN" : "❌ NO ES EVALUACIÓN"}',
+    );
+
+    return isEvaluation;
   }
 
   Future<List<ClinicalCaseModel>> getClinicalCaseByUserId({
