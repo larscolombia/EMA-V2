@@ -374,8 +374,16 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		"Ejemplo CORRECTO: 'Solicitar Monospot es apropiado dado el cuadro clínico. Esta prueba tiene alta especificidad (>95%) en adolescentes con presentación compatible y complementa el diagnóstico cuando hay linfocitosis atípica y hallazgos físicos sugestivos.'",
 		"CONTEXTUALIZACIÓN: Relaciona CADA comentario con las características ESPECÍFICAS del paciente presentado (edad, comorbilidades, presentación clínica, hallazgos previos).",
 		"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para ESTE paciente específico y explica por qué es superior.",
+		"COHERENCIA EN PREGUNTA FINAL (CRÍTICO):",
+		"- La pregunta final DEBE surgir naturalmente del contexto clínico del caso y lo discutido hasta ahora.",
+		"- NO introduzcas nuevos exámenes, escenarios o líneas diagnósticas ajenas al caso presentado.",
+		"- NO preguntes sobre hallazgos de exámenes que NO son apropiados para este caso específico.",
+		"- Si mencionaste que un examen NO está indicado, NO preguntes sobre sus hallazgos.",
+		"- La pregunta debe profundizar el razonamiento DENTRO del caso, no abrir nuevas líneas diagnósticas.",
+		"- Ejemplo CORRECTO si discutiste ecografía como indicada: '¿Qué hallazgos ecográficos esperarías en este cuadro?'",
+		"- Ejemplo INCORRECTO: Mencionar que TAC no está indicado y luego preguntar '¿Qué hallazgos tomográficos buscarías?'",
 		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
-		"La ÚLTIMA línea: SOLO la pregunta, sin texto adicional.",
+		"La ÚLTIMA línea: SOLO la pregunta, sin texto adicional. La pregunta debe ser específica al caso, no genérica.",
 		"No inventes datos nuevos. Mantente dentro del caso clínico presentado.",
 		"Idioma: español.",
 	}, " ")
@@ -416,8 +424,14 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			"Ejemplo: 'La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal.'",
 			"CONTEXTUALIZACIÓN: Relaciona con características del paciente presentado.",
 			"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para este paciente.",
+			"COHERENCIA EN PREGUNTA FINAL (CRÍTICO):",
+			"- La pregunta final debe surgir naturalmente del contexto del caso y lo discutido.",
+			"- NO introduzcas nuevos exámenes o escenarios ajenos al caso.",
+			"- NO preguntes sobre hallazgos de exámenes que NO son apropiados para este caso.",
+			"- Si mencionaste que un examen NO está indicado, NO preguntes sobre sus hallazgos.",
+			"- La pregunta debe profundizar el razonamiento DENTRO del caso, no abrir nuevas líneas.",
 			"Separa párrafos con UNA línea en blanco.",
-			"La ÚLTIMA línea: SOLO la pregunta.",
+			"La ÚLTIMA línea: SOLO la pregunta, específica al caso y coherente con lo discutido.",
 			"Mantente dentro del caso clínico presentado.",
 		}, " ")
 
@@ -544,14 +558,14 @@ func wrapWithFinalQuestion(in <-chan string, userPrompt string, turn int) <-chan
 		if !endsWithQuestionMark(buf.String()) {
 			q := deriveFinalQuestion(buf.String(), userPrompt, turn)
 			if strings.TrimSpace(q) == "" {
-				q = "¿Cuál sería el siguiente paso más adecuado?"
+				q = "¿Cuál sería tu siguiente paso?"
 			}
 			if os.Getenv("CLINICAL_DEBUG_FINALQ") == "true" {
 				tail := buf.String()
 				if len(tail) > 180 {
 					tail = tail[len(tail)-180:]
 				}
-				log.Printf("[analytical][sse] appended final question | turn=%d | derived='%s' | tail=\n%s", turn, q, tail)
+				log.Printf("[analytical][sse] appended fallback question (assistant should provide contextual ones) | turn=%d | fallback='%s' | tail=\n%s", turn, q, tail)
 			}
 			out <- "\n\n" + q
 		}
@@ -580,8 +594,8 @@ func ensureEndsWithQuestion(text string) string {
 		// texto vacío
 		t = ""
 	}
-	// Añadir pregunta breve por defecto
-	q := "¿Cuál sería el siguiente paso más adecuado?"
+	// Añadir pregunta breve por defecto (muy genérica como último recurso)
+	q := "¿Cuál sería tu siguiente paso?"
 	if t == "" {
 		return q
 	}
@@ -606,41 +620,24 @@ func ensureEndsWithQuestionWithFallback(text, fallbackQuestion string) string {
 		if len(tail) > 180 {
 			tail = tail[len(tail)-180:]
 		}
-		log.Printf("[analytical][json] appended final question | derived='%s' | tail=\n%s", fb, tail)
+		log.Printf("[analytical][json] appended fallback question (assistant should provide contextual ones) | fallback='%s' | tail=\n%s", fb, tail)
 	}
 	return t + "\n\n" + fb
 }
 
-// deriveFinalQuestion intenta construir una pregunta coherente con el contenido y la fase del turno
+// deriveFinalQuestion genera una pregunta de fallback MUY GENÉRICA solo cuando el asistente no proporcionó ninguna.
+// El asistente debe generar preguntas contextualizadas; esta función es solo un respaldo de seguridad.
 func deriveFinalQuestion(text, userPrompt string, turn int) string {
-	t := strings.ToLower(text)
-	// Reglas por contenido
-	if strings.Contains(t, "diagnóstico") || strings.Contains(t, "diagnostico") {
-		if strings.Contains(t, "diferencial") || strings.Contains(t, "diferenciales") || strings.Contains(t, "otros diagn") {
-			return "¿Qué otros diagnósticos posibles deberían considerarse según los factores de riesgo y la presentación clínica del paciente?"
-		}
-		if strings.Contains(t, "más probable") || strings.Contains(t, "mas probable") || strings.Contains(t, "probabilidad") {
-			return "¿Cuál es tu diagnóstico más probable y por qué?"
-		}
-	}
-	if strings.Contains(t, "ayuda diagn") || strings.Contains(t, "prueba") || strings.Contains(t, "examen") || strings.Contains(t, "estudio") {
-		return "¿Qué ayudas diagnósticas solicitarías ahora y qué hallazgos esperarías?"
-	}
-	if strings.Contains(t, "manejo") || strings.Contains(t, "tratamiento") || strings.Contains(t, "terapéut") || strings.Contains(t, "terapeut") {
-		return "¿Cuál sería el siguiente paso más adecuado en el manejo?"
-	}
-	// Reglas por fase
+	// Fallback minimalista basado en fase del caso
 	switch {
-	case turn <= 2:
-		return "¿Cuál es tu diagnóstico inicial prioritario y por qué?"
-	case turn <= 4:
-		return "¿Qué ayudas diagnósticas solicitarías ahora y qué hallazgos esperarías?"
-	case turn <= 7:
-		return "¿Qué diagnósticos diferenciales considerarías y cuál es su probabilidad relativa?"
+	case turn <= 3:
+		return "¿Cuál es tu siguiente paso en el abordaje de este paciente?"
+	case turn <= 6:
+		return "¿Qué otros elementos considerarías en este caso?"
 	case turn < 10:
-		return "¿Cuál sería el plan de manejo inicial más apropiado?"
+		return "¿Cómo continuarías el manejo?"
 	default:
-		return "¿Cuál es tu diagnóstico final y cuál sería el siguiente paso en el manejo?"
+		return "¿Cuál sería tu conclusión?"
 	}
 }
 
