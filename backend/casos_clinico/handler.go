@@ -263,8 +263,8 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		}
 	}
 	// Anexar referencias (RAG + PubMed) de forma no disruptiva: al final de management
-	// Solo si está habilitado por variable de entorno para evitar timeouts
-	if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+	// Por defecto habilitado (deshabilitar con CLINICAL_APPEND_REFS=false)
+	if isRAGEnabled() {
 		func() {
 			// proteger contra pánicos por tipos inesperados
 			defer func() { _ = recover() }()
@@ -343,43 +343,88 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		closingInstr = "No cierres todavía ni des conclusiones definitivas. No incluyas bibliografía aún."
 	}
 
+	// Búsqueda de evidencia ANTES de generar respuesta para fundamentar evaluación crítica
+	var ragContext string
+	if isRAGEnabled() {
+		func() {
+			defer func() { _ = recover() }()
+			refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer refCancel()
+			refs := collectEvidence(refCtx, h.aiAnalytical, userPrompt)
+			if strings.TrimSpace(refs) != "" {
+				ragContext = "EVIDENCIA CIENTÍFICA DISPONIBLE para fundamentar tu evaluación:\n" + refs + "\n\n"
+			}
+		}()
+	}
+
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
-		"Estructura del texto: 1) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales; integra resultados de ayudas diagnósticas cuando existan) 2) Retroalimentación CRÍTICA y CONTEXTUAL (1–2 líneas) 3) Pregunta final.",
+		"Estructura del texto: 1) EVALUACIÓN EXPLÍCITA de la respuesta del usuario 2) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) 3) Pregunta final.",
 		phaseInstr,
 		closingInstr,
-		"ENFOQUE CRÍTICO: No uses frases afirmativas simples como 'muy bien' o 'correcto'. Usa análisis contextual: 'Esa podría ser una opción, pero en ESTE caso específico sería más apropiado [X] porque [razones del contexto clínico del paciente]'.",
-		"CONTEXTUALIZACIÓN: Relaciona CADA comentario con las características ESPECÍFICAS de ESTE paciente (edad, comorbilidades, presentación clínica, hallazgos previos).",
-		"COMPARACIÓN DE ALTERNATIVAS: Explica por qué ciertos enfoques son mejores que otros EN ESTE CONTEXTO PARTICULAR, no solo en general.",
-		"Incluye SIEMPRE una línea de 'Retroalimentación: <comentario crítico>' inmediatamente antes de la pregunta final.",
+		"EVALUACIÓN CRÍTICA OBLIGATORIA:",
+		"- Si la respuesta del usuario es INCORRECTA, inapropiada o no está indicada clínicamente, identifícala EXPLÍCITAMENTE con '❌' seguido de una justificación clara basada en evidencia.",
+		"- Si la respuesta es CORRECTA y apropiada, reconócela con '✅' y refuerza conceptos clave.",
+		"- NO uses lenguaje condescendiente o diplomático que valide decisiones incorrectas (evita: 'podría ser una opción', 'no sería la primera elección pero...').",
+		"- FUNDAMENTA tu evaluación con evidencia científica cuando esté disponible en el contexto proporcionado.",
+		"Ejemplo de evaluación INCORRECTA: '❌ El TAC de tórax NO está indicado en este contexto. La mononucleosis infecciosa se diagnostica clínicamente y con pruebas serológicas (Monospot, anticuerpos heterófilos). El manejo es conservador (reposo, hidratación, analgésicos). La imagenología avanzada solo se considera ante complicaciones atípicas como rotura esplénica o compromiso respiratorio grave, que NO se presentan en este caso.'",
+		"Ejemplo de evaluación CORRECTA: '✅ Solicitar Monospot es apropiado. Esta prueba detecta anticuerpos heterófilos y tiene alta especificidad (>95%) en adolescentes/adultos jóvenes con presentación clínica compatible. Complementa el diagnóstico cuando la linfocitosis atípica y los hallazgos físicos (adenopatías, esplenomegalia) sugieren mononucleosis.'",
+		"CONTEXTUALIZACIÓN: Relaciona CADA evaluación con las características ESPECÍFICAS de ESTE paciente (edad, comorbilidades, presentación clínica, hallazgos previos, indicaciones clínicas reales).",
+		"COMPARACIÓN DE ALTERNATIVAS: Si la respuesta es incorrecta, indica la conducta o prueba CORRECTA y explica por qué es superior EN ESTE CONTEXTO PARTICULAR.",
 		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
 		"Referenciar hallazgos previos sin repetirlos literalmente; añade nueva inferencia o hipótesis en cada turno.",
 		"La ÚLTIMA línea debe ser SOLO la pregunta, sin texto adicional antes ni después.",
 		"No inventes datos que no se hayan introducido implícita o explícitamente en el hilo.",
 		"Idioma: español.",
 	}, " ")
+	
+	// Integrar evidencia en el prompt del usuario si está disponible
+	if ragContext != "" {
+		userPrompt = ragContext + "RESPUESTA DEL USUARIO: " + userPrompt
+	}
 	// Si el cliente solicita streaming SSE, emitimos eventos con marcadores de etapa
 	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
 	if strings.Contains(accept, "text/event-stream") {
+		// Búsqueda de evidencia para streaming
+		var refsSSE string
+		if isRAGEnabled() {
+			func() {
+				defer func() { _ = recover() }()
+				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+				defer refCancel()
+				refsSSE = collectEvidence(refCtx, h.aiAnalytical, req.Mensaje)
+			}()
+		}
+		
 		// Para SSE, pedimos TEXTO PLANO (no JSON) para que el frontend no reciba envoltorios.
 		// Instrucciones textuales equivalentes a la versión JSON:
 		textInstr := strings.Join([]string{
 			"Responde en TEXTO PLANO en español, sin markdown ni JSON.",
-			"Estructura: 2–3 párrafos (150–220 palabras en total) de razonamiento clínico progresivo integrando resultados de ayudas diagnósticas disponibles (laboratorio, imagen, etc.).",
+			"Estructura: 1) EVALUACIÓN EXPLÍCITA de la respuesta del usuario 2) Razonamiento clínico (2–3 párrafos, 150–220 palabras) 3) Pregunta final.",
 			phaseInstr,
 			closingInstr,
-			"ENFOQUE CRÍTICO: No uses frases afirmativas simples como 'muy bien' o 'correcto'. Usa análisis contextual: 'Esa podría ser una opción, pero en ESTE caso específico sería más apropiado [X] porque [razones del contexto]'.",
-			"CONTEXTUALIZACIÓN: Relaciona CADA comentario con las características ESPECÍFICAS de ESTE paciente (edad, comorbilidades, presentación clínica).",
-			"COMPARACIÓN: Explica por qué ciertos enfoques son mejores que otros EN ESTE CONTEXTO PARTICULAR.",
-			"Incluye SIEMPRE una línea de 'Retroalimentación: <comentario crítico>' inmediatamente antes de la pregunta final.",
-			"Separa párrafos con UNA línea en blanco. No uses viñetas ni tablas.",
-			"La ÚLTIMA línea debe ser SOLO una pregunta, sin prefijos ni texto adicional.",
-			"No inventes datos; apóyate en lo ya discutido. No incluyas 'Referencias' salvo que se indique cerrar.",
+			"EVALUACIÓN CRÍTICA OBLIGATORIA:",
+			"- Si la respuesta es INCORRECTA o inapropiada: identifícala con '❌' + justificación clara basada en evidencia.",
+			"- Si es CORRECTA: reconócela con '✅' + refuerzo de conceptos clave.",
+			"- NO uses lenguaje condescendiente que valide errores (evita: 'podría ser una opción').",
+			"- FUNDAMENTA con evidencia científica disponible.",
+			"Ejemplo INCORRECTO: '❌ El TAC de tórax NO está indicado. La mononucleosis se diagnostica clínicamente y con serología (Monospot). Manejo: reposo, hidratación, analgésicos. Imagenología solo ante complicaciones atípicas no presentes aquí.'",
+			"CONTEXTUALIZACIÓN: Relaciona con características ESPECÍFICAS del paciente.",
+			"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA y por qué es superior EN ESTE CONTEXTO.",
+			"Separa párrafos con UNA línea en blanco. Sin viñetas ni tablas.",
+			"La ÚLTIMA línea: SOLO la pregunta.",
+			"No inventes datos.",
 		}, " ")
+
+		// Integrar evidencia si está disponible
+		promptWithContext := req.Mensaje
+		if strings.TrimSpace(refsSSE) != "" {
+			promptWithContext = "EVIDENCIA CIENTÍFICA DISPONIBLE:\n" + refsSSE + "\n\nRESPUESTA DEL USUARIO: " + req.Mensaje
+		}
 
 		// Obtener stream de texto plano del assistant
 		prompt := strings.Join([]string{
-			"Mensaje del usuario:", userPrompt,
+			"Mensaje del usuario:", promptWithContext,
 			"\n\nInstrucciones:", textInstr,
 		}, " ")
 		ch, err := h.aiAnalytical.StreamAssistantMessage(ctx, threadID, prompt)
@@ -388,26 +433,13 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 			return
 		}
 
-		// Intentar inferir si hay evidencia RAG/PubMed para emitir etapas más precisas.
-		refs := ""
-		// collectEvidence hace búsquedas en vector store y PubMed y devuelve bloque de referencias
-		// Solo buscar evidencia si está habilitado para evitar timeouts
-		if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
-			func() {
-				defer func() { _ = recover() }()
-				// Timeout más agresivo para búsquedas de evidencia en chat (5s máximo)
-				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
-				defer refCancel()
-				refs = collectEvidence(refCtx, h.aiAnalytical, userPrompt)
-			}()
-		}
-
+		// Marcar etapas de búsqueda de evidencia para el frontend
 		stages := []string{"__STAGE__:start", "__STAGE__:rag_search"}
-		if strings.TrimSpace(refs) == "" {
+		if strings.TrimSpace(refsSSE) == "" {
 			stages = append(stages, "__STAGE__:rag_empty", "__STAGE__:no_source", "__STAGE__:streaming_answer")
 		} else {
-			hasPub := strings.Contains(refs, "PubMed:")
-			hasRag := strings.Contains(refs, "Base de conocimiento médico") || strings.Contains(refs, "Referencias:")
+			hasPub := strings.Contains(refsSSE, "PubMed:")
+			hasRag := strings.Contains(refsSSE, "Base de conocimiento médico") || strings.Contains(refsSSE, "Referencias:")
 			if hasRag {
 				stages = append(stages, "__STAGE__:rag_found")
 			} else {
@@ -753,8 +785,8 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 	// Ensure minimal question present
 	ensureInteractiveDefaults(parsed, req)
 	// Anexar referencias al management del caso (no altera preguntas)
-	// Solo si está habilitado por env para evitar timeouts prolongados
-	if os.Getenv("CLINICAL_APPEND_REFS") == "true" {
+	// Por defecto habilitado (deshabilitar con CLINICAL_APPEND_REFS=false)
+	if isRAGEnabled() {
 		func() {
 			defer func() { _ = recover() }()
 			if caseMap, ok := parsed["case"].(map[string]any); ok {
@@ -1067,6 +1099,13 @@ func toString(v interface{}) string {
 
 // --- Evidence helpers (RAG + PubMed) --- //
 
+// isRAGEnabled retorna true si RAG está habilitado (por defecto: true, excepto si CLINICAL_APPEND_REFS="false")
+func isRAGEnabled() bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv("CLINICAL_APPEND_REFS")))
+	// Si está vacío o cualquier valor distinto de "false", está habilitado
+	return val != "false"
+}
+
 // getFixedBooksVectorID retorna el vector store fijo usado para libros del asistente (si está configurado);
 // si no, usa el ID observado en conversations_ia (mantener sincronizado si cambia).
 func getFixedBooksVectorID() string {
@@ -1192,7 +1231,7 @@ func safeAppendRefsToRespuesta(ctx context.Context, ai Assistant, parsed *map[st
 		return
 	}
 	// Solo buscar referencias si está habilitado para evitar timeouts
-	if os.Getenv("CLINICAL_APPEND_REFS") != "true" {
+	if !isRAGEnabled() {
 		return
 	}
 	p := *parsed

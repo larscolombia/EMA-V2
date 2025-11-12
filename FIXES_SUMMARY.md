@@ -2,6 +2,54 @@
 
 ## Problemas Identificados y Solucionados
 
+### ✅ 0. Evaluación Crítica en Casos Clínicos Analíticos con RAG
+**Fecha:** 2025-11-12
+**Archivos:** 
+- `backend/casos_clinico/handler.go`
+- `backend/.env.example`
+
+**Problema:** 
+El asistente en casos clínicos analíticos era demasiado condescendiente y no identificaba respuestas incorrectas de manera clara. Por ejemplo, cuando un usuario respondía "TAC de tórax" para mononucleosis infecciosa (una prueba NO indicada clínicamente), el asistente validaba la respuesta como "podría ser una opción" en lugar de marcarla como incorrecta.
+
+**Solución Implementada:**
+
+1. **Búsqueda RAG ANTES de evaluar** (no solo al cierre):
+   - Se integró `collectEvidence()` con búsqueda en vector store de libros médicos + PubMed
+   - La evidencia se incluye en el contexto del prompt para fundamentar la evaluación
+   - Timeout de 5 segundos para no afectar la experiencia del usuario
+
+2. **Prompt reforzado con instrucciones explícitas**:
+   ```
+   EVALUACIÓN CRÍTICA OBLIGATORIA:
+   - Si la respuesta es INCORRECTA: ❌ + justificación clara basada en evidencia
+   - Si es CORRECTA: ✅ + refuerzo de conceptos clave
+   - NO usar lenguaje condescendiente (evitar: "podría ser una opción")
+   - FUNDAMENTAR con evidencia científica disponible
+   ```
+
+3. **Ejemplos concretos en el prompt**:
+   - Ejemplo de evaluación INCORRECTA: "❌ El TAC de tórax NO está indicado. La mononucleosis se diagnostica clínicamente y con serología (Monospot)..."
+   - Ejemplo de evaluación CORRECTA: "✅ Solicitar Monospot es apropiado. Esta prueba tiene alta especificidad (>95%) en adolescentes..."
+
+4. **RAG habilitado por defecto**:
+   - Función `isRAGEnabled()` retorna `true` por defecto (a menos que `CLINICAL_APPEND_REFS=false`)
+   - Documentado en `.env.example` con comentarios claros sobre su propósito
+   - Aplicado tanto en modo JSON como en streaming (SSE)
+
+**Beneficios:**
+- ✅ Evaluaciones fundamentadas en evidencia científica (libros médicos + PubMed)
+- ✅ Identificación clara de errores médicos con justificación
+- ✅ Mayor rigor académico y menos condescendencia
+- ✅ Referencias al final cuando se usa evidencia
+- ✅ Retroalimentación educativa de calidad
+
+**Pruebas:**
+- ✅ Compilación exitosa del backend
+- ✅ Tests unitarios pasan correctamente
+- ✅ RAG se ejecuta de forma asíncrona sin bloquear la respuesta
+
+---
+
 ### ✅ 1. Subida de PDF sin texto no funciona bien
 **Archivo:** `lib/common/widgets/message_field_box.dart`
 **Problema:** El botón de envío se deshabilitaba cuando solo había un PDF sin texto
