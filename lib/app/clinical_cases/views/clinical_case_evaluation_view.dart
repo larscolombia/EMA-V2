@@ -23,57 +23,145 @@ class _ClinicalCaseEvaluationViewState
   ChatMessageModel? evaluationMessage;
   bool isLoadingEvaluation = false;
 
-  Future<void> _loadEvaluationMessage() async {
-    if (evaluationMessage != null) return;
+  Future<void> _loadEvaluationMessage({bool forceReload = false}) async {
+    print(
+      '[EVAL_LOAD] 🔄 Iniciando carga de evaluación... (forceReload=$forceReload)',
+    );
 
+    if (evaluationMessage != null && !forceReload) {
+      print('[EVAL_LOAD] ✅ Evaluación ya cargada, saliendo');
+      return;
+    }
     final caseModel = controller.currentCase.value;
-    if (caseModel == null) return;
+    if (caseModel == null) {
+      print('[EVAL_LOAD] ❌ No hay caso actual');
+      return;
+    }
+
+    print('[EVAL_LOAD] 📋 Caso: ${caseModel.uid} - Tipo: ${caseModel.type}');
 
     setState(() {
       isLoadingEvaluation = true;
     });
 
     try {
+      print('[EVAL_LOAD] 🔍 Cargando mensajes desde BD...');
+
       // Cargar todos los mensajes del caso desde la BD
-      final allMessages = await controller.clinicalCaseServive
+      final allMessagesRaw = await controller.clinicalCaseServive
           .loadMessageByCaseId(caseModel.uid);
+
+      print('[EVAL_LOAD] 📦 Mensajes raw recibidos: ${allMessagesRaw.length}');
+      print(
+        '[EVAL_LOAD] 📦 Tipo de allMessagesRaw: ${allMessagesRaw.runtimeType}',
+      );
+
+      // Casting explícito para asegurar tipo correcto
+      final allMessages = List<ChatMessageModel>.from(allMessagesRaw);
+
+      print(
+        '[EVAL_LOAD] ✅ Casting exitoso. Total mensajes: ${allMessages.length}',
+      );
 
       final caseType = caseModel.type;
 
       if (caseType == ClinicalCaseType.analytical) {
+        print('[EVAL_LOAD] 🔬 Procesando caso ANALÍTICO');
+
         // Para analíticos: buscar mensaje con prompt oculto [[HIDDEN_EVAL_PROMPT]]
         // o que contenga 'puntuación' y 'referencias'
-        for (final m in allMessages.reversed.where((m) => m.aiMessage)) {
+        final aiMessages = allMessages.where((m) => m.aiMessage).toList();
+        print('[EVAL_LOAD] 🤖 Mensajes AI encontrados: ${aiMessages.length}');
+
+        int idx = 0;
+        for (final m in aiMessages.reversed) {
           final lower = m.text.toLowerCase();
-          if (lower.contains('puntuación') ||
+          final preview = m.text.substring(
+            0,
+            m.text.length > 100 ? 100 : m.text.length,
+          );
+          print('[EVAL_LOAD] 🔎 AI[$idx] - Preview: $preview...');
+
+          // Detección mejorada: buscar indicadores de evaluación
+          final hasEvaluationKeywords =
+              lower.contains('puntuación') ||
               lower.contains('puntuacion') ||
-              m.text.contains('[[HIDDEN_EVAL_PROMPT]]')) {
+              lower.contains('resumen clínico') ||
+              lower.contains('resumen clinico') ||
+              lower.contains('# resumen clínico') || // Markdown header
+              lower.contains('# resumen clinico');
+
+          final hasEvaluationSections =
+              (lower.contains('desempeño') || lower.contains('desempeno')) &&
+              (lower.contains('fortalezas') ||
+                  lower.contains('áreas de mejora'));
+
+          final hasHiddenPrompt = m.text.contains('[[HIDDEN_EVAL_PROMPT]]');
+
+          // Evaluación típicamente >1500 chars, mensajes de chat <1500 chars
+          final isLongEnough = m.text.length > 1500;
+
+          if (hasHiddenPrompt ||
+              hasEvaluationKeywords ||
+              (hasEvaluationSections && isLongEnough)) {
             evaluationMessage = m;
+            print('[EVAL_LOAD] ✅ Evaluación encontrada en AI[$idx]');
+            print('[EVAL_LOAD] 📝 Longitud del texto: ${m.text.length} chars');
+            print(
+              '[EVAL_LOAD] 📝 Razón: ${hasHiddenPrompt
+                  ? "HIDDEN_PROMPT"
+                  : hasEvaluationSections
+                  ? "SECTIONS"
+                  : "KEYWORDS"}',
+            );
             break;
           }
+          idx++;
         }
         // Fallback: último mensaje AI
-        evaluationMessage ??= allMessages.where((m) => m.aiMessage).lastOrNull;
+        if (evaluationMessage == null) {
+          evaluationMessage = aiMessages.lastOrNull;
+          print('[EVAL_LOAD] ⚠️ Usando fallback: último mensaje AI');
+        }
       } else {
+        print('[EVAL_LOAD] 🎮 Procesando caso INTERACTIVO');
+
         // Interactivo: buscar mensaje con 'Resumen Final:'
-        for (final m in allMessages.reversed.where((m) => m.aiMessage)) {
+        final aiMessages = allMessages.where((m) => m.aiMessage).toList();
+        print('[EVAL_LOAD] 🤖 Mensajes AI encontrados: ${aiMessages.length}');
+
+        for (final m in aiMessages.reversed) {
           final lower = m.text.toLowerCase();
           if (lower.startsWith('resumen final:')) {
             evaluationMessage = m;
+            print('[EVAL_LOAD] ✅ Evaluación interactiva encontrada');
             break;
           }
           if (lower.startsWith('evaluación final interactiva')) {
             continue; // ignorar duplicado
           }
         }
-        evaluationMessage ??= allMessages.where((m) => m.aiMessage).lastOrNull;
+        if (evaluationMessage == null) {
+          evaluationMessage = aiMessages.lastOrNull;
+          print('[EVAL_LOAD] ⚠️ Usando fallback: último mensaje AI');
+        }
       }
-    } catch (e) {
-      print('Error loading evaluation message: $e');
+
+      if (evaluationMessage != null) {
+        print('[EVAL_LOAD] ✅ Evaluación cargada exitosamente');
+        print('[EVAL_LOAD] 📊 UID: ${evaluationMessage!.uid}');
+        print('[EVAL_LOAD] 📊 Format: ${evaluationMessage!.format}');
+      } else {
+        print('[EVAL_LOAD] ❌ No se encontró mensaje de evaluación');
+      }
+    } catch (e, stackTrace) {
+      print('[EVAL_LOAD] ❌ ERROR: $e');
+      print('[EVAL_LOAD] 📚 StackTrace: $stackTrace');
     } finally {
       setState(() {
         isLoadingEvaluation = false;
       });
+      print('[EVAL_LOAD] 🏁 Finalizando carga (isLoading=false)');
     }
   }
 
@@ -109,8 +197,8 @@ class _ClinicalCaseEvaluationViewState
 
       if (!controller.evaluationGenerated.value) {
         controller.generateFinalEvaluation().then((_) {
-          // Recargar el mensaje después de generar la evaluación
-          _loadEvaluationMessage();
+          // Recargar el mensaje después de generar la evaluación (forzar)
+          _loadEvaluationMessage(forceReload: true);
         });
       }
 
@@ -118,7 +206,7 @@ class _ClinicalCaseEvaluationViewState
       ever(controller.evaluationGenerated, (generated) {
         if (generated &&
             controller.currentCase.value?.type == ClinicalCaseType.analytical) {
-          _loadEvaluationMessage();
+          _loadEvaluationMessage(forceReload: true);
         }
       });
     }

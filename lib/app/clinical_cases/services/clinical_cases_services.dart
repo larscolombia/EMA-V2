@@ -206,6 +206,8 @@ class ClinicalCasesServices {
   }
 
   Future<List<ChatMessageModel>> loadMessageByCaseId(String caseId) async {
+    print('[LOAD_MSGS] 🔍 Cargando mensajes para caso: $caseId');
+
     final where = 'chatId = ?';
     final whereArgs = [caseId];
 
@@ -213,6 +215,18 @@ class ClinicalCasesServices {
       where: where,
       whereArgs: whereArgs,
     );
+
+    print('[LOAD_MSGS] 📦 Mensajes cargados: ${items.length}');
+    print('[LOAD_MSGS] 📊 Tipo: ${items.runtimeType}');
+
+    if (items.isNotEmpty) {
+      print(
+        '[LOAD_MSGS] 📝 Primer mensaje - AI: ${items.first.aiMessage}, Length: ${items.first.text.length}',
+      );
+      print(
+        '[LOAD_MSGS] 📝 Último mensaje - AI: ${items.last.aiMessage}, Length: ${items.last.text.length}',
+      );
+    }
 
     return items;
   }
@@ -241,8 +255,16 @@ class ClinicalCasesServices {
   }
 
   Future<void> insertMessage(ChatMessageModel message) async {
+    print('[INSERT_MSG] 💾 Insertando mensaje en BD...');
+    print('[INSERT_MSG] 📝 ID: ${message.uid}');
+    print('[INSERT_MSG] 📋 ChatId: ${message.chatId}');
+    print('[INSERT_MSG] 🤖 AI Message: ${message.aiMessage}');
+    print('[INSERT_MSG] 📝 Longitud: ${message.text.length} chars');
+    print('[INSERT_MSG] 🎨 Format: ${message.format}');
+
     // Se inserta la pregunta en la base de datos local
     await _chatMessagesLocalData.insertOne(message);
+    print('[INSERT_MSG] ✅ Mensaje insertado exitosamente en BD');
   }
 
   Future<Map<String, dynamic>> sendAnswer(
@@ -346,11 +368,24 @@ IMPORTANTE:
   Future<ChatMessageModel> generateAnalyticalEvaluation(
     ClinicalCaseModel clinicalCase,
   ) async {
+    print('[SERVICE_EVAL] 🔄 Iniciando generateAnalyticalEvaluation...');
+    print('[SERVICE_EVAL] 📋 Caso: ${clinicalCase.uid}');
+
     // Cargar todos los mensajes previos del caso
-    final history = await loadMessageByCaseId(clinicalCase.uid);
+    print('[SERVICE_EVAL] 🔍 Cargando historial de mensajes...');
+    final historyRaw = await loadMessageByCaseId(clinicalCase.uid);
+    print('[SERVICE_EVAL] 📦 Mensajes raw: ${historyRaw.length}');
+
+    // Casting explícito para asegurar tipo correcto
+    final history = List<ChatMessageModel>.from(historyRaw);
+    print('[SERVICE_EVAL] ✅ Casting exitoso: ${history.length} mensajes');
+
     // Filtrar solo intervenciones del usuario reales (evitar prompts internos)
     final userTurns = history.where((m) => !m.aiMessage).toList();
+    print('[SERVICE_EVAL] 👤 Intervenciones de usuario: ${userTurns.length}');
+
     if (userTurns.isEmpty) {
+      print('[SERVICE_EVAL] ⚠️ Sin intervenciones del usuario');
       // Mensaje AI directo indicando que no hay suficientes datos
       final aiEmpty = ChatMessageModel.ai(
         chatId: clinicalCase.uid,
@@ -367,6 +402,10 @@ IMPORTANTE:
             ? userTurns.sublist(userTurns.length - 15)
             : userTurns;
 
+    print(
+      '[SERVICE_EVAL] 📝 Usando últimas ${lastTurns.length} intervenciones',
+    );
+
     final buffer = StringBuffer();
     for (int i = 0; i < lastTurns.length; i++) {
       final raw = lastTurns[i].text.replaceAll('\n', ' ');
@@ -374,6 +413,7 @@ IMPORTANTE:
       buffer.writeln('${i + 1}. $truncated');
     }
 
+    print('[SERVICE_EVAL] 📄 Creando prompt de evaluación...');
     final evaluationPrompt = ChatMessageModel.user(
       chatId: clinicalCase.uid,
       // IMPORTANTE: NO guardar este mensaje en BD, solo usarlo para generar evaluación
@@ -394,13 +434,28 @@ IMPORTANTE:
           '\n${buffer.toString()}',
     );
 
+    print('[SERVICE_EVAL] 📤 Enviando mensaje al backend...');
+    print(
+      '[SERVICE_EVAL] 📊 Longitud del prompt: ${evaluationPrompt.text.length} chars',
+    );
+
     // NO guardar el prompt oculto en BD - solo enviar al backend y guardar la respuesta
     final aiEvaluation = await _apiClinicalCaseData.sendMessage(
       evaluationPrompt,
     );
 
+    print('[SERVICE_EVAL] 📥 Respuesta recibida del backend');
+    print('[SERVICE_EVAL] 📝 ID: ${aiEvaluation.uid}');
+    print('[SERVICE_EVAL] 📝 Longitud: ${aiEvaluation.text.length} chars');
+    print('[SERVICE_EVAL] 📝 Format: ${aiEvaluation.format}');
+    print(
+      '[SERVICE_EVAL] 📝 Preview (100 chars): ${aiEvaluation.text.substring(0, aiEvaluation.text.length > 100 ? 100 : aiEvaluation.text.length)}',
+    );
+
     // Guardar solo la evaluación AI (sin el prompt oculto)
+    print('[SERVICE_EVAL] 💾 Guardando evaluación en BD...');
     await insertMessage(aiEvaluation);
+    print('[SERVICE_EVAL] ✅ Evaluación guardada exitosamente');
 
     return aiEvaluation;
   }

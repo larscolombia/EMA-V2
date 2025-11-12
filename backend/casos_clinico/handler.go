@@ -317,6 +317,10 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	}
 	// Ask assistant to respond with JSON-wrapped message to avoid extra formatting
 	userPrompt := req.Mensaje
+
+	// DETECCIÓN DE EVALUACIÓN FINAL: Si contiene [[HIDDEN_EVAL_PROMPT]], es una evaluación
+	isEvaluation := strings.Contains(req.Mensaje, "[[HIDDEN_EVAL_PROMPT]]")
+
 	// Determinar turno lógico (1-based). El mapa almacena el último turno completado.
 	h.mu.Lock()
 	turn := h.analyticalTurns[threadID] + 1
@@ -344,8 +348,12 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	}
 
 	// Búsqueda de evidencia ANTES de generar respuesta (solo si respuesta larga/específica)
+	// OPTIMIZACIÓN: Hacer búsqueda UNA SOLA VEZ y reutilizar para ambos flujos (JSON y SSE)
+	// PARA EVALUACIONES: Búsqueda RAG minimalista (solo metadatos para referencias)
 	var ragContext string
-	if isRAGEnabled() && len(req.Mensaje) > 15 {
+	var refsSSE string
+	if isRAGEnabled() && len(req.Mensaje) > 15 && !isEvaluation {
+		// RAG para mensajes normales (contexto completo)
 		func() {
 			defer func() { _ = recover() }()
 			refCtx, refCancel := context.WithTimeout(ctx, 3*time.Second)
@@ -355,29 +363,85 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 				// CRÍTICO: Mantener referencias SEPARADAS del contexto del caso
 				// para que el asistente no se distraiga del paciente específico
 				ragContext = "EVIDENCIA (solo si es directamente relevante al caso actual):\n" + refs + "\n\n"
+				refsSSE = refs // Reutilizar para SSE
 			}
 		}()
 	}
 
-	// Instrucciones optimizadas (reducidas ~60%)
-	instr := strings.Join([]string{
-		"JSON: { 'respuesta': { 'text': <string> } }.",
-		"Texto: 2–3 párrafos (150–220 palabras), razonamiento clínico + pregunta final.",
-		phaseInstr,
-		closingInstr,
-		"EVALUACIÓN CRÍTICA:",
-		"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos presentados).",
-		"- INCORRECTA: por qué no está indicada EN ESTE CASO + conducta correcta.",
-		"- CORRECTA: refuerza conceptos clave (sin elogios).",
-		"- NO emojis, encabezados genéricos, ni lenguaje condescendiente.",
-		"- NO escenarios ajenos al caso (ej: lactantes si paciente es adolescente).",
-		"- FUNDAMENTA con evidencia disponible.",
-		"PREGUNTA FINAL:",
-		"- Coherente con caso y discusión previa.",
-		"- NO nuevos exámenes/escenarios ajenos.",
-		"- NO preguntar sobre hallazgos de exámenes NO indicados.",
-		"Última línea: SOLO pregunta. Sin viñetas/tablas/markdown. Español.",
-	}, " ")
+	// Instrucciones según tipo de mensaje
+	var instr string
+	if isEvaluation {
+		// EVALUACIÓN FINAL: Instrucciones específicas SIN pregunta final
+		// CRÍTICO: Usar saltos de línea reales para mostrar formato ejemplo
+		instr = `MARKDOWN estructurado (NO JSON). Sigue EXACTAMENTE el formato solicitado.
+
+FORMATO EXACTO:
+
+# Resumen Clínico
+
+(2-4 frases resumiendo caso y abordaje del usuario)
+
+## Desempeño Global
+
+(2-3 frases sobre razonamiento, estructura, priorización)
+
+## Fortalezas
+
+- (bullets con fortalezas específicas)
+
+## Áreas de Mejora
+
+- (bullets específicas)
+
+## Recomendaciones
+
+- (bullets concretas)
+
+## Errores Críticos
+
+- (detallar específicamente o indicar "Ninguno identificado")
+
+## Puntuación
+
+Puntuación: NN/100
+
+(1-2 líneas de justificación clara)
+
+## Referencias
+
+- Autor (año). Título.
+- Autor (año). Título.
+
+(2-4 fuentes en formato APA simplificado: SOLO autor, año, título. SIN abstract ni explicaciones adicionales)
+
+INSTRUCCIONES CRÍTICAS:
+- Respetar EXACTAMENTE este formato con líneas en blanco entre secciones
+- Usar # para el título principal
+- Usar ## para cada subsección
+- NO incluir preguntas al final
+- Referencias: SOLO citas bibliográficas (autor, año, título) - NO agregar texto explicativo
+- Idioma: español`
+	} else {
+		// MENSAJE NORMAL: Instrucciones optimizadas (reducidas ~60%)
+		instr = strings.Join([]string{
+			"JSON: { 'respuesta': { 'text': <string> } }.",
+			"Texto: 2–3 párrafos (150–220 palabras), razonamiento clínico + pregunta final.",
+			phaseInstr,
+			closingInstr,
+			"EVALUACIÓN CRÍTICA:",
+			"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos presentados).",
+			"- INCORRECTA: por qué no está indicada EN ESTE CASO + conducta correcta.",
+			"- CORRECTA: refuerza conceptos clave (sin elogios).",
+			"- NO emojis, encabezados genéricos, ni lenguaje condescendiente.",
+			"- NO escenarios ajenos al caso (ej: lactantes si paciente es adolescente).",
+			"- FUNDAMENTA con evidencia disponible.",
+			"PREGUNTA FINAL:",
+			"- Coherente con caso y discusión previa.",
+			"- NO nuevos exámenes/escenarios ajenos.",
+			"- NO preguntar sobre hallazgos de exámenes NO indicados.",
+			"Última línea: SOLO pregunta. Sin viñetas/tablas/markdown. Español.",
+		}, " ")
+	}
 
 	// Integrar evidencia AL FINAL del prompt (no al inicio) para no distraer del caso
 	if ragContext != "" {
@@ -386,16 +450,27 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	// Si el cliente solicita streaming SSE, emitimos eventos con marcadores de etapa
 	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
 	if strings.Contains(accept, "text/event-stream") {
-		// Búsqueda de evidencia para streaming (solo respuestas sustanciales)
-		var refsSSE string
-		if isRAGEnabled() && len(req.Mensaje) > 15 {
-			func() {
-				defer func() { _ = recover() }()
-				refCtx, refCancel := context.WithTimeout(ctx, 3*time.Second)
-				defer refCancel()
-				refsSSE = collectEvidence(refCtx, h.aiAnalytical, req.Mensaje)
-			}()
+		// FLUJO PARA EVALUACIONES: MARKDOWN directo, sin RAG, sin pregunta final
+		if isEvaluation {
+			// Para evaluaciones, usar las instrucciones ya definidas arriba
+			prompt := strings.Join([]string{
+				"Mensaje del usuario:", req.Mensaje,
+				"\n\nInstrucciones:", instr,
+			}, " ")
+			ch, err := h.aiAnalytical.StreamAssistantMessage(ctx, threadID, prompt)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
+				return
+			}
+
+			// Marcar etapa de evaluación (sin RAG, sin pregunta)
+			stages := []string{"__STAGE__:start", "__STAGE__:streaming_answer"}
+			sse.Stream(c, wrapWithErrorDetection(wrapWithStages(stages, ch)))
+			return
 		}
+
+		// FLUJO NORMAL (NO evaluación): OPTIMIZACIÓN: refsSSE ya contiene la búsqueda RAG realizada arriba (no duplicar)
+		// Eliminada la búsqueda duplicada que causaba timeouts
 
 		// Para SSE, pedimos MARKDOWN optimizado (instrucciones reducidas ~60%)
 		textInstr := strings.Join([]string{
@@ -460,6 +535,26 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	}
 
 	// Fallback: comportamiento legacy (no streaming) — consumir primer chunk y responder JSON
+	// Para evaluaciones, usamos StreamAssistantMessage (MARKDOWN) en lugar de JSON
+	if isEvaluation {
+		ch, err := h.aiAnalytical.StreamAssistantMessage(ctx, threadID, userPrompt+" \n\nInstrucciones: "+instr)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
+			return
+		}
+		var content string
+		select {
+		case content = <-ch:
+		case <-ctx.Done():
+			c.JSON(http.StatusOK, gin.H{"text": "No pude generar la evaluación a tiempo. Intenta nuevamente.", "thread_id": threadID, "note": "timeout"})
+			return
+		}
+		// Para evaluaciones, devolver texto directo (MARKDOWN)
+		c.JSON(http.StatusOK, gin.H{"text": strings.TrimSpace(content), "thread_id": threadID})
+		return
+	}
+
+	// Para mensajes normales: JSON
 	ch, err := h.aiAnalytical.StreamAssistantJSON(ctx, threadID, userPrompt, instr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})

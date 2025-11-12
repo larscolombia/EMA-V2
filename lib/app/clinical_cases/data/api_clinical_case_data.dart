@@ -281,8 +281,16 @@ class ApiClinicalCaseData {
     CancelToken? cancelToken,
     void Function(String token)? onStream,
   }) async {
+    print('[API_SEND] 🚀 Iniciando envío de mensaje...');
+    print('[API_SEND] 📋 ChatId: ${userMessage.chatId}');
+    print('[API_SEND] 📝 Longitud mensaje: ${userMessage.text.length} chars');
+    print(
+      '[API_SEND] 📝 Preview (100 chars): ${userMessage.text.substring(0, userMessage.text.length > 100 ? 100 : userMessage.text.length)}',
+    );
+
     final storage = const FlutterSecureStorage();
     final threadId = await storage.read(key: 'interactive_case_thread_id');
+    print('[API_SEND] 🔑 Thread ID: $threadId');
 
     final body = {'thread_id': threadId, 'mensaje': userMessage.text};
 
@@ -290,6 +298,7 @@ class ApiClinicalCaseData {
       _cancelTokens[threadId ?? ''] ??= CancelToken();
       final token = cancelToken ?? _cancelTokens[threadId ?? '']!;
 
+      print('[API_SEND] 📤 Enviando POST a /casos-clinicos/conversar...');
       final response = await _dio.post<dio.ResponseBody>(
         '/casos-clinicos/conversar',
         data: body,
@@ -297,30 +306,41 @@ class ApiClinicalCaseData {
         options: Options(
           responseType: ResponseType.stream,
           headers: {'Accept': 'text/event-stream'},
+          // Timeout extendido para casos clínicos: RAG + streaming puede tardar
+          receiveTimeout: const Duration(
+            minutes: 5,
+          ), // 5 min para RAG + generación
+          sendTimeout: const Duration(minutes: 1),
         ),
       );
 
+      print('[API_SEND] 📥 Respuesta recibida, iniciando streaming...');
       _cancelTokens.remove(threadId);
 
       final bodyStream = response.data;
       if (bodyStream == null) {
+        print('[API_SEND] ❌ ERROR: Respuesta de streaming vacía');
         throw Exception('Respuesta de streaming vacía');
       }
 
       final stream = utf8.decoder.bind(bodyStream.stream);
       final buffer = StringBuffer();
       bool isDone = false;
+      int chunkCount = 0;
 
       await for (final chunk in stream) {
+        chunkCount++;
         for (final line in const LineSplitter().convert(chunk)) {
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
             if (content.startsWith('__STAGE__:')) {
+              print('[API_SEND] 🏷️ Stage: $content');
               onStream?.call(content);
               continue;
             }
             if (content == '[DONE]') {
+              print('[API_SEND] ✅ Marcador [DONE] recibido');
               isDone = true;
               break;
             }
@@ -331,14 +351,89 @@ class ApiClinicalCaseData {
         if (isDone) break;
       }
 
+      print('[API_SEND] 📊 Total chunks procesados: $chunkCount');
       final finalText = buffer.toString();
-      return ChatMessageModel.ai(chatId: userMessage.chatId, text: finalText);
+      print('[API_SEND] 📝 Texto final - Longitud: ${finalText.length} chars');
+      print(
+        '[API_SEND] 📝 Preview (200 chars): ${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}',
+      );
+
+      // Detectar automáticamente si el texto es Markdown estructurado (evaluación)
+      final isMarkdown = _detectMarkdownFormat(finalText);
+      print(
+        '[API_SEND] 🎨 Formato detectado: ${isMarkdown ? "MARKDOWN" : "PLAIN"}',
+      );
+
+      final aiMessage = ChatMessageModel.ai(
+        chatId: userMessage.chatId,
+        text: finalText,
+        format: isMarkdown ? MessageFormat.markdown : MessageFormat.plain,
+      );
+      print('[API_SEND] ✅ Mensaje AI creado - ID: ${aiMessage.uid}');
+
+      return aiMessage;
     } on DioException catch (e) {
+      print('[API_SEND] ❌ DioException: ${e.type} - ${e.message}');
       if (CancelToken.isCancel(e)) rethrow;
       throw Exception('Error en la comunicación: ${e.message}');
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('[API_SEND] ❌ ERROR: $e');
+      print('[API_SEND] 📚 StackTrace: $stackTrace');
       throw Exception('Error inesperado: $e');
     }
+  }
+
+  /// Detecta si el texto contiene Markdown estructurado (evaluación)
+  /// Busca indicadores: headers (#), secciones de evaluación, listas, etc.
+  bool _detectMarkdownFormat(String text) {
+    final lower = text.toLowerCase();
+
+    // CRITERIO PRINCIPAL: Debe contener indicadores ESPECÍFICOS de evaluación
+    // No basta con tener headers Markdown (## Análisis) - eso es chat normal
+
+    // Indicador 1: Prompt de evaluación oculto (más confiable)
+    if (text.contains('[[HIDDEN_EVAL_PROMPT]]')) {
+      return true;
+    }
+
+    // Indicador 2: Headers de evaluación ESPECÍFICOS (# Resumen Clínico con #, no ##)
+    final hasEvaluationHeader =
+        text.contains(
+          RegExp(
+            r'^#\s+Resumen Clínico',
+            multiLine: true,
+            caseSensitive: false,
+          ),
+        ) ||
+        text.contains(
+          RegExp(
+            r'^#\s+Resumen Clinico',
+            multiLine: true,
+            caseSensitive: false,
+          ),
+        );
+
+    // Indicador 3: Secciones MÚLTIPLES de evaluación (no solo una)
+    final sectionCount =
+        [
+          lower.contains('desempeño') || lower.contains('desempeno'),
+          lower.contains('fortalezas'),
+          lower.contains('áreas de mejora') ||
+              lower.contains('areas de mejora'),
+          lower.contains('recomendaciones'),
+          lower.contains('errores críticos') ||
+              lower.contains('errores criticos'),
+          lower.contains('puntuación') || lower.contains('puntuacion'),
+        ].where((hasSection) => hasSection).length;
+
+    // Indicador 4: Longitud (evaluaciones son largas >2000 chars)
+    final isVeryLong = text.length > 2000;
+
+    // REGLA: Es evaluación si:
+    // - Tiene header "# Resumen Clínico" (nivel 1, no 2) Y
+    // - Tiene al menos 3 secciones de evaluación Y
+    // - Es muy largo (>2000 chars)
+    return hasEvaluationHeader && sectionCount >= 3 && isVeryLong;
   }
 
   Future<List<ClinicalCaseModel>> getClinicalCaseByUserId({

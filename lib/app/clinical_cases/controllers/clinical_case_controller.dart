@@ -264,9 +264,11 @@ class ClinicalCaseController extends GetxController
       currentCase.value = null;
       change(null, status: RxStatus.empty());
     } else {
-      final loadedMessages = await clinicalCaseServive.loadMessageByCaseId(
+      final loadedMessagesRaw = await clinicalCaseServive.loadMessageByCaseId(
         caseId,
       );
+      // Casting explícito para asegurar tipo correcto
+      final loadedMessages = List<ChatMessageModel>.from(loadedMessagesRaw);
       final loadedQuestions = await clinicalCaseServive.loadQuestionsByCaseId(
         caseId,
       );
@@ -548,24 +550,56 @@ class ClinicalCaseController extends GetxController
   /// SIN agregarlo al chat visible (similar a los casos interactivos).
   /// Navega directamente a la pantalla de evaluación.
   Future<void> generateFinalEvaluation() async {
+    print('[GENERATE_EVAL] 🚀 Iniciando generación de evaluación...');
+
     final clinicalCase = currentCase.value;
     if (clinicalCase == null ||
         clinicalCase.type != ClinicalCaseType.analytical) {
+      print('[GENERATE_EVAL] ❌ Caso no válido o no es analítico');
       return;
     }
+
+    print('[GENERATE_EVAL] 📋 Caso: ${clinicalCase.uid}');
+    print(
+      '[GENERATE_EVAL] 📊 Evaluación en progreso: ${evaluationInProgress.value}',
+    );
+    print(
+      '[GENERATE_EVAL] 📊 Evaluación generada: ${evaluationGenerated.value}',
+    );
+
     if (evaluationInProgress.value || evaluationGenerated.value) {
+      print('[GENERATE_EVAL] ⏭️ Saliendo: evaluación ya en curso o generada');
       return;
     }
     try {
       evaluationInProgress.value = true;
       isTyping.value = true;
+      print(
+        '[GENERATE_EVAL] ⏳ Estados actualizados: inProgress=true, isTyping=true',
+      );
+
       // Navegar primero para mostrar loader en la pantalla de evaluación
+      print('[GENERATE_EVAL] 🧭 Navegando a pantalla de evaluación...');
       Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
+
       // Generar evaluación (oculta, no se muestra en el chat)
       // Solo se guarda en BD para la vista de evaluación
-      await clinicalCaseServive.generateAnalyticalEvaluation(clinicalCase);
+      print(
+        '[GENERATE_EVAL] 🔧 Llamando a clinicalCaseServive.generateAnalyticalEvaluation()...',
+      );
+      final evalMessage = await clinicalCaseServive
+          .generateAnalyticalEvaluation(clinicalCase);
+
+      print('[GENERATE_EVAL] ✅ Evaluación generada');
+      print('[GENERATE_EVAL] 📝 Mensaje ID: ${evalMessage.uid}');
+      print('[GENERATE_EVAL] 📝 Longitud: ${evalMessage.text.length} chars');
+      print('[GENERATE_EVAL] 📝 Format: ${evalMessage.format}');
+
       evaluationGenerated.value = true;
-    } catch (e) {
+      print('[GENERATE_EVAL] ✅ Estado evaluationGenerated=true');
+    } catch (e, stackTrace) {
+      print('[GENERATE_EVAL] ❌ ERROR: $e');
+      print('[GENERATE_EVAL] 📚 StackTrace: $stackTrace');
       Logger.error('Error al generar evaluación analítica: $e');
       Notify.snackbar(
         'Casos clínicos',
@@ -575,6 +609,7 @@ class ClinicalCaseController extends GetxController
     } finally {
       evaluationInProgress.value = false;
       isTyping.value = false;
+      print('[GENERATE_EVAL] 🏁 Finalizando: inProgress=false, isTyping=false');
     }
   }
 
@@ -745,7 +780,11 @@ class ClinicalCaseController extends GetxController
     String caseId,
   ) async {
     try {
-      final allMessages = await clinicalCaseServive.loadMessageByCaseId(caseId);
+      final allMessagesRaw = await clinicalCaseServive.loadMessageByCaseId(
+        caseId,
+      );
+      // Casting explícito para asegurar tipo correcto
+      final allMessages = List<ChatMessageModel>.from(allMessagesRaw);
       return allMessages
           .where((m) => !m.aiMessage && m.chatId == caseId)
           .toList();
