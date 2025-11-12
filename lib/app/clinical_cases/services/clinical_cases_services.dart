@@ -376,27 +376,32 @@ IMPORTANTE:
 
     final evaluationPrompt = ChatMessageModel.user(
       chatId: clinicalCase.uid,
-      // Prefijo especial para poder filtrar fácilmente en UI sin cambiar schema
+      // IMPORTANTE: NO guardar este mensaje en BD, solo usarlo para generar evaluación
       text:
-          '[[HIDDEN_EVAL_PROMPT]] Genera una EVALUACIÓN FINAL DETALLADA del desempeño del usuario sobre el caso clínico. '
-          'Usa SOLO las intervenciones listadas (no inventes nuevas). '
-          '\n\nDEVUELVE EN MARKDOWN con EXACTAMENTE estas secciones (CADA encabezado debe tener línea en blanco ANTES y DESPUÉS):'
-          '\n\n# Resumen Clínico\n\n(2-4 frases concisas sobre el caso y cómo lo abordó el usuario)'
-          '\n\n## Desempeño global\n\n(2-3 frases evaluando razonamiento clínico, estructura y priorización)'
-          '\n\n## Fortalezas\n\n- (bullet points de fortalezas observadas)'
-          '\n\n## Áreas de mejora\n\n- (bullet points específicas y accionables)'
-          '\n\n## Recomendaciones accionables\n\n- (bullet points concretas de estudio o práctica)'
-          '\n\n## Errores críticos\n\n- (detallar errores graves, o escribir "Ninguno identificado")'
-          '\n\n## Puntuación\n\n(Formato: "Puntuación: NN/100 – breve justificación de 1-2 líneas")'
-          '\n\n## Referencias\n\n- (2-4 fuentes abreviadas: año, autor/institución, guía o artículo)'
-          '\n\nIMPORTANTE: Separa CADA sección con línea en blanco. NO formules preguntas ni abras nuevas conversaciones al final.'
-          '\n\nIntervenciones del usuario para evaluar:'
+          '[[HIDDEN_EVAL_PROMPT]] Genera EVALUACIÓN FINAL DETALLADA del desempeño sobre el caso clínico. '
+          'Usa SOLO intervenciones listadas abajo.'
+          '\n\nFORMATO MARKDOWN con estas secciones (línea en blanco ANTES y DESPUÉS de cada encabezado):'
+          '\n\n# Resumen Clínico\n(2-4 frases: caso y cómo lo abordó el usuario)'
+          '\n\n## Desempeño Global\n(2-3 frases: razonamiento, estructura, priorización)'
+          '\n\n## Fortalezas\n- (bullets de fortalezas)'
+          '\n\n## Áreas de Mejora\n- (bullets específicas)'
+          '\n\n## Recomendaciones\n- (bullets concretas)'
+          '\n\n## Errores Críticos\n- (detallar o "Ninguno identificado")'
+          '\n\n## Puntuación\nPuntuación: NN/100 – justificación (1-2 líneas)'
+          '\n\n## Referencias\n- (2-4 fuentes: Autor (año). Título/Guía.)'
+          '\n\nSepara secciones con línea en blanco. NO preguntas al final.'
+          '\n\nIntervenciones:'
           '\n${buffer.toString()}',
     );
-    // Guardar el prompt de evaluación como intervención de usuario
-    await insertMessage(evaluationPrompt);
-    // Obtener respuesta AI usando el mismo hilo
-    final aiEvaluation = await sendMessage(evaluationPrompt);
+
+    // NO guardar el prompt oculto en BD - solo enviar al backend y guardar la respuesta
+    final aiEvaluation = await _apiClinicalCaseData.sendMessage(
+      evaluationPrompt,
+    );
+
+    // Guardar solo la evaluación AI (sin el prompt oculto)
+    await insertMessage(aiEvaluation);
+
     return aiEvaluation;
   }
 

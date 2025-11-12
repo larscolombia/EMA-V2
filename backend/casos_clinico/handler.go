@@ -343,102 +343,85 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		closingInstr = "No cierres todavía ni des conclusiones definitivas. No incluyas bibliografía aún."
 	}
 
-	// Búsqueda de evidencia ANTES de generar respuesta para fundamentar evaluación crítica
+	// Búsqueda de evidencia ANTES de generar respuesta (solo si respuesta larga/específica)
 	var ragContext string
-	if isRAGEnabled() {
+	if isRAGEnabled() && len(req.Mensaje) > 15 {
 		func() {
 			defer func() { _ = recover() }()
-			refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+			refCtx, refCancel := context.WithTimeout(ctx, 3*time.Second)
 			defer refCancel()
 			refs := collectEvidence(refCtx, h.aiAnalytical, userPrompt)
 			if strings.TrimSpace(refs) != "" {
-				ragContext = "EVIDENCIA CIENTÍFICA DISPONIBLE para fundamentar tu evaluación:\n" + refs + "\n\n"
+				// CRÍTICO: Mantener referencias SEPARADAS del contexto del caso
+				// para que el asistente no se distraiga del paciente específico
+				ragContext = "EVIDENCIA (solo si es directamente relevante al caso actual):\n" + refs + "\n\n"
 			}
 		}()
 	}
 
+	// Instrucciones optimizadas (reducidas ~60%)
 	instr := strings.Join([]string{
-		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
-		"Estructura del texto: Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) evaluando la respuesta del usuario, seguido de pregunta final.",
+		"JSON: { 'respuesta': { 'text': <string> } }.",
+		"Texto: 2–3 párrafos (150–220 palabras), razonamiento clínico + pregunta final.",
 		phaseInstr,
 		closingInstr,
-		"EVALUACIÓN CRÍTICA DENTRO DEL CONTEXTO CLÍNICO:",
-		"- Evalúa la respuesta del usuario según el contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos clínicos presentados).",
-		"- Si la respuesta es INCORRECTA o inapropiada: explica claramente por qué no está indicada EN ESTE CASO PARTICULAR. Indica la conducta correcta.",
-		"- Si la respuesta es CORRECTA: refuerza los conceptos clave sin elogios innecesarios.",
-		"- NO uses emojis (❌✅) ni encabezados ('Evaluación:', 'Razonamiento clínico:').",
-		"- NO uses lenguaje condescendiente que valide errores ('podría ser una opción', 'no sería la primera elección pero...').",
-		"- NO introduzcas escenarios o poblaciones ajenas al caso (ej: no menciones lactantes si el paciente es adolescente).",
-		"- FUNDAMENTA con evidencia científica disponible en el contexto.",
-		"Ejemplo INCORRECTO: 'La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal. Si hay duda diagnóstica, puede considerarse TAC de abdomen.'",
-		"Ejemplo CORRECTO: 'Solicitar Monospot es apropiado dado el cuadro clínico. Esta prueba tiene alta especificidad (>95%) en adolescentes con presentación compatible y complementa el diagnóstico cuando hay linfocitosis atípica y hallazgos físicos sugestivos.'",
-		"CONTEXTUALIZACIÓN: Relaciona CADA comentario con las características ESPECÍFICAS del paciente presentado (edad, comorbilidades, presentación clínica, hallazgos previos).",
-		"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para ESTE paciente específico y explica por qué es superior.",
-		"COHERENCIA EN PREGUNTA FINAL (CRÍTICO):",
-		"- La pregunta final DEBE surgir naturalmente del contexto clínico del caso y lo discutido hasta ahora.",
-		"- NO introduzcas nuevos exámenes, escenarios o líneas diagnósticas ajenas al caso presentado.",
-		"- NO preguntes sobre hallazgos de exámenes que NO son apropiados para este caso específico.",
-		"- Si mencionaste que un examen NO está indicado, NO preguntes sobre sus hallazgos.",
-		"- La pregunta debe profundizar el razonamiento DENTRO del caso, no abrir nuevas líneas diagnósticas.",
-		"- Ejemplo CORRECTO si discutiste ecografía como indicada: '¿Qué hallazgos ecográficos esperarías en este cuadro?'",
-		"- Ejemplo INCORRECTO: Mencionar que TAC no está indicado y luego preguntar '¿Qué hallazgos tomográficos buscarías?'",
-		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
-		"La ÚLTIMA línea: SOLO la pregunta, sin texto adicional. La pregunta debe ser específica al caso, no genérica.",
-		"No inventes datos nuevos. Mantente dentro del caso clínico presentado.",
-		"Idioma: español.",
+		"EVALUACIÓN CRÍTICA:",
+		"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos presentados).",
+		"- INCORRECTA: por qué no está indicada EN ESTE CASO + conducta correcta.",
+		"- CORRECTA: refuerza conceptos clave (sin elogios).",
+		"- NO emojis, encabezados genéricos, ni lenguaje condescendiente.",
+		"- NO escenarios ajenos al caso (ej: lactantes si paciente es adolescente).",
+		"- FUNDAMENTA con evidencia disponible.",
+		"PREGUNTA FINAL:",
+		"- Coherente con caso y discusión previa.",
+		"- NO nuevos exámenes/escenarios ajenos.",
+		"- NO preguntar sobre hallazgos de exámenes NO indicados.",
+		"Última línea: SOLO pregunta. Sin viñetas/tablas/markdown. Español.",
 	}, " ")
 
-	// Integrar evidencia en el prompt del usuario si está disponible
+	// Integrar evidencia AL FINAL del prompt (no al inicio) para no distraer del caso
 	if ragContext != "" {
-		userPrompt = ragContext + "RESPUESTA DEL USUARIO: " + userPrompt
+		userPrompt = userPrompt + "\n\n" + ragContext
 	}
 	// Si el cliente solicita streaming SSE, emitimos eventos con marcadores de etapa
 	accept := strings.ToLower(strings.TrimSpace(c.GetHeader("Accept")))
 	if strings.Contains(accept, "text/event-stream") {
-		// Búsqueda de evidencia para streaming
+		// Búsqueda de evidencia para streaming (solo respuestas sustanciales)
 		var refsSSE string
-		if isRAGEnabled() {
+		if isRAGEnabled() && len(req.Mensaje) > 15 {
 			func() {
 				defer func() { _ = recover() }()
-				refCtx, refCancel := context.WithTimeout(ctx, 5*time.Second)
+				refCtx, refCancel := context.WithTimeout(ctx, 3*time.Second)
 				defer refCancel()
 				refsSSE = collectEvidence(refCtx, h.aiAnalytical, req.Mensaje)
 			}()
 		}
 
-		// Para SSE, pedimos TEXTO PLANO (no JSON) para que el frontend no reciba envoltorios.
-		// Instrucciones textuales equivalentes a la versión JSON:
+		// Para SSE, pedimos MARKDOWN optimizado (instrucciones reducidas ~60%)
 		textInstr := strings.Join([]string{
-			"Responde en TEXTO PLANO en español, sin markdown ni JSON.",
-			"Estructura: Razonamiento clínico (2–3 párrafos, 150–220 palabras) evaluando la respuesta del usuario, seguido de pregunta final.",
+			"MARKDOWN válido (sin JSON). 2–3 párrafos (150–220 palabras) + pregunta final.",
 			phaseInstr,
 			closingInstr,
-			"EVALUACIÓN CRÍTICA DENTRO DEL CONTEXTO CLÍNICO:",
-			"- Evalúa según el contexto ESPECÍFICO del caso presentado (edad, diagnóstico, hallazgos).",
-			"- Si es INCORRECTA: explica por qué no está indicada EN ESTE CASO. Indica la conducta correcta.",
-			"- Si es CORRECTA: refuerza conceptos clave sin elogios innecesarios.",
-			"- NO uses emojis ni encabezados.",
-			"- NO uses lenguaje condescendiente que valide errores.",
-			"- NO introduzcas escenarios ajenos al caso presentado.",
-			"- FUNDAMENTA con evidencia científica disponible.",
-			"Ejemplo: 'La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal.'",
-			"CONTEXTUALIZACIÓN: Relaciona con características del paciente presentado.",
-			"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para este paciente.",
-			"COHERENCIA EN PREGUNTA FINAL (CRÍTICO):",
-			"- La pregunta final debe surgir naturalmente del contexto del caso y lo discutido.",
-			"- NO introduzcas nuevos exámenes o escenarios ajenos al caso.",
-			"- NO preguntes sobre hallazgos de exámenes que NO son apropiados para este caso.",
-			"- Si mencionaste que un examen NO está indicado, NO preguntes sobre sus hallazgos.",
-			"- La pregunta debe profundizar el razonamiento DENTRO del caso, no abrir nuevas líneas.",
-			"Separa párrafos con UNA línea en blanco.",
-			"La ÚLTIMA línea: SOLO la pregunta, específica al caso y coherente con lo discutido.",
-			"Mantente dentro del caso clínico presentado.",
+			"EVALUACIÓN:",
+			"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos).",
+			"- INCORRECTA: por qué no + conducta correcta EN ESTE CASO.",
+			"- CORRECTA: refuerza conceptos (sin elogios).",
+			"- NO emojis, encabezados genéricos, lenguaje condescendiente, escenarios ajenos.",
+			"- FUNDAMENTA con evidencia si es relevante al caso.",
+			"MARKDOWN:",
+			"- ## para secciones si necesario.",
+			"- Listas: - o *",
+			"- **negrita** para conceptos clave.",
+			"PREGUNTA FINAL:",
+			"- Coherente con caso.",
+			"- NO nuevos exámenes/escenarios ajenos.",
+			"- Última línea: SOLO pregunta. Español.",
 		}, " ")
 
-		// Integrar evidencia si está disponible
+		// Integrar evidencia AL FINAL si está disponible (no al inicio para no distraer)
 		promptWithContext := req.Mensaje
 		if strings.TrimSpace(refsSSE) != "" {
-			promptWithContext = "EVIDENCIA CIENTÍFICA DISPONIBLE:\n" + refsSSE + "\n\nRESPUESTA DEL USUARIO: " + req.Mensaje
+			promptWithContext = req.Mensaje + "\n\nEVIDENCIA (solo si relevante): " + refsSSE
 		}
 
 		// Obtener stream de texto plano del assistant
@@ -471,7 +454,8 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 		}
 
 		// Stream con marcadores de etapa y garantía de pregunta final si el modelo la omite
-		sse.Stream(c, wrapWithFinalQuestion(wrapWithStages(stages, ch), userPrompt, turn))
+		// Envolver con detección de timeout/error
+		sse.Stream(c, wrapWithErrorDetection(wrapWithFinalQuestion(wrapWithStages(stages, ch), userPrompt, turn)))
 		return
 	}
 
@@ -541,6 +525,25 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 	raw := strings.TrimSpace(content)
 	q := deriveFinalQuestion(raw, req.Mensaje, turn)
 	c.JSON(http.StatusOK, gin.H{"text": ensureEndsWithQuestionWithFallback(raw, q), "thread_id": threadID})
+}
+
+// wrapWithErrorDetection detecta si el stream se cierra sin contenido (error de OpenAI)
+// y envía un mensaje de error apropiado
+func wrapWithErrorDetection(in <-chan string) <-chan string {
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		hasContent := false
+		for msg := range in {
+			hasContent = true
+			out <- msg
+		}
+		// Si no hubo contenido, es un timeout/error de OpenAI
+		if !hasContent {
+			out <- "Lo siento, ocurrió un error al generar la respuesta. Por favor, intenta nuevamente."
+		}
+	}()
+	return out
 }
 
 // wrapWithFinalQuestion re-emite el stream y, al finalizar, agrega una pregunta final

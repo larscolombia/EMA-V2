@@ -309,6 +309,7 @@ class ApiClinicalCaseData {
 
       final stream = utf8.decoder.bind(bodyStream.stream);
       final buffer = StringBuffer();
+      bool isDone = false;
 
       await for (final chunk in stream) {
         for (final line in const LineSplitter().convert(chunk)) {
@@ -320,12 +321,14 @@ class ApiClinicalCaseData {
               continue;
             }
             if (content == '[DONE]') {
+              isDone = true;
               break;
             }
             buffer.write(content);
             onStream?.call(content);
           }
         }
+        if (isDone) break;
       }
 
       final finalText = buffer.toString();

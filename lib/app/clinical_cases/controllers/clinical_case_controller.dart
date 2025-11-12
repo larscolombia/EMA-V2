@@ -545,7 +545,8 @@ class ClinicalCaseController extends GetxController
   }
 
   /// Genera un mensaje de evaluación final explícita en modo analítico
-  /// incluso después de haber marcado el caso como completo.
+  /// SIN agregarlo al chat visible (similar a los casos interactivos).
+  /// Navega directamente a la pantalla de evaluación.
   Future<void> generateFinalEvaluation() async {
     final clinicalCase = currentCase.value;
     if (clinicalCase == null ||
@@ -558,13 +559,11 @@ class ClinicalCaseController extends GetxController
     try {
       evaluationInProgress.value = true;
       isTyping.value = true;
-      // Navegar primero para mostrar loader blanco
+      // Navegar primero para mostrar loader en la pantalla de evaluación
       Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
-      // Generar evaluación (puede tardar, la vista muestra loader)
-      final evaluationMessage = await clinicalCaseServive
-          .generateAnalyticalEvaluation(clinicalCase);
-      messages.add(evaluationMessage);
-      _scrollToBottom();
+      // Generar evaluación (oculta, no se muestra en el chat)
+      // Solo se guarda en BD para la vista de evaluación
+      await clinicalCaseServive.generateAnalyticalEvaluation(clinicalCase);
       evaluationGenerated.value = true;
     } catch (e) {
       Logger.error('Error al generar evaluación analítica: $e');
@@ -649,51 +648,24 @@ class ClinicalCaseController extends GetxController
 
   void _completeAnalyticalEarly(ClinicalCaseModel clinicalCase, String aiText) {
     isComplete.value = true;
-    // Añadir mensaje explícito de cierre si el texto del modelo no contiene una marca clara
-    final lower = aiText.toLowerCase();
-    if (!lower.contains('fin del caso')) {
-      messages.add(
-        ChatMessageModel.ai(
-          chatId: clinicalCase.uid,
-          text:
-              'Fin del caso clínico. Si deseas, puedes iniciar un nuevo caso para continuar practicando.',
-        ),
-      );
-    }
+    // NO agregamos mensaje de cierre al chat
+    // El usuario verá el resumen completo en la pantalla de evaluación
     generateFinalEvaluation();
   }
 
   Future<void> _finalizeAnalyticalCase(ClinicalCaseModel clinicalCase) async {
     try {
       isTyping.value = true;
-      // Prompt para cierre: resume hallazgos, diagnóstico probable, diferenciales, plan inicial y bibliografía.
-      const closingPrompt =
-          'Genera un resumen final estructurado del caso: '
-          '1) Resumen clínico conciso 2) Diagnóstico más probable y diferenciales clave 3) Justificación clínica '
-          '4) Plan diagnóstico y terapéutico inicial 5) Errores comunes a evitar 6) Bibliografía (formato breve). '
-          'No hagas más preguntas. Marca el final claramente.';
-
-      // Crear mensaje de usuario interno sin agregarlo a la UI visible
-      final userClosingMessage = ChatMessageModel.user(
-        chatId: clinicalCase.uid,
-        text: closingPrompt,
-      );
-
-      // Guardar en base de datos pero NO añadir a messages visibles
-      clinicalCaseServive.insertMessage(userClosingMessage);
-
-      final aiClosing = await clinicalCaseServive.sendMessage(
-        userClosingMessage,
-      );
-      messages.add(aiClosing);
+      // Marcar el caso como completo directamente, sin generar mensaje de cierre en el chat
+      // El usuario navegará a la pantalla de evaluación donde verá el resumen completo
       isComplete.value = true;
+      // Generar evaluación final (navegará automáticamente a la pantalla de evaluación)
       await generateFinalEvaluation();
     } catch (e) {
-      // Si falla el cierre, no bloquear al usuario (podría intentar nuevamente manualmente)
-      Logger.error('Error al generar cierre analítico: $e');
+      // Si falla, no bloquear al usuario
+      Logger.error('Error al finalizar caso analítico: $e');
     } finally {
       isTyping.value = false;
-      _scrollToBottom();
     }
   }
 
@@ -765,6 +737,21 @@ class ClinicalCaseController extends GetxController
       if (summary != null) {
         interactiveEvaluationGenerated.value = true;
       }
+    }
+  }
+
+  /// Carga intervenciones del usuario desde BD (para casos analíticos)
+  Future<List<ChatMessageModel>> getUserInterventionsFromDb(
+    String caseId,
+  ) async {
+    try {
+      final allMessages = await clinicalCaseServive.loadMessageByCaseId(caseId);
+      return allMessages
+          .where((m) => !m.aiMessage && m.chatId == caseId)
+          .toList();
+    } catch (e) {
+      Logger.error('Error loading user interventions: $e');
+      return [];
     }
   }
 }

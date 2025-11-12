@@ -20,44 +20,109 @@ class _ClinicalCaseEvaluationViewState
     extends State<ClinicalCaseEvaluationView> {
   final controller = Get.find<ClinicalCaseController>();
   bool showUserTurns = false;
+  ChatMessageModel? evaluationMessage;
+  bool isLoadingEvaluation = false;
 
-  ChatMessageModel? _evaluationMessage() {
+  Future<void> _loadEvaluationMessage() async {
+    if (evaluationMessage != null) return;
+
+    final caseModel = controller.currentCase.value;
+    if (caseModel == null) return;
+
+    setState(() {
+      isLoadingEvaluation = true;
+    });
+
+    try {
+      // Cargar todos los mensajes del caso desde la BD
+      final allMessages = await controller.clinicalCaseServive
+          .loadMessageByCaseId(caseModel.uid);
+
+      final caseType = caseModel.type;
+
+      if (caseType == ClinicalCaseType.analytical) {
+        // Para analíticos: buscar mensaje con prompt oculto [[HIDDEN_EVAL_PROMPT]]
+        // o que contenga 'puntuación' y 'referencias'
+        for (final m in allMessages.reversed.where((m) => m.aiMessage)) {
+          final lower = m.text.toLowerCase();
+          if (lower.contains('puntuación') ||
+              lower.contains('puntuacion') ||
+              m.text.contains('[[HIDDEN_EVAL_PROMPT]]')) {
+            evaluationMessage = m;
+            break;
+          }
+        }
+        // Fallback: último mensaje AI
+        evaluationMessage ??= allMessages.where((m) => m.aiMessage).lastOrNull;
+      } else {
+        // Interactivo: buscar mensaje con 'Resumen Final:'
+        for (final m in allMessages.reversed.where((m) => m.aiMessage)) {
+          final lower = m.text.toLowerCase();
+          if (lower.startsWith('resumen final:')) {
+            evaluationMessage = m;
+            break;
+          }
+          if (lower.startsWith('evaluación final interactiva')) {
+            continue; // ignorar duplicado
+          }
+        }
+        evaluationMessage ??= allMessages.where((m) => m.aiMessage).lastOrNull;
+      }
+    } catch (e) {
+      print('Error loading evaluation message: $e');
+    } finally {
+      setState(() {
+        isLoadingEvaluation = false;
+      });
+    }
+  }
+
+  // Método legacy para casos INTERACTIVOS: obtener de controller.messages
+  ChatMessageModel? _getInteractiveEvaluationFromMessages() {
     final msgs = controller.messages.where((m) => m.aiMessage).toList();
     if (msgs.isEmpty) return null;
-    final caseType = controller.currentCase.value?.type;
-    if (caseType == ClinicalCaseType.analytical) {
-      for (final m in msgs.reversed) {
-        final lower = m.text.toLowerCase();
-        if (lower.contains('puntuación') && lower.contains('referencias')) {
-          return m;
-        }
+
+    // Interactivo: priorizar mensaje con 'Resumen Final:'
+    ChatMessageModel? resumen;
+    for (final m in msgs.reversed) {
+      final lower = m.text.toLowerCase();
+      if (resumen == null && lower.startsWith('resumen final:')) {
+        resumen = m;
       }
-      return msgs.last;
-    } else {
-      // Interactivo: priorizar mensaje con 'Resumen Final:' si existe; evitar el que inicie con 'Evaluación final interactiva' (duplicado)
-      ChatMessageModel? resumen;
-      for (final m in msgs.reversed) {
-        final lower = m.text.toLowerCase();
-        if (resumen == null && lower.startsWith('resumen final:')) {
-          resumen = m; // preferido
-        }
-        if (lower.startsWith('evaluación final interactiva')) {
-          // ignorar duplicado generado por capa legacy
-          continue;
-        }
-        if (resumen != null) break;
+      if (lower.startsWith('evaluación final interactiva')) {
+        continue; // ignorar duplicado
       }
-      return resumen ?? msgs.last;
+      if (resumen != null) break;
     }
+    return resumen ?? msgs.last;
   }
 
   @override
   void initState() {
     super.initState();
-    if (!controller.evaluationGenerated.value &&
-        controller.currentCase.value?.type == ClinicalCaseType.analytical) {
-      controller.generateFinalEvaluation();
+
+    final caseType = controller.currentCase.value?.type;
+
+    // Solo para casos ANALÍTICOS: cargar evaluación desde BD
+    if (caseType == ClinicalCaseType.analytical) {
+      _loadEvaluationMessage();
+
+      if (!controller.evaluationGenerated.value) {
+        controller.generateFinalEvaluation().then((_) {
+          // Recargar el mensaje después de generar la evaluación
+          _loadEvaluationMessage();
+        });
+      }
+
+      // Listener para recargar cuando se genere la evaluación (solo analíticos)
+      ever(controller.evaluationGenerated, (generated) {
+        if (generated &&
+            controller.currentCase.value?.type == ClinicalCaseType.analytical) {
+          _loadEvaluationMessage();
+        }
+      });
     }
+    // Para casos INTERACTIVOS: usar el flujo existente (controller.messages)
   }
 
   // (Se removieron heurísticas de métricas de resultados; el diseño ahora depende del feedback generado)
@@ -84,13 +149,30 @@ class _ClinicalCaseEvaluationViewState
           // Mostrar pantalla con botón para revelar
           return _buildRevealButton(context, hasHidden);
         }
-        final evalMsg = _evaluationMessage();
-        if (evalMsg == null) {
+
+        // Obtener mensaje de evaluación según el tipo de caso
+        ChatMessageModel? evalMsg;
+        bool isLoading = false;
+
+        if (caseModel.type == ClinicalCaseType.analytical) {
+          // Analíticos: cargar desde BD (ya cargado en initState)
+          evalMsg = evaluationMessage;
+          isLoading = isLoadingEvaluation;
+        } else {
+          // Interactivos: obtener desde messages (flujo original)
+          evalMsg = _getInteractiveEvaluationFromMessages();
+          isLoading = false;
+        }
+
+        // Mostrar loader mientras se carga la evaluación (solo para analíticos)
+        if (isLoading || evalMsg == null) {
           return const StateMessageWidget(
-            message: 'No se encontró la evaluación generada.',
-            type: StateMessageType.noSearchResults,
+            message: 'Cargando evaluación...',
+            type: StateMessageType.download,
+            showLoading: true,
           );
         }
+
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
           child: Column(
@@ -189,12 +271,21 @@ class _ClinicalCaseEvaluationViewState
     );
   }
 
-  void _showUserTurnsBottomSheet(BuildContext context) {
+  void _showUserTurnsBottomSheet(BuildContext context) async {
     final caseId = controller.currentCase.value?.uid;
+    final caseModel = controller.currentCase.value;
+
+    if (caseModel == null) return;
+
+    // Cargar desde BD si es caso analítico, de messages si es interactivo
     final turns =
-        controller.messages
-            .where((m) => !m.aiMessage && m.chatId == caseId)
-            .toList();
+        caseModel.type == ClinicalCaseType.analytical
+            ? await controller.getUserInterventionsFromDb(caseId!)
+            : controller.messages
+                .where((m) => !m.aiMessage && m.chatId == caseId)
+                .toList();
+
+    if (!context.mounted) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,

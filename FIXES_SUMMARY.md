@@ -11,6 +11,8 @@
 **Problema:** 
 El asistente en casos clínicos analíticos era demasiado condescendiente y no identificaba respuestas incorrectas de manera clara. Por ejemplo, cuando un usuario respondía "TAC de tórax" para mononucleosis infecciosa (una prueba NO indicada clínicamente), el asistente validaba la respuesta como "podría ser una opción" en lugar de marcarla como incorrecta.
 
+Adicionalmente, se detectó que las preguntas finales podían ser genéricas y desviar del contexto del caso (ej: preguntar sobre hallazgos tomográficos cuando el TAC no estaba indicado para ese caso específico).
+
 **Solución Implementada:**
 
 1. **Búsqueda RAG ANTES de evaluar** (no solo al cierre):
@@ -28,12 +30,28 @@ El asistente en casos clínicos analíticos era demasiado condescendiente y no i
    - FUNDAMENTA con evidencia científica disponible
    ```
 
-3. **Formato de referencias APA simplificado**:
+3. **Coherencia en preguntas finales**:
+   ```
+   COHERENCIA EN PREGUNTA FINAL (CRÍTICO):
+   - La pregunta debe surgir naturalmente del contexto clínico del caso
+   - NO introduzcas nuevos exámenes o escenarios ajenos al caso
+   - NO preguntes sobre hallazgos de exámenes NO apropiados para este caso
+   - Si mencionaste que un examen NO está indicado, NO preguntes sobre sus hallazgos
+   - La pregunta debe profundizar el razonamiento DENTRO del caso
+   ```
+
+4. **Función `deriveFinalQuestion` simplificada**:
+   - Ahora genera solo preguntas de fallback MUY GENÉRICAS cuando el asistente no proporciona ninguna
+   - El asistente es responsable de generar preguntas contextualizadas al caso específico
+   - Ejemplos de fallback: "¿Cuál es tu siguiente paso en el abordaje de este paciente?" (muy genérico)
+   - Reduce riesgo de introducir exámenes o escenarios ajenos al caso
+
+5. **Formato de referencias APA simplificado**:
    - Referencias en formato académico: `Autor/Fuente (año). Sección.`
    - Sin texto descriptivo adicional ni fragmentos extensos
    - Máximo 3 referencias por brevedad
 
-4. **RAG habilitado por defecto**:
+6. **RAG habilitado por defecto**:
    - Función `isRAGEnabled()` retorna `true` por defecto (a menos que `CLINICAL_APPEND_REFS=false`)
    - Aplicado tanto en modo JSON como en streaming (SSE)
 
@@ -43,10 +61,12 @@ El asistente en casos clínicos analíticos era demasiado condescendiente y no i
 - ✅ Identificación clara de errores sin condescendencia
 - ✅ Referencias académicas limpias en formato APA
 - ✅ Sin emojis ni encabezados innecesarios
+- ✅ Preguntas finales coherentes con el caso presentado (generadas por el asistente)
+- ✅ Eliminadas preguntas genéricas que desvían del objetivo formativo
 
 **Pruebas:**
 - ✅ Compilación exitosa del backend
-- ✅ Tests unitarios pasan correctamente
+- ✅ Tests unitarios pasan correctamente (4/4)
 - ✅ RAG se ejecuta de forma asíncrona sin bloquear la respuesta
 
 ---

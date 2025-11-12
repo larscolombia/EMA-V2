@@ -238,18 +238,6 @@ class _ClinicalCaseAnalyticalViewState
                       Obx(
                         () => Column(
                           children: [
-                            // Trigger para navegación a evaluación cuando el caso se marca completo
-                            if (controller.isComplete.value &&
-                                !controller.evaluationGenerated.value &&
-                                !controller.evaluationInProgress.value)
-                              FutureBuilder(
-                                future:
-                                    (() async {
-                                      controller.generateFinalEvaluation();
-                                      return true;
-                                    })(),
-                                builder: (_, __) => const SizedBox.shrink(),
-                              ),
                             ...controller.messages.map((message) {
                               return message.aiMessage
                                   ? ChatMessageAi(message: message)
