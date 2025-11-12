@@ -209,12 +209,21 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 	jsonStr := extractJSON(content)
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || parsed["case"] == nil {
-		// Try repair once
-		if fixed, ok := h.repairAnalyticalJSON(ctx, threadID, content); ok {
+		// CRÍTICO: NO intentar repair si el contexto está cerca de expirar (evita cascada de timeouts)
+		// Solo reparar si tenemos al menos 20 segundos restantes
+		deadline, hasDeadline := ctx.Deadline()
+		timeRemaining := time.Until(deadline)
+		if hasDeadline && timeRemaining < 20*time.Second {
+			log.Printf("[GenerateAnalytical][SKIP_REPAIR] thread=%s time_remaining=%v - omitiendo repair por timeout inminente", threadID, timeRemaining)
 			parsed = map[string]any{}
-			_ = json.Unmarshal([]byte(fixed), &parsed)
 		} else {
-			parsed = map[string]any{}
+			// Try repair once
+			if fixed, ok := h.repairAnalyticalJSON(ctx, threadID, content); ok {
+				parsed = map[string]any{}
+				_ = json.Unmarshal([]byte(fixed), &parsed)
+			} else {
+				parsed = map[string]any{}
+			}
 		}
 	}
 	// Ensure minimal shape
@@ -263,8 +272,9 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		}
 	}
 	// Anexar referencias (RAG + PubMed) de forma no disruptiva: al final de management
-	// Por defecto habilitado (deshabilitar con CLINICAL_APPEND_REFS=false)
-	if isRAGEnabled() {
+	// TEMPORALMENTE DESACTIVADO: Contribuye a timeouts durante degradación de servicio OpenAI
+	// Para reactivar: CLINICAL_APPEND_REFS=true
+	if isRAGEnabled() && os.Getenv("CLINICAL_APPEND_REFS") == "true" {
 		func() {
 			// proteger contra pánicos por tipos inesperados
 			defer func() { _ = recover() }()
@@ -1400,14 +1410,14 @@ func wrapWithStages(stages []string, ch <-chan string) <-chan string {
 }
 
 // getHTTPTimeoutSec lee el timeout HTTP en segundos para las rutas de casos clínicos
-// desde CLINICAL_HTTP_TIMEOUT_SEC. Por defecto 45 segundos.
+// desde CLINICAL_HTTP_TIMEOUT_SEC. Por defecto 90 segundos (aumentado para permitir reintentos completos).
 func getHTTPTimeoutSec() int {
 	v := strings.TrimSpace(os.Getenv("CLINICAL_HTTP_TIMEOUT_SEC"))
 	if v == "" {
-		return 45
+		return 90
 	}
 	if n, err := strconv.Atoi(v); err == nil && n > 0 {
 		return n
 	}
-	return 45
+	return 90
 }

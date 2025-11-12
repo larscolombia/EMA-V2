@@ -1485,7 +1485,7 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 
 // runAndWaitWithRetry es la implementación interna con contador de reintentos
 func (c *Client) runAndWaitWithRetry(ctx context.Context, threadID string, instructions string, vectorStoreID string, retryCount int) (string, error) {
-	const maxRetries = 2 // Máximo 2 reintentos (3 intentos totales)
+	const maxRetries = 2
 
 	// Máxima duración interna antes de intentar devolver contenido parcial
 	// Aumentado a 160s porque runs complejos pueden tardar 140-150s bajo carga de OpenAI
@@ -1671,8 +1671,12 @@ func (c *Client) runAndWaitWithRetry(ctx context.Context, threadID string, instr
 				log.Printf("[runAndWait][SERVER_ERROR_DETECTED] thread=%s run_id=%s retry=%d/%d - OpenAI error temporal, reintentando...",
 					threadID, run.ID, retryCount+1, maxRetries)
 
-				// Backoff exponencial: 2s, 4s, 8s...
+				// Backoff exponencial con máximo de 15 segundos: 2s, 4s, 8s, 15s, 15s, 15s...
+				// Reducimos agresividad para no saturar OpenAI durante caídas prolongadas
 				waitTime := time.Duration(2<<uint(retryCount)) * time.Second
+				if waitTime > 15*time.Second {
+					waitTime = 15 * time.Second
+				}
 				log.Printf("[runAndWait][RETRY_WAIT] thread=%s esperando %v antes de reintentar", threadID, waitTime)
 
 				select {
