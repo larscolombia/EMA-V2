@@ -1480,6 +1480,13 @@ func (c *Client) pollAndGetResponse(ctx context.Context, threadID string, runID 
 
 // runAndWait creates a run (optionally with instructions) and polls until completion, then returns the assistant text.
 func (c *Client) runAndWait(ctx context.Context, threadID string, instructions string, vectorStoreID string) (string, error) {
+	return c.runAndWaitWithRetry(ctx, threadID, instructions, vectorStoreID, 0)
+}
+
+// runAndWaitWithRetry es la implementación interna con contador de reintentos
+func (c *Client) runAndWaitWithRetry(ctx context.Context, threadID string, instructions string, vectorStoreID string, retryCount int) (string, error) {
+	const maxRetries = 2 // Máximo 2 reintentos (3 intentos totales)
+
 	// Máxima duración interna antes de intentar devolver contenido parcial
 	// Aumentado a 160s porque runs complejos pueden tardar 140-150s bajo carga de OpenAI
 	const maxRunDuration = 160 * time.Second
@@ -1657,6 +1664,34 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 			if r.LastError.Message != "" {
 				errorMsg = fmt.Sprintf("%s: %s (code: %s)", r.Status, r.LastError.Message, r.LastError.Code)
 			}
+
+			// RETRY AUTOMÁTICO para errores temporales de OpenAI
+			// Si es server_error (error interno de OpenAI), reintentar automáticamente
+			if r.Status == "failed" && r.LastError.Code == "server_error" && retryCount < maxRetries {
+				log.Printf("[runAndWait][SERVER_ERROR_DETECTED] thread=%s run_id=%s retry=%d/%d - OpenAI error temporal, reintentando...",
+					threadID, run.ID, retryCount+1, maxRetries)
+
+				// Backoff exponencial: 2s, 4s, 8s...
+				waitTime := time.Duration(2<<uint(retryCount)) * time.Second
+				log.Printf("[runAndWait][RETRY_WAIT] thread=%s esperando %v antes de reintentar", threadID, waitTime)
+
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-time.After(waitTime):
+				}
+
+				// Reintentar creando un nuevo run con contador incrementado
+				log.Printf("[runAndWait][RETRY_START] thread=%s retry=%d/%d creando nuevo run", threadID, retryCount+1, maxRetries)
+				return c.runAndWaitWithRetry(ctx, threadID, instructions, vectorStoreID, retryCount+1)
+			}
+
+			// Si ya agotamos los reintentos o es otro tipo de error, fallar
+			if r.Status == "failed" && r.LastError.Code == "server_error" && retryCount >= maxRetries {
+				log.Printf("[runAndWait][MAX_RETRIES_EXCEEDED] thread=%s run_id=%s - agotados %d reintentos por server_error",
+					threadID, run.ID, maxRetries)
+			}
+
 			log.Printf("[runAndWait][ERROR] thread=%s run_id=%s status=%s last_error=%+v", threadID, run.ID, r.Status, r.LastError)
 			return "", fmt.Errorf("run status: %s", errorMsg)
 		}

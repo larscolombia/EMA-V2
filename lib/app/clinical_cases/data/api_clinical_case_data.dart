@@ -330,7 +330,9 @@ class ApiClinicalCaseData {
 
       await for (final chunk in stream) {
         chunkCount++;
-        for (final line in const LineSplitter().convert(chunk)) {
+        final lines = const LineSplitter().convert(chunk);
+        for (int i = 0; i < lines.length; i++) {
+          final line = lines[i];
           if (line.startsWith('data:')) {
             var content = line.substring(5);
             if (content.startsWith(' ')) content = content.substring(1);
@@ -344,7 +346,12 @@ class ApiClinicalCaseData {
               isDone = true;
               break;
             }
+            // CRÍTICO: Agregar el salto de línea que LineSplitter() eliminó
+            // EXCEPTO para la última línea del chunk
             buffer.write(content);
+            if (i < lines.length - 1) {
+              buffer.write('\n');
+            }
             onStream?.call(content);
           }
         }
@@ -356,6 +363,13 @@ class ApiClinicalCaseData {
       print('[API_SEND] 📝 Texto final - Longitud: ${finalText.length} chars');
       print(
         '[API_SEND] 📝 Preview (200 chars): ${finalText.substring(0, finalText.length > 200 ? 200 : finalText.length)}',
+      );
+
+      // DEBUG: Contar saltos de línea
+      final newlineCount = '\n'.allMatches(finalText).length;
+      final doubleNewlineCount = '\n\n'.allMatches(finalText).length;
+      print(
+        '[API_SEND] 📊 Saltos de línea: $newlineCount (simples), $doubleNewlineCount (dobles)',
       );
 
       // Detectar automáticamente si el texto es Markdown estructurado (evaluación)
@@ -390,6 +404,9 @@ class ApiClinicalCaseData {
 
     print('[DETECT_MD] 🔍 Analizando texto...');
     print('[DETECT_MD] 📝 Longitud: ${text.length} chars');
+    print(
+      '[DETECT_MD] 📄 Primeros 200 chars: ${text.substring(0, text.length > 200 ? 200 : text.length)}',
+    );
 
     // Indicador 1: Prompt de evaluación oculto (más confiable)
     if (text.contains('[[HIDDEN_EVAL_PROMPT]]')) {

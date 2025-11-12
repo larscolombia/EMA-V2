@@ -193,22 +193,15 @@ class _ClinicalCaseEvaluationViewState
 
     // Solo para casos ANALÍTICOS: cargar evaluación desde BD
     if (caseType == ClinicalCaseType.analytical) {
-      // NO cargar inmediatamente - esperar a que se genere primero
-      if (controller.evaluationGenerated.value) {
-        // Ya está generada, cargar desde BD
-        print('[EVAL_VIEW] ✅ Evaluación ya generada, cargando desde BD...');
-        _loadEvaluationMessage();
-      } else {
-        // Generar primero, luego cargar
-        print('[EVAL_VIEW] ⏳ Generando evaluación...');
-        controller.generateFinalEvaluation().then((_) {
-          print('[EVAL_VIEW] ✅ Evaluación generada, cargando desde BD...');
-          // Recargar el mensaje después de generar la evaluación (forzar)
-          _loadEvaluationMessage(forceReload: true);
-        });
-      }
+      print('[EVAL_VIEW] 📋 Caso analítico detectado');
+      print(
+        '[EVAL_VIEW] 📊 evaluationGenerated: ${controller.evaluationGenerated.value}',
+      );
 
-      // Listener para recargar cuando se genere la evaluación (solo analíticos)
+      // Cargar evaluación existente desde BD
+      _loadEvaluationMessage();
+
+      // Listener para recargar si se regenera la evaluación
       ever(controller.evaluationGenerated, (generated) {
         if (generated &&
             controller.currentCase.value?.type == ClinicalCaseType.analytical) {

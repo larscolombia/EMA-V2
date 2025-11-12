@@ -569,6 +569,13 @@ class ClinicalCaseController extends GetxController
 
     if (evaluationInProgress.value || evaluationGenerated.value) {
       print('[GENERATE_EVAL] ⏭️ Saliendo: evaluación ya en curso o generada');
+      // Si ya está generada, navegar a la pantalla
+      if (evaluationGenerated.value) {
+        print(
+          '[GENERATE_EVAL] 🧭 Evaluación ya existe, navegando a pantalla...',
+        );
+        Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
+      }
       return;
     }
     try {
@@ -578,11 +585,7 @@ class ClinicalCaseController extends GetxController
         '[GENERATE_EVAL] ⏳ Estados actualizados: inProgress=true, isTyping=true',
       );
 
-      // Navegar primero para mostrar loader en la pantalla de evaluación
-      print('[GENERATE_EVAL] 🧭 Navegando a pantalla de evaluación...');
-      Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
-
-      // Generar evaluación (oculta, no se muestra en el chat)
+      // PRIMERO: Generar evaluación (oculta, no se muestra en el chat)
       // Solo se guarda en BD para la vista de evaluación
       print(
         '[GENERATE_EVAL] 🔧 Llamando a clinicalCaseServive.generateAnalyticalEvaluation()...',
@@ -597,6 +600,10 @@ class ClinicalCaseController extends GetxController
 
       evaluationGenerated.value = true;
       print('[GENERATE_EVAL] ✅ Estado evaluationGenerated=true');
+
+      // SEGUNDO: Navegar a la pantalla de evaluación DESPUÉS de generar
+      print('[GENERATE_EVAL] 🧭 Navegando a pantalla de evaluación...');
+      Get.offAndToNamed(Routes.clinicalCaseEvaluation.path(clinicalCase.uid));
     } catch (e, stackTrace) {
       print('[GENERATE_EVAL] ❌ ERROR: $e');
       print('[GENERATE_EVAL] 📚 StackTrace: $stackTrace');
