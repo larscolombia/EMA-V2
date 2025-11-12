@@ -14,16 +14,18 @@ Los casos clínicos analíticos implementan evaluación crítica fundamentada en
 
 1. **Búsqueda automática de evidencia**: Antes de responder, el sistema busca en el vector store de libros médicos y PubMed para fundamentar la evaluación.
 
-2. **Evaluación explícita**: Las respuestas se marcan como:
-   - ✅ **CORRECTAS**: Con refuerzo de conceptos clave
-   - ❌ **INCORRECTAS**: Con justificación clara basada en evidencia científica
+2. **Evaluación contextual**: Las respuestas se evalúan dentro del contexto clínico específico del caso presentado (edad, diagnóstico, hallazgos). No se introducen escenarios ajenos.
 
-3. **Sin condescendencia**: El sistema evita validar errores con lenguaje diplomático ("podría ser una opción"). Identifica errores médicos directamente.
+3. **Retroalimentación directa**: El sistema identifica errores de forma clara y objetiva, sin lenguaje condescendiente. Indica la conducta correcta para el caso específico.
 
-4. **Referencias incluidas**: Cuando se usa evidencia para evaluar, las referencias se incluyen al final de la retroalimentación.
+4. **Referencias en formato APA simplificado**: Cuando se usa evidencia, las referencias se incluyen al final en formato académico limpio (Autor/Fuente (año). Sección.) sin texto descriptivo adicional.
 
 **Ejemplo de evaluación INCORRECTA:**
-> ❌ El TAC de tórax NO está indicado en este contexto. La mononucleosis infecciosa se diagnostica clínicamente y con pruebas serológicas (Monospot, anticuerpos heterófilos). El manejo es conservador (reposo, hidratación, analgésicos). La imagenología avanzada solo se considera ante complicaciones atípicas como rotura esplénica o compromiso respiratorio grave, que NO se presentan en este caso.
+> La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal. Si hay duda diagnóstica, puede considerarse TAC de abdomen.
+> 
+> Referencias:
+> Harrison (2019). Principios de Medicina Interna.
+> Smith et al. (2021).
 
 ## Rutas
 - POST `/caso-clinico`

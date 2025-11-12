@@ -359,25 +359,27 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 
 	instr := strings.Join([]string{
 		"Responde estrictamente en JSON válido con la clave 'respuesta': { 'text': <string> }.",
-		"Estructura del texto: 1) EVALUACIÓN EXPLÍCITA de la respuesta del usuario 2) Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) 3) Pregunta final.",
+		"Estructura del texto: Razonamiento clínico progresivo (2–3 párrafos, 150–220 palabras totales) evaluando la respuesta del usuario, seguido de pregunta final.",
 		phaseInstr,
 		closingInstr,
-		"EVALUACIÓN CRÍTICA OBLIGATORIA:",
-		"- Si la respuesta del usuario es INCORRECTA, inapropiada o no está indicada clínicamente, identifícala EXPLÍCITAMENTE con '❌' seguido de una justificación clara basada en evidencia.",
-		"- Si la respuesta es CORRECTA y apropiada, reconócela con '✅' y refuerza conceptos clave.",
-		"- NO uses lenguaje condescendiente o diplomático que valide decisiones incorrectas (evita: 'podría ser una opción', 'no sería la primera elección pero...').",
-		"- FUNDAMENTA tu evaluación con evidencia científica cuando esté disponible en el contexto proporcionado.",
-		"Ejemplo de evaluación INCORRECTA: '❌ El TAC de tórax NO está indicado en este contexto. La mononucleosis infecciosa se diagnostica clínicamente y con pruebas serológicas (Monospot, anticuerpos heterófilos). El manejo es conservador (reposo, hidratación, analgésicos). La imagenología avanzada solo se considera ante complicaciones atípicas como rotura esplénica o compromiso respiratorio grave, que NO se presentan en este caso.'",
-		"Ejemplo de evaluación CORRECTA: '✅ Solicitar Monospot es apropiado. Esta prueba detecta anticuerpos heterófilos y tiene alta especificidad (>95%) en adolescentes/adultos jóvenes con presentación clínica compatible. Complementa el diagnóstico cuando la linfocitosis atípica y los hallazgos físicos (adenopatías, esplenomegalia) sugieren mononucleosis.'",
-		"CONTEXTUALIZACIÓN: Relaciona CADA evaluación con las características ESPECÍFICAS de ESTE paciente (edad, comorbilidades, presentación clínica, hallazgos previos, indicaciones clínicas reales).",
-		"COMPARACIÓN DE ALTERNATIVAS: Si la respuesta es incorrecta, indica la conducta o prueba CORRECTA y explica por qué es superior EN ESTE CONTEXTO PARTICULAR.",
+		"EVALUACIÓN CRÍTICA DENTRO DEL CONTEXTO CLÍNICO:",
+		"- Evalúa la respuesta del usuario según el contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos clínicos presentados).",
+		"- Si la respuesta es INCORRECTA o inapropiada: explica claramente por qué no está indicada EN ESTE CASO PARTICULAR. Indica la conducta correcta.",
+		"- Si la respuesta es CORRECTA: refuerza los conceptos clave sin elogios innecesarios.",
+		"- NO uses emojis (❌✅) ni encabezados ('Evaluación:', 'Razonamiento clínico:').",
+		"- NO uses lenguaje condescendiente que valide errores ('podría ser una opción', 'no sería la primera elección pero...').",
+		"- NO introduzcas escenarios o poblaciones ajenas al caso (ej: no menciones lactantes si el paciente es adolescente).",
+		"- FUNDAMENTA con evidencia científica disponible en el contexto.",
+		"Ejemplo INCORRECTO: 'La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal. Si hay duda diagnóstica, puede considerarse TAC de abdomen.'",
+		"Ejemplo CORRECTO: 'Solicitar Monospot es apropiado dado el cuadro clínico. Esta prueba tiene alta especificidad (>95%) en adolescentes con presentación compatible y complementa el diagnóstico cuando hay linfocitosis atípica y hallazgos físicos sugestivos.'",
+		"CONTEXTUALIZACIÓN: Relaciona CADA comentario con las características ESPECÍFICAS del paciente presentado (edad, comorbilidades, presentación clínica, hallazgos previos).",
+		"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para ESTE paciente específico y explica por qué es superior.",
 		"Cada párrafo separado por UNA línea en blanco. Sin viñetas, tablas ni markdown.",
-		"Referenciar hallazgos previos sin repetirlos literalmente; añade nueva inferencia o hipótesis en cada turno.",
-		"La ÚLTIMA línea debe ser SOLO la pregunta, sin texto adicional antes ni después.",
-		"No inventes datos que no se hayan introducido implícita o explícitamente en el hilo.",
+		"La ÚLTIMA línea: SOLO la pregunta, sin texto adicional.",
+		"No inventes datos nuevos. Mantente dentro del caso clínico presentado.",
 		"Idioma: español.",
 	}, " ")
-	
+
 	// Integrar evidencia en el prompt del usuario si está disponible
 	if ragContext != "" {
 		userPrompt = ragContext + "RESPUESTA DEL USUARIO: " + userPrompt
@@ -395,25 +397,28 @@ func (h *Handler) ChatAnalytical(c *gin.Context) {
 				refsSSE = collectEvidence(refCtx, h.aiAnalytical, req.Mensaje)
 			}()
 		}
-		
+
 		// Para SSE, pedimos TEXTO PLANO (no JSON) para que el frontend no reciba envoltorios.
 		// Instrucciones textuales equivalentes a la versión JSON:
 		textInstr := strings.Join([]string{
 			"Responde en TEXTO PLANO en español, sin markdown ni JSON.",
-			"Estructura: 1) EVALUACIÓN EXPLÍCITA de la respuesta del usuario 2) Razonamiento clínico (2–3 párrafos, 150–220 palabras) 3) Pregunta final.",
+			"Estructura: Razonamiento clínico (2–3 párrafos, 150–220 palabras) evaluando la respuesta del usuario, seguido de pregunta final.",
 			phaseInstr,
 			closingInstr,
-			"EVALUACIÓN CRÍTICA OBLIGATORIA:",
-			"- Si la respuesta es INCORRECTA o inapropiada: identifícala con '❌' + justificación clara basada en evidencia.",
-			"- Si es CORRECTA: reconócela con '✅' + refuerzo de conceptos clave.",
-			"- NO uses lenguaje condescendiente que valide errores (evita: 'podría ser una opción').",
+			"EVALUACIÓN CRÍTICA DENTRO DEL CONTEXTO CLÍNICO:",
+			"- Evalúa según el contexto ESPECÍFICO del caso presentado (edad, diagnóstico, hallazgos).",
+			"- Si es INCORRECTA: explica por qué no está indicada EN ESTE CASO. Indica la conducta correcta.",
+			"- Si es CORRECTA: refuerza conceptos clave sin elogios innecesarios.",
+			"- NO uses emojis ni encabezados.",
+			"- NO uses lenguaje condescendiente que valide errores.",
+			"- NO introduzcas escenarios ajenos al caso presentado.",
 			"- FUNDAMENTA con evidencia científica disponible.",
-			"Ejemplo INCORRECTO: '❌ El TAC de tórax NO está indicado. La mononucleosis se diagnostica clínicamente y con serología (Monospot). Manejo: reposo, hidratación, analgésicos. Imagenología solo ante complicaciones atípicas no presentes aquí.'",
-			"CONTEXTUALIZACIÓN: Relaciona con características ESPECÍFICAS del paciente.",
-			"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA y por qué es superior EN ESTE CONTEXTO.",
-			"Separa párrafos con UNA línea en blanco. Sin viñetas ni tablas.",
+			"Ejemplo: 'La radiografía simple de abdomen no confirma apendicitis. En este caso, los exámenes adecuados son hemograma, PCR y ecografía abdominal.'",
+			"CONTEXTUALIZACIÓN: Relaciona con características del paciente presentado.",
+			"COMPARACIÓN: Si es incorrecta, indica la conducta CORRECTA para este paciente.",
+			"Separa párrafos con UNA línea en blanco.",
 			"La ÚLTIMA línea: SOLO la pregunta.",
-			"No inventes datos.",
+			"Mantente dentro del caso clínico presentado.",
 		}, " ")
 
 		// Integrar evidencia si está disponible
@@ -1123,52 +1128,65 @@ func collectEvidence(ctx context.Context, ai Assistant, query string) string {
 	vectorID := getFixedBooksVectorID()
 	if strings.HasPrefix(vectorID, "vs_") {
 		if res, err := ai.SearchInVectorStoreWithMetadata(ctx, vectorID, query); err == nil && res != nil && res.HasResult {
-			// Formato: Libro — Sección: "fragmento"
+			// Formato APA simplificado: Autor/Fuente (año). Título/Sección.
 			src := strings.TrimSpace(res.Source)
 			sec := strings.TrimSpace(res.Section)
-			snip := strings.TrimSpace(res.Content)
 			if src == "" {
-				src = "Fuente de conocimiento médico"
+				src = "Fuente médica"
 			}
-			if len(snip) > 420 {
-				snip = snip[:420] + "…"
+			// Intentar extraer año si está en formato "Libro (2020)" o similar
+			year := ""
+			if idx := strings.LastIndex(src, "("); idx != -1 {
+				if idx2 := strings.Index(src[idx:], ")"); idx2 != -1 {
+					yearCandidate := strings.TrimSpace(src[idx+1 : idx+idx2])
+					if len(yearCandidate) == 4 {
+						year = yearCandidate
+						src = strings.TrimSpace(src[:idx])
+					}
+				}
 			}
 			line := src
-			if sec != "" {
-				line = line + " — " + sec
+			if year != "" {
+				line = line + " (" + year + ")"
 			}
-			if snip != "" {
-				line = line + ": \"" + snip + "\""
+			if sec != "" {
+				line = line + ". " + sec + "."
+			} else {
+				line = line + "."
 			}
 			refs = append(refs, line)
 		} else if txt, err2 := ai.SearchInVectorStore(ctx, vectorID, query); err2 == nil && strings.TrimSpace(txt) != "" {
-			t := strings.TrimSpace(txt)
-			if len(t) > 420 {
-				t = t[:420] + "…"
-			}
-			refs = append(refs, "Base de conocimiento médico: \""+t+"\"")
+			// Fallback sin metadatos
+			refs = append(refs, "Base de conocimiento médico.")
 		}
 	}
-	// 2) PubMed
+	// 2) PubMed - formato simplificado
 	if pm, err := ai.SearchPubMed(ctx, query); err == nil && strings.TrimSpace(pm) != "" {
+		// Intentar extraer primer autor y año si está en el formato típico de PubMed
 		p := strings.TrimSpace(pm)
-		// intentar recortar a un extracto útil
-		if len(p) > 600 {
-			p = p[:600] + "…"
+		// Buscar patrón "Autor et al. (año)" o "Autor (año)"
+		pmRef := "PubMed."
+		if idx := strings.Index(p, "("); idx != -1 && idx < 100 {
+			if idx2 := strings.Index(p[idx:], ")"); idx2 != -1 && idx2 < 10 {
+				author := strings.TrimSpace(p[:idx])
+				year := strings.TrimSpace(p[idx+1 : idx+idx2])
+				if len(year) == 4 && author != "" {
+					pmRef = author + " (" + year + ")."
+				}
+			}
 		}
-		refs = append(refs, "PubMed: "+p)
+		refs = append(refs, pmRef)
 	}
 	if len(refs) == 0 {
 		return ""
 	}
-	// Construir bloque "Referencias:" para anexar al texto libre existente
+	// Construir bloque "Referencias:" con formato APA simplificado
 	b := &strings.Builder{}
 	b.WriteString("\n\nReferencias:\n")
 	for i, r := range refs {
 		if i >= 3 {
 			break
-		} // limitar a 3 para brevedad
-		b.WriteString("- ")
+		}
 		b.WriteString(r)
 		b.WriteString("\n")
 	}

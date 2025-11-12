@@ -18,30 +18,31 @@ El asistente en casos clínicos analíticos era demasiado condescendiente y no i
    - La evidencia se incluye en el contexto del prompt para fundamentar la evaluación
    - Timeout de 5 segundos para no afectar la experiencia del usuario
 
-2. **Prompt reforzado con instrucciones explícitas**:
+2. **Prompt reforzado con evaluación contextual**:
    ```
-   EVALUACIÓN CRÍTICA OBLIGATORIA:
-   - Si la respuesta es INCORRECTA: ❌ + justificación clara basada en evidencia
-   - Si es CORRECTA: ✅ + refuerzo de conceptos clave
-   - NO usar lenguaje condescendiente (evitar: "podría ser una opción")
-   - FUNDAMENTAR con evidencia científica disponible
+   EVALUACIÓN CRÍTICA DENTRO DEL CONTEXTO CLÍNICO:
+   - Evalúa según el contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos)
+   - Si es INCORRECTA: explica por qué no está indicada EN ESTE CASO
+   - NO uses emojis ni encabezados
+   - NO introduzcas escenarios ajenos al caso presentado
+   - FUNDAMENTA con evidencia científica disponible
    ```
 
-3. **Ejemplos concretos en el prompt**:
-   - Ejemplo de evaluación INCORRECTA: "❌ El TAC de tórax NO está indicado. La mononucleosis se diagnostica clínicamente y con serología (Monospot)..."
-   - Ejemplo de evaluación CORRECTA: "✅ Solicitar Monospot es apropiado. Esta prueba tiene alta especificidad (>95%) en adolescentes..."
+3. **Formato de referencias APA simplificado**:
+   - Referencias en formato académico: `Autor/Fuente (año). Sección.`
+   - Sin texto descriptivo adicional ni fragmentos extensos
+   - Máximo 3 referencias por brevedad
 
 4. **RAG habilitado por defecto**:
    - Función `isRAGEnabled()` retorna `true` por defecto (a menos que `CLINICAL_APPEND_REFS=false`)
-   - Documentado en `.env.example` con comentarios claros sobre su propósito
    - Aplicado tanto en modo JSON como en streaming (SSE)
 
 **Beneficios:**
 - ✅ Evaluaciones fundamentadas en evidencia científica (libros médicos + PubMed)
-- ✅ Identificación clara de errores médicos con justificación
-- ✅ Mayor rigor académico y menos condescendencia
-- ✅ Referencias al final cuando se usa evidencia
-- ✅ Retroalimentación educativa de calidad
+- ✅ Retroalimentación contextual sin escenarios ajenos
+- ✅ Identificación clara de errores sin condescendencia
+- ✅ Referencias académicas limpias en formato APA
+- ✅ Sin emojis ni encabezados innecesarios
 
 **Pruebas:**
 - ✅ Compilación exitosa del backend
