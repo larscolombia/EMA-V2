@@ -427,22 +427,24 @@ INSTRUCCIONES CRÍTICAS:
 - NO devolver JSON, solo MARKDOWN plano`
 	} else {
 		// MENSAJE NORMAL: Instrucciones optimizadas (reducidas ~60%)
+		// CRÍTICO: Incluir recordatorio del caso inicial en CADA turno para evitar pérdida de contexto
 		instr = strings.Join([]string{
 			"JSON: { 'respuesta': { 'text': <string> } }.",
 			"Texto: 2–3 párrafos (150–220 palabras), razonamiento clínico + pregunta final.",
+			"CONTEXTO DEL CASO: Revisa el PRIMER mensaje del thread para recordar diagnóstico inicial, edad, sexo, presentación clínica y hallazgos. TODAS las evaluaciones y preguntas deben ser coherentes con ESE caso específico.",
 			phaseInstr,
 			closingInstr,
 			"EVALUACIÓN CRÍTICA:",
-			"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos presentados).",
-			"- INCORRECTA: por qué no está indicada EN ESTE CASO + conducta correcta.",
-			"- CORRECTA: refuerza conceptos clave (sin elogios).",
+			"- SIEMPRE evalúa en el contexto del diagnóstico/presentación del CASO ORIGINAL (primer mensaje del thread).",
+			"- INCORRECTA: explica por qué la respuesta NO aplica al caso inicial (edad, diagnóstico, presentación) + conducta correcta PARA ESTE PACIENTE.",
+			"- CORRECTA: refuerza conceptos relacionados al caso original (sin elogios).",
 			"- NO emojis, encabezados genéricos, ni lenguaje condescendiente.",
-			"- NO escenarios ajenos al caso (ej: lactantes si paciente es adolescente).",
-			"- FUNDAMENTA con evidencia disponible.",
+			"- NO cambies de diagnóstico ni escenario clínico (ej: si el caso es apendicitis, NO evalúes como si fuera embarazo ectópico).",
+			"- FUNDAMENTA con evidencia relevante al caso original.",
 			"PREGUNTA FINAL:",
-			"- Coherente con caso y discusión previa.",
-			"- NO nuevos exámenes/escenarios ajenos.",
-			"- NO preguntar sobre hallazgos de exámenes NO indicados.",
+			"- Coherente con el caso ORIGINAL y discusión previa.",
+			"- NO nuevos diagnósticos/escenarios diferentes al caso inicial.",
+			"- NO preguntar sobre hallazgos de exámenes NO indicados para el caso original.",
 			"Última línea: SOLO pregunta. Sin viñetas/tablas/markdown. Español.",
 		}, " ")
 	}
@@ -477,23 +479,26 @@ INSTRUCCIONES CRÍTICAS:
 		// Eliminada la búsqueda duplicada que causaba timeouts
 
 		// Para SSE, pedimos MARKDOWN optimizado (instrucciones reducidas ~60%)
+		// CRÍTICO: Incluir recordatorio del caso inicial en CADA turno para evitar pérdida de contexto
 		textInstr := strings.Join([]string{
 			"MARKDOWN válido (sin JSON). 2–3 párrafos (150–220 palabras) + pregunta final.",
+			"CONTEXTO DEL CASO: Revisa el PRIMER mensaje del thread para recordar diagnóstico inicial, edad, sexo, presentación clínica y hallazgos. TODAS las evaluaciones y preguntas deben ser coherentes con ESE caso específico.",
 			phaseInstr,
 			closingInstr,
 			"EVALUACIÓN:",
-			"- Contexto ESPECÍFICO del caso (edad, diagnóstico, hallazgos).",
-			"- INCORRECTA: por qué no + conducta correcta EN ESTE CASO.",
-			"- CORRECTA: refuerza conceptos (sin elogios).",
-			"- NO emojis, encabezados genéricos, lenguaje condescendiente, escenarios ajenos.",
-			"- FUNDAMENTA con evidencia si es relevante al caso.",
+			"- SIEMPRE evalúa en el contexto del diagnóstico/presentación del CASO ORIGINAL (primer mensaje del thread).",
+			"- INCORRECTA: explica por qué NO aplica al caso inicial (edad, diagnóstico, presentación) + conducta correcta PARA ESTE PACIENTE.",
+			"- CORRECTA: refuerza conceptos relacionados al caso original (sin elogios).",
+			"- NO emojis, encabezados genéricos, lenguaje condescendiente.",
+			"- NO cambies de diagnóstico ni escenario clínico (ej: si el caso es apendicitis, NO evalúes como si fuera embarazo ectópico).",
+			"- FUNDAMENTA con evidencia relevante al caso original.",
 			"MARKDOWN:",
 			"- ## para secciones si necesario.",
 			"- Listas: - o *",
 			"- **negrita** para conceptos clave.",
 			"PREGUNTA FINAL:",
-			"- Coherente con caso.",
-			"- NO nuevos exámenes/escenarios ajenos.",
+			"- Coherente con el caso ORIGINAL y discusión previa.",
+			"- NO nuevos diagnósticos/escenarios diferentes al caso inicial.",
 			"- Última línea: SOLO pregunta. Español.",
 		}, " ")
 
