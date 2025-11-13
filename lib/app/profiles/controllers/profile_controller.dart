@@ -178,31 +178,13 @@ class ProfileController extends GetxController {
       // Actualizar perfil
       final newProfile = await profileService.updateProfile(updatedProfile);
 
-      print('🔍 [MERGE] Perfil recibido del servidor:');
-      print('   gender: ${newProfile.gender}');
-      print('   age: ${newProfile.age}');
-      print('   country_id: ${newProfile.countryId}');
-      print('   country_name: ${newProfile.countryName}');
-
       // Usar merge para preservar datos críticos
       final mergedProfile = mergeProfiles(
         currentProfile.value,
         newProfile,
       ).copyWith(authToken: currentToken);
 
-      print('🔍 [MERGE] Perfil después del merge:');
-      print('   gender: ${mergedProfile.gender}');
-      print('   age: ${mergedProfile.age}');
-      print('   country_id: ${mergedProfile.countryId}');
-      print('   country_name: ${mergedProfile.countryName}');
-
       currentProfile.value = mergedProfile;
-
-      print('🔍 [MERGE] currentProfile actualizado:');
-      print('   gender: ${currentProfile.value.gender}');
-      print('   age: ${currentProfile.value.age}');
-      print('   country_id: ${currentProfile.value.countryId}');
-      print('   country_name: ${currentProfile.value.countryName}');
 
       await userService.setCurrentUser(mergedProfile);
 

@@ -1,13 +1,97 @@
 package stats
 
-import "github.com/gin-gonic/gin"
+import (
+	"ema-backend/migrations"
+	"log"
+	"strconv"
 
-// RegisterStubRoutes registers placeholder endpoints for future statistics so the frontend avoids 404s.
+	"github.com/gin-gonic/gin"
+)
+
+// RegisterStubRoutes registers statistics endpoints
 func RegisterStubRoutes(r *gin.Engine) {
-	// All return simple empty payloads (200) to prevent client errors.
-	r.GET("/users/:id/clinical-cases-count", func(c *gin.Context) { c.JSON(200, gin.H{"count": 0}) })
-	r.GET("/user/:id/total-tests", func(c *gin.Context) { c.JSON(200, gin.H{"total": 0}) })
-	r.GET("/user/:id/test-progress", func(c *gin.Context) { c.JSON(200, gin.H{"progress": []any{}}) })
-	r.GET("/user/:id/most-studied-category", func(c *gin.Context) { c.JSON(200, gin.H{"category": nil}) })
-	r.GET("/chats/:id", func(c *gin.Context) { c.JSON(200, gin.H{"messages": []any{}}) })
+	r.GET("/users/:id/clinical-cases-count", getClinicalCasesStats)
+	r.GET("/user/:id/total-tests", getTotalTestsStats)
+	r.GET("/user/:id/test-progress", getTestProgress)
+	r.GET("/user/:id/most-studied-category", getMostStudiedCategory)
+	r.GET("/chats/:id", getChatsStats)
+}
+
+func getClinicalCasesStats(c *gin.Context) {
+	userID, _ := strconv.Atoi(c.Param("id"))
+
+	sub, err := migrations.GetActiveSubscriptionForUser(userID)
+	if err != nil || sub == nil {
+		c.JSON(200, gin.H{"total": 0, "used": 0, "remaining": 0})
+		return
+	}
+
+	plan := sub["subscription_plan"].(map[string]interface{})
+	planLimit := plan["clinical_cases"].(int)
+	remaining := sub["clinical_cases"].(int)
+	used := planLimit - remaining
+
+	log.Printf("[STATS] Clinical Cases - UserID=%d Plan=%d Remaining=%d Used=%d", userID, planLimit, remaining, used)
+
+	c.JSON(200, gin.H{
+		"total":     planLimit,
+		"used":      used,
+		"remaining": remaining,
+	})
+}
+
+func getTotalTestsStats(c *gin.Context) {
+	userID, _ := strconv.Atoi(c.Param("id"))
+
+	sub, err := migrations.GetActiveSubscriptionForUser(userID)
+	if err != nil || sub == nil {
+		c.JSON(200, gin.H{"total": 0, "used": 0, "remaining": 0})
+		return
+	}
+
+	plan := sub["subscription_plan"].(map[string]interface{})
+	planLimit := plan["questionnaires"].(int)
+	remaining := sub["questionnaires"].(int)
+	used := planLimit - remaining
+
+	log.Printf("[STATS] Tests/Questionnaires - UserID=%d Plan=%d Remaining=%d Used=%d", userID, planLimit, remaining, used)
+
+	c.JSON(200, gin.H{
+		"total":     planLimit,
+		"used":      used,
+		"remaining": remaining,
+	})
+}
+
+func getChatsStats(c *gin.Context) {
+	userID, _ := strconv.Atoi(c.Param("id"))
+
+	sub, err := migrations.GetActiveSubscriptionForUser(userID)
+	if err != nil || sub == nil {
+		c.JSON(200, gin.H{"total": 0, "used": 0, "remaining": 0})
+		return
+	}
+
+	plan := sub["subscription_plan"].(map[string]interface{})
+	planLimit := plan["consultations"].(int)
+	remaining := sub["consultations"].(int)
+	used := planLimit - remaining
+
+	log.Printf("[STATS] Chats/Consultations - UserID=%d Plan=%d Remaining=%d Used=%d", userID, planLimit, remaining, used)
+
+	c.JSON(200, gin.H{
+		"total":     planLimit,
+		"used":      used,
+		"remaining": remaining,
+	})
+}
+
+func getTestProgress(c *gin.Context) {
+	// Por ahora vacío - se puede implementar más adelante con una tabla de historial
+	c.JSON(200, gin.H{"progress": []any{}})
+}
+
+func getMostStudiedCategory(c *gin.Context) {
+	// Por ahora vacío - se puede implementar más adelante con una tabla de historial
+	c.JSON(200, gin.H{"category": nil})
 }

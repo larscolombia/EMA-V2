@@ -23,23 +23,23 @@ class TestScore {
 
 class TestProgressSummary {
   final int totalTests;
-  final int totalPreguntas;
-  final int totalCorrectas;
-  final int totalIncorrectas;
+  final int totalScore;        // Total de puntos obtenidos
+  final int totalMaxScore;     // Total de puntos posibles
+  final double averagePercentage; // Promedio general en porcentaje
 
   TestProgressSummary({
     required this.totalTests,
-    required this.totalPreguntas,
-    required this.totalCorrectas,
-    required this.totalIncorrectas,
+    required this.totalScore,
+    required this.totalMaxScore,
+    required this.averagePercentage,
   });
 
   factory TestProgressSummary.fromJson(Map<String, dynamic> json) {
     return TestProgressSummary(
-      totalTests: json['total_tests'],
-      totalPreguntas: json['total_preguntas'],
-      totalCorrectas: json['total_correctas'],
-      totalIncorrectas: json['total_incorrectas'],
+      totalTests: json['total_tests'] ?? 0,
+      totalScore: json['total_score'] ?? 0,
+      totalMaxScore: json['total_max_score'] ?? 0,
+      averagePercentage: (json['average_percentage'] ?? 0.0).toDouble(),
     );
   }
 }

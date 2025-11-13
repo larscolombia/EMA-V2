@@ -25,9 +25,10 @@ class UserTestProgressController extends GetxController {
 
   final StatisticsRepository statisticsRepo = StatisticsRepository();
 
-  final RxInt totalPreguntas = 0.obs;
-  final RxInt totalCorrectas = 0.obs;
-  final RxInt totalIncorrectas = 0.obs;
+  // Campos actualizados para el nuevo sistema
+  final RxInt totalScore = 0.obs;           // Puntos totales obtenidos
+  final RxInt totalMaxScore = 0.obs;        // Puntos totales posibles
+  final RxDouble averagePercentage = 0.0.obs; // Promedio general %
 
   Future<void> loadTestScores({
     required int userId,
@@ -40,15 +41,16 @@ class UserTestProgressController extends GetxController {
         authToken: authToken,
       );
       testScores.assignAll(progressData.tests);
-      totalPreguntas.value = progressData.summary.totalPreguntas;
-      totalCorrectas.value = progressData.summary.totalCorrectas;
       totalTests.value = progressData.summary.totalTests;
-      totalIncorrectas.value = progressData.summary.totalIncorrectas;
+      totalScore.value = progressData.summary.totalScore;
+      totalMaxScore.value = progressData.summary.totalMaxScore;
+      averagePercentage.value = progressData.summary.averagePercentage;
     } catch (e) {
       testScores.clear();
-      totalPreguntas.value = 0;
-      totalCorrectas.value = 0;
-      totalIncorrectas.value = 0;
+      totalTests.value = 0;
+      totalScore.value = 0;
+      totalMaxScore.value = 0;
+      averagePercentage.value = 0.0;
     } finally {
       isLoadingTestScores.value = false;
     }
@@ -187,5 +189,28 @@ class UserTestProgressController extends GetxController {
         category != null ? jsonEncode(category.toString()) : '';
     final combined = testScoresJson + monthlyScoresJson + categoryJson;
     return md5.convert(utf8.encode(combined)).toString();
+  }
+
+  /// Registra un test completado en el sistema de estadísticas
+  Future<void> recordTestCompletion({
+    required String authToken,
+    required String testName,
+    required int scoreObtained,
+    required int maxScore,
+    int? categoryId,
+  }) async {
+    try {
+      await progressService.recordTestCompletion(
+        authToken: authToken,
+        testName: testName,
+        scoreObtained: scoreObtained,
+        maxScore: maxScore,
+        categoryId: categoryId,
+      );
+    } catch (e) {
+      // Registrar error pero no bloquear el flujo
+      print('[ERROR] No se pudo registrar test: $e');
+      rethrow;
+    }
   }
 }

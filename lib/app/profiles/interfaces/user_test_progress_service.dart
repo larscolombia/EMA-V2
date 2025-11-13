@@ -34,4 +34,13 @@ abstract class UserTestProgressService {
     required int userId,
     required String authToken,
   });
+
+  // Registrar test completado para estadísticas
+  Future<void> recordTestCompletion({
+    required String authToken,
+    required String testName,
+    required int scoreObtained,
+    required int maxScore,
+    int? categoryId,
+  });
 }

@@ -130,11 +130,9 @@ class StatisticsSection extends StatelessWidget {
         if (progressController.isLoadingTestScores.value) {
           return const Center(child: CircularProgressIndicator());
         }
-        final totalEarned = progressController.totalCorrectas.value;
-        final totalPossible = progressController.totalPreguntas.value;
-
-        // print('totalEarned: $totalEarned');
-        // print('totalPossible: $totalPossible');
+        final totalEarned = progressController.totalScore.value;
+        final totalPossible = progressController.totalMaxScore.value;
+        final averagePercent = progressController.averagePercentage.value;
 
         return Container(
           padding: const EdgeInsets.all(16),
@@ -240,12 +238,15 @@ class StatisticsSection extends StatelessWidget {
           );
         }
 
-        // Ahora, dado que MonthlyScore tiene 'mes' (int) y 'puntos' (int)
+        // Ahora, dado que MonthlyScore tiene 'mes' (String "2024-11") y 'puntos' (int)
         final List<MonthlyScore> dynamicScores =
             progressController.monthlyScores.toList();
 
-        // Extraemos directamente el número de mes y los puntos obtenidos
-        final monthNumbers = dynamicScores.map((score) => score.mes).toList();
+        // Extraemos el número de mes de la cadena "2024-11" y los puntos obtenidos
+        final monthNumbers = dynamicScores.map((score) {
+          final parts = score.mes.split('-');
+          return parts.length == 2 ? int.tryParse(parts[1]) ?? 1 : 1;
+        }).toList();
         final puntosPorMes =
             dynamicScores.map((score) => score.puntos).toList();
 
@@ -511,11 +512,24 @@ class StatisticsSection extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      category.categoryName,
-                      style: _labelStyle(
-                        context,
-                      ).copyWith(fontSize: 16, fontWeight: FontWeight.bold),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          category.categoryName,
+                          style: _labelStyle(
+                            context,
+                          ).copyWith(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${category.studyCount} test${category.studyCount != 1 ? 's' : ''} realizado${category.studyCount != 1 ? 's' : ''}',
+                          style: _labelStyle(context).copyWith(
+                            fontSize: 13,
+                            color: AppStyles.primary900.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],

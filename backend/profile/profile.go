@@ -34,6 +34,8 @@ func RegisterRoutes(r *gin.Engine) {
 	r.POST("/user-detail/:id", updateProfile)
 	// Aggregated overview endpoint to reduce multiple sequential fetches on app start.
 	r.GET("/user-overview/:id", getOverview)
+	// Test completion endpoint for statistics tracking
+	r.POST("/record-test", recordTest)
 }
 
 func getProfile(c *gin.Context) {
@@ -146,13 +148,57 @@ func getOverview(c *gin.Context) {
 		}
 	}
 
-	// Stats actualmente devueltos como parte del overview para evitar múltiples llamadas.
+	// Calcular estadísticas reales basadas en los quotas de la suscripción
 	stats := gin.H{
 		"clinical_cases_count":  0,
 		"total_tests":           0,
 		"test_progress":         []any{},
 		"most_studied_category": nil,
+		"monthly_scores":        []any{},
 		"chats":                 []any{},
+	}
+
+	if activeSub != nil {
+		plan, _ := activeSub["subscription_plan"].(map[string]interface{})
+
+		// Clinical Cases
+		planClinical := plan["clinical_cases"].(int)
+		remainingClinical := activeSub["clinical_cases"].(int)
+		usedClinical := planClinical - remainingClinical
+		stats["clinical_cases_count"] = usedClinical
+
+		// Total Tests/Questionnaires
+		planTests := plan["questionnaires"].(int)
+		remainingTests := activeSub["questionnaires"].(int)
+		usedTests := planTests - remainingTests
+		stats["total_tests"] = usedTests
+
+		// Chats/Consultations (devuelto como array para compatibilidad)
+		planChats := plan["consultations"].(int)
+		remainingChats := activeSub["consultations"].(int)
+		usedChats := planChats - remainingChats
+		// Crear array de usedChats elementos para compatibilidad con frontend
+		chatsArray := make([]int, usedChats)
+		stats["chats"] = chatsArray
+
+		log.Printf("[OVERVIEW][STATS] userID=%d clinical_used=%d tests_used=%d chats_used=%d",
+			user.ID, usedClinical, usedTests, usedChats)
+	}
+
+	// Obtener estadísticas detalladas de test_history
+	if testProgress, err := migrations.GetTestProgress(user.ID, 10); err == nil && testProgress != nil {
+		stats["test_progress"] = testProgress
+		log.Printf("[OVERVIEW][STATS] userID=%d test_progress_count=%d", user.ID, len(testProgress))
+	}
+
+	if monthlyScores, err := migrations.GetMonthlyScores(user.ID); err == nil && monthlyScores != nil {
+		stats["monthly_scores"] = monthlyScores
+		log.Printf("[OVERVIEW][STATS] userID=%d monthly_scores_count=%d", user.ID, len(monthlyScores))
+	}
+
+	if mostStudied, err := migrations.GetMostStudiedCategory(user.ID); err == nil && mostStudied != nil {
+		stats["most_studied_category"] = mostStudied
+		log.Printf("[OVERVIEW][STATS] userID=%d most_studied=%v", user.ID, mostStudied)
 	}
 
 	duration := time.Since(start)
@@ -445,4 +491,65 @@ func uploadToCloudinary(file *multipart.FileHeader, userID int) (string, error) 
 		userID, result.PublicID, result.SecureURL)
 
 	return result.SecureURL, nil
+}
+
+// recordTest handles POST /record-test for recording test completions
+func recordTest(c *gin.Context) {
+	auth := c.GetHeader("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token requerido"})
+		return
+	}
+	email, ok := login.GetEmailFromToken(token)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
+		return
+	}
+	user := migrations.GetUserByEmail(email)
+	if user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
+
+	var payload struct {
+		CategoryID    *int   `json:"category_id"`
+		TestName      string `json:"test_name"`
+		ScoreObtained int    `json:"score_obtained"`
+		MaxScore      int    `json:"max_score"`
+	}
+
+	if err := c.BindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos", "details": err.Error()})
+		return
+	}
+
+	// Validaciones
+	if payload.TestName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "test_name es requerido"})
+		return
+	}
+	if payload.MaxScore <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "max_score debe ser mayor a 0"})
+		return
+	}
+	if payload.ScoreObtained < 0 || payload.ScoreObtained > payload.MaxScore {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "score_obtained debe estar entre 0 y max_score"})
+		return
+	}
+
+	// Registrar en test_history
+	if err := migrations.RecordTestCompletion(user.ID, payload.CategoryID, payload.TestName, payload.ScoreObtained, payload.MaxScore); err != nil {
+		log.Printf("[RECORD_TEST] Error recording test for userID=%d: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo registrar el test"})
+		return
+	}
+
+	log.Printf("[RECORD_TEST] Success: userID=%d testName=%s score=%d/%d categoryID=%v",
+		user.ID, payload.TestName, payload.ScoreObtained, payload.MaxScore, payload.CategoryID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Test registrado exitosamente",
+	})
 }

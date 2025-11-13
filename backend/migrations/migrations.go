@@ -132,6 +132,26 @@ func Migrate() error {
 	if _, err := db.Exec(createMedicalCategories); err != nil {
 		return err
 	}
+
+	// Test history table for tracking completed tests/quizzes
+	createTestHistory := `
+	CREATE TABLE IF NOT EXISTS test_history (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		user_id INT NOT NULL,
+		category_id INT NULL,
+		test_name VARCHAR(255) NOT NULL,
+		score_obtained INT NOT NULL DEFAULT 0,
+		max_score INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		FOREIGN KEY (category_id) REFERENCES medical_categories(id) ON DELETE SET NULL,
+		INDEX idx_user_created (user_id, created_at),
+		INDEX idx_user_category (user_id, category_id)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createTestHistory); err != nil {
+		return err
+	}
+
 	return nil
 }
 

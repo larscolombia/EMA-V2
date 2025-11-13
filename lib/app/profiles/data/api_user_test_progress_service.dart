@@ -46,9 +46,31 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required String authToken,
   }) async {
   final data = await _fetchOverview(userId: userId, authToken: authToken);
-  // Stubs currently empty; adapt when backend adds real fields
-  final resumen = (data['stats']?['test_progress'] ?? []);
-  return TestProgressData.fromJson({'data': {'resumen': resumen}});
+  
+  // test_progress ahora tiene estructura: {summary: {...}, recent_tests: [...]}
+  final testProgressData = data['stats']?['test_progress'];
+  
+  if (testProgressData == null) {
+    return TestProgressData(
+      tests: [],
+      summary: TestProgressSummary(
+        totalTests: 0,
+        totalScore: 0,
+        totalMaxScore: 0,
+        averagePercentage: 0.0,
+      ),
+    );
+  }
+  
+  final summary = testProgressData['summary'] ?? {};
+  final recentTests = testProgressData['recent_tests'] ?? [];
+  
+  return TestProgressData.fromJson({
+    'data': {
+      'tests': recentTests,
+      'resumen': summary,
+    }
+  });
   }
 
   @override
@@ -57,8 +79,8 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required String authToken,
   }) async {
   final data = await _fetchOverview(userId: userId, authToken: authToken);
-  final List<dynamic> puntosMeses = data['stats']?['test_progress'] ?? [];
-  return puntosMeses.map((item) => MonthlyScore.fromJson(item)).toList();
+  final List<dynamic> monthlyScores = data['stats']?['monthly_scores'] ?? [];
+  return monthlyScores.map((item) => MonthlyScore.fromJson(item)).toList();
   }
 
   @override
@@ -67,8 +89,8 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required String authToken,
   }) async {
   final data = await _fetchOverview(userId: userId, authToken: authToken);
-  // Stubbed -> returns empty/placeholder
-  return MostStudiedCategory.fromJson(data['stats'] ?? {});
+  final mostStudiedData = data['stats']?['most_studied_category'] ?? {};
+  return MostStudiedCategory.fromJson(mostStudiedData);
   }
 
   @override
@@ -97,5 +119,37 @@ class ApiUserTestProgressService extends UserTestProgressService {
   }) async {
   final data = await _fetchOverview(userId: userId, authToken: authToken);
   return (data['stats']?['clinical_cases_count'] ?? 0) as int;
+  }
+
+  @override
+  Future<void> recordTestCompletion({
+    required String authToken,
+    required String testName,
+    required int scoreObtained,
+    required int maxScore,
+    int? categoryId,
+  }) async {
+    final url = Uri.parse('$apiUrl/record-test');
+    final response = await http.post(
+      url,
+      headers: {
+        'Authorization': 'Bearer $authToken',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: jsonEncode({
+        'test_name': testName,
+        'score_obtained': scoreObtained,
+        'max_score': maxScore,
+        if (categoryId != null) 'category_id': categoryId,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Error registrando test: ${response.statusCode}');
+    }
+
+    // Invalidar cache para forzar actualización en próxima consulta
+    _overviewCache.clear();
   }
 }

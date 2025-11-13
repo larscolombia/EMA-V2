@@ -161,6 +161,25 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
       final quizEvaluated = await _quizzesService.evaluateQuiz(quizToEvaluate);
 
+      // Registrar test completado para estadísticas
+      try {
+        final testProgressController = Get.find<UserTestProgressController>();
+        final user = _userService.currentUser.value;
+        
+        if (user.authToken.isNotEmpty && user.id > 0) {
+          await testProgressController.recordTestCompletion(
+            authToken: user.authToken,
+            testName: quizEvaluated.title,
+            scoreObtained: quizEvaluated.score ?? 0,
+            maxScore: totalQuestions.value,
+            categoryId: quizEvaluated.categoryId,
+          );
+        }
+      } catch (e) {
+        // No bloquear el flujo si falla el registro de estadísticas
+        print('[QUIZ] Error registrando estadísticas: $e');
+      }
+
       showDetail(quiz: quizEvaluated);
 
       _quizzesService.markAsAnimated(quizEvaluated);
