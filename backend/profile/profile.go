@@ -36,7 +36,7 @@ func RegisterRoutes(r *gin.Engine) {
 	r.GET("/user-overview/:id", getOverview)
 	// Test completion endpoint for statistics tracking
 	r.POST("/record-test", func(c *gin.Context) {
-		log.Printf("🔥🔥🔥 [MIDDLEWARE] POST /record-test received - Method=%s Path=%s RemoteAddr=%s", 
+		log.Printf("🔥🔥🔥 [MIDDLEWARE] POST /record-test received - Method=%s Path=%s RemoteAddr=%s",
 			c.Request.Method, c.Request.URL.Path, c.Request.RemoteAddr)
 		recordTest(c)
 	})
