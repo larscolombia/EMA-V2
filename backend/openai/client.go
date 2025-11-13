@@ -4162,7 +4162,7 @@ func (c *Client) StreamResponseWithImage(ctx context.Context, conversationID, pr
 		// 1. Leer imagen y convertir a base64
 		imageData, err := os.ReadFile(imagePath)
 		if err != nil {
-			log.Printf("[responses][StreamWithImage][read_error] conversation=%s file=%s err=%v", 
+			log.Printf("[responses][StreamWithImage][read_error] conversation=%s file=%s err=%v",
 				conversationID, filepath.Base(imagePath), err)
 			return
 		}
