@@ -9,6 +9,7 @@ class Subscription {
   final int clinicalCases;
   final int files;
   final int? frequency;
+  final DateTime? startDate;
   final DateTime? endDate;
   final int statistics;
   final bool
@@ -25,6 +26,7 @@ class Subscription {
     required this.clinicalCases,
     required this.files,
     this.frequency,
+    this.startDate,
     this.endDate,
     this.statistics = 0, // valor por defecto
     this.active = false,
@@ -32,10 +34,6 @@ class Subscription {
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
     final plan = json['subscription_plan'];
-
-    // DEBUG: Print incoming JSON
-    print('🔍 [SUBSCRIPTION DEBUG] Incoming JSON: $json');
-    print('🔍 [SUBSCRIPTION DEBUG] Plan data: $plan');
 
     int _asInt(dynamic v, {int def = 0}) {
       if (v == null) return def;
@@ -113,6 +111,10 @@ class Subscription {
           json.containsKey('frequency')
               ? _asInt(json['frequency'])
               : (plan != null ? _asInt(plan['frequency']) : 0),
+      startDate:
+          json['start_date'] != null && json['start_date'].toString().isNotEmpty
+              ? DateTime.tryParse(json['start_date'].toString())
+              : null,
       endDate:
           json['end_date'] != null && json['end_date'].toString().isNotEmpty
               ? DateTime.tryParse(json['end_date'].toString())
@@ -125,11 +127,6 @@ class Subscription {
           json['active'] == true ||
           json['active'] == 1 ||
           json['active'] == 'true',
-    );
-
-    // DEBUG: Print final parsed values
-    print(
-      '🔍 [SUBSCRIPTION DEBUG] Parsed subscription - id: ${sub.id}, name: ${sub.name}, statistics: ${sub.statistics}, price: ${sub.price}',
     );
 
     return sub;
@@ -147,6 +144,7 @@ class Subscription {
       'clinical_cases': clinicalCases,
       'files': files,
       'frequency': frequency,
+      'start_date': startDate?.toIso8601String(),
       'end_date': endDate?.toIso8601String(),
       'statistics': statistics,
       'active': active,
@@ -164,6 +162,7 @@ class Subscription {
     int? clinicalCases,
     int? files,
     int? frequency,
+    DateTime? startDate,
     DateTime? endDate,
     int? statistics,
     bool? active,
@@ -179,6 +178,7 @@ class Subscription {
       clinicalCases: clinicalCases ?? this.clinicalCases,
       files: files ?? this.files,
       frequency: frequency ?? this.frequency,
+      startDate: startDate ?? this.startDate,
       endDate: endDate ?? this.endDate,
       statistics: statistics ?? this.statistics,
       active: active ?? this.active,

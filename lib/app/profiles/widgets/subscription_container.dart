@@ -7,43 +7,37 @@ import '../../profiles/controllers/profile_controller.dart';
 class SubscriptionContainer extends StatelessWidget {
   const SubscriptionContainer({super.key});
 
-  TextStyle _activePlanTitleStyle(BuildContext context) =>
-      Theme.of(context).textTheme.titleLarge!.copyWith(
-            color: AppStyles.primaryColor,
-            fontWeight: FontWeight.bold,
-          );
+  TextStyle _activePlanTitleStyle(BuildContext context) => Theme.of(context)
+      .textTheme
+      .titleLarge!
+      .copyWith(color: AppStyles.primaryColor, fontWeight: FontWeight.bold);
 
-  TextStyle _planNameStyle(BuildContext context) =>
-      Theme.of(context).textTheme.titleMedium!.copyWith(
-            color: AppStyles.primary900,
-            fontWeight: FontWeight.bold,
-          );
+  TextStyle _planNameStyle(BuildContext context) => Theme.of(context)
+      .textTheme
+      .titleMedium!
+      .copyWith(color: AppStyles.primary900, fontWeight: FontWeight.bold);
 
   TextStyle _planCostStyle(BuildContext context) =>
       Theme.of(context).textTheme.titleLarge!.copyWith(
-            color: AppStyles.primary900,
-            fontWeight: FontWeight.bold,
-            fontSize: 26, // Ajustamos ligeramente el tamaño del precio
-            height: 1,
-          );
+        color: AppStyles.primary900,
+        fontWeight: FontWeight.bold,
+        fontSize: 26, // Ajustamos ligeramente el tamaño del precio
+        height: 1,
+      );
 
-  TextStyle _renewalTextStyle(BuildContext context) =>
-      Theme.of(context).textTheme.bodySmall!.copyWith(
-            color: AppStyles.greyColor,
-          );
+  TextStyle _renewalTextStyle(BuildContext context) => Theme.of(
+    context,
+  ).textTheme.bodySmall!.copyWith(color: AppStyles.greyColor);
 
-  TextStyle _cancelTextStyle(BuildContext context) =>
-      Theme.of(context).textTheme.bodySmall!.copyWith(
-            color: AppStyles.redColor,
-            fontWeight: FontWeight.bold,
-          );
+  TextStyle _cancelTextStyle(BuildContext context) => Theme.of(context)
+      .textTheme
+      .bodySmall!
+      .copyWith(color: AppStyles.redColor, fontWeight: FontWeight.bold);
 
-  TextStyle _yearTextStyle(BuildContext context) =>
-      Theme.of(context).textTheme.titleMedium!.copyWith(
-            color: AppStyles.greyColor,
-            fontSize: 16,
-            height: 1,
-          );
+  TextStyle _yearTextStyle(BuildContext context) => Theme.of(context)
+      .textTheme
+      .titleMedium!
+      .copyWith(color: AppStyles.greyColor, fontSize: 16, height: 1);
 
   @override
   Widget build(BuildContext context) {
@@ -57,18 +51,84 @@ class SubscriptionContainer extends StatelessWidget {
       final bool isFree = activeSub == null;
       final String planName = isFree ? 'Plan Free' : activeSub.name;
 
-      final String billing = activeSub != null
-          ? (activeSub.frequency == 1
-              ? "Mensual"
-              : activeSub.frequency == 2
+      final String billing =
+          activeSub != null
+              ? (activeSub.frequency == 1
+                  ? "Mensual"
+                  : activeSub.frequency == 2
                   ? "Anual"
                   : activeSub.frequency == 3
-                      ? "Pago Único"
-                      : "M")
-          : "M";
-      final String renewalDate = isFree || activeSub.endDate == null
-          ? ''
-          : activeSub.endDate!.toString().split(' ')[0];
+                  ? "Pago Único"
+                  : "M")
+              : "M";
+
+      // Calcular fecha de renovación
+      String renewalDate = '';
+
+      if (!isFree) {
+        if (activeSub.endDate != null) {
+          // Si hay end_date en la suscripción, usar esa
+          renewalDate = activeSub.endDate!.toString().split(' ')[0];
+        } else if (activeSub.startDate != null) {
+          // Calcular próxima renovación basada en frequency o billing
+          final startDate = activeSub.startDate!;
+          DateTime nextRenewal;
+
+          // Determinar si es mensual o anual
+          // frequency: 0 o null con billing="M" o "Mensual" = Mensual
+          // frequency: 1 = Mensual
+          // frequency: 2 = Anual
+          final isMonthly =
+              activeSub.frequency == 1 ||
+              activeSub.frequency == 0 ||
+              activeSub.frequency == null ||
+              billing.toLowerCase().contains('mensual') ||
+              billing.toLowerCase() == 'm';
+          final isYearly =
+              activeSub.frequency == 2 ||
+              billing.toLowerCase().contains('anual');
+
+          if (isMonthly) {
+            // Mensual: +1 mes desde start_date
+            nextRenewal = DateTime(
+              startDate.year,
+              startDate.month + 1,
+              startDate.day,
+            );
+            // Si la fecha calculada ya pasó, seguir sumando meses hasta encontrar una fecha futura
+            while (nextRenewal.isBefore(DateTime.now())) {
+              nextRenewal = DateTime(
+                nextRenewal.year,
+                nextRenewal.month + 1,
+                nextRenewal.day,
+              );
+            }
+          } else if (isYearly) {
+            // Anual: +1 año desde start_date
+            nextRenewal = DateTime(
+              startDate.year + 1,
+              startDate.month,
+              startDate.day,
+            );
+            // Si la fecha calculada ya pasó, seguir sumando años hasta encontrar una fecha futura
+            while (nextRenewal.isBefore(DateTime.now())) {
+              nextRenewal = DateTime(
+                nextRenewal.year + 1,
+                nextRenewal.month,
+                nextRenewal.day,
+              );
+            }
+          } else {
+            // Pago único o desconocido: no calcular renovación
+            nextRenewal = DateTime.now();
+          }
+
+          if (isMonthly || isYearly) {
+            renewalDate =
+                '${nextRenewal.year}-${nextRenewal.month.toString().padLeft(2, '0')}-${nextRenewal.day.toString().padLeft(2, '0')}';
+          }
+        }
+      }
 
       final screenWidth = MediaQuery.of(context).size.width;
       final horizontalPadding = screenWidth < 360 ? 16.0 : 28.0;
@@ -81,10 +141,7 @@ class SubscriptionContainer extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'SUSCRIPCIÓN ACTIVA',
-              style: _activePlanTitleStyle(context),
-            ),
+            Text('SUSCRIPCIÓN ACTIVA', style: _activePlanTitleStyle(context)),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(24),
@@ -104,10 +161,7 @@ class SubscriptionContainer extends StatelessWidget {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        planName,
-                        style: _planNameStyle(context),
-                      ),
+                      Text(planName, style: _planNameStyle(context)),
                       const SizedBox(height: 2),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -149,15 +203,17 @@ class SubscriptionContainer extends StatelessWidget {
                           ),
                         ],
                       ),
-                      if (!isFree) ...[
+                      if (!isFree && renewalDate.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         Center(
                           child: Text(
-                            'Se renovará el $renewalDate',
+                            activeSub.frequency == 0
+                                ? 'Se vencerá el $renewalDate'
+                                : 'Se renovará el $renewalDate',
                             style: _renewalTextStyle(context),
                           ),
-                        )
-                      ]
+                        ),
+                      ],
                     ],
                   );
                 },
@@ -190,15 +246,17 @@ class SubscriptionContainer extends StatelessWidget {
 
                           // Forzar actualización usando forceCancel true
                           await profileController.refreshProfile(
-                              forceCancel: true);
+                            forceCancel: true,
+                          );
                           profileController.update();
 
                           Get.back();
                           Get.snackbar(
                             'Éxito',
                             'La suscripción fue cancelada',
-                            backgroundColor:
-                                Colors.green.withAlpha((0.8 * 255).toInt()),
+                            backgroundColor: Colors.green.withAlpha(
+                              (0.8 * 255).toInt(),
+                            ),
                             colorText: Colors.white,
                             snackPosition: SnackPosition.TOP,
                           );
@@ -209,8 +267,9 @@ class SubscriptionContainer extends StatelessWidget {
                           Get.snackbar(
                             'Error',
                             e.toString(),
-                            backgroundColor:
-                                Colors.red.withAlpha((0.8 * 255).toInt()),
+                            backgroundColor: Colors.red.withAlpha(
+                              (0.8 * 255).toInt(),
+                            ),
                             colorText: Colors.white,
                             snackPosition: SnackPosition.TOP,
                           );

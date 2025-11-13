@@ -55,6 +55,7 @@ class ProfileController extends GetxController {
       gender: detailed.gender ?? basic.gender,
       age: detailed.age ?? basic.age,
       city: detailed.city ?? basic.city,
+      countryId: detailed.countryId ?? basic.countryId,
       countryName:
           detailed.countryName?.isNotEmpty == true
               ? detailed.countryName
@@ -96,10 +97,10 @@ class ProfileController extends GetxController {
   }
 
   bool canCreateMoreClinicalCases() {
-  if (useAllFeatures) return true;
-  if (remainingClinicalCases.value > 0) return true;
-  final sub = currentProfile.value.activeSubscription;
-  return (sub?.clinicalCases ?? 0) > 0;
+    if (useAllFeatures) return true;
+    if (remainingClinicalCases.value > 0) return true;
+    final sub = currentProfile.value.activeSubscription;
+    return (sub?.clinicalCases ?? 0) > 0;
   }
 
   bool canCreateMoreQuizzes() {
@@ -166,6 +167,13 @@ class ProfileController extends GetxController {
 
   Future<bool> updateProfile(UserModel updatedProfile) async {
     try {
+      print('🔍 [UPDATE PROFILE] Datos a actualizar:');
+      print('  - Género: ${updatedProfile.gender}');
+      print('  - Edad: ${updatedProfile.age}');
+      print('  - País ID: ${updatedProfile.countryId}');
+      print('  - País Nombre: ${updatedProfile.countryName}');
+      print('  - Ciudad: ${updatedProfile.city}');
+
       Get.dialog(
         const Center(child: CircularProgressIndicator()),
         barrierDismissible: false,
@@ -177,11 +185,26 @@ class ProfileController extends GetxController {
       // Actualizar perfil
       final newProfile = await profileService.updateProfile(updatedProfile);
 
+      print('🔍 [UPDATE PROFILE] Respuesta del servidor:');
+      print('  - Género: ${newProfile.gender}');
+      print('  - Edad: ${newProfile.age}');
+      print('  - País ID: ${newProfile.countryId}');
+      print('  - País Nombre: ${newProfile.countryName}');
+      print('  - Ciudad: ${newProfile.city}');
+
       // Usar merge para preservar datos críticos
       final mergedProfile = mergeProfiles(
         currentProfile.value,
         newProfile,
       ).copyWith(authToken: currentToken);
+
+      print('🔍 [UPDATE PROFILE] Después del merge:');
+      print('  - Género: ${mergedProfile.gender}');
+      print('  - Edad: ${mergedProfile.age}');
+      print('  - País ID: ${mergedProfile.countryId}');
+      print('  - País Nombre: ${mergedProfile.countryName}');
+      print('  - Ciudad: ${mergedProfile.city}');
+
       currentProfile.value = mergedProfile;
 
       await userService.setCurrentUser(mergedProfile);
@@ -311,10 +334,14 @@ class ProfileController extends GetxController {
   }
 
   // LEGACY (client-side decrement) REMOVED: chat quota now decremented server-side via flow chat_message
-  Future<bool> decrementChatQuota() async { return false; }
+  Future<bool> decrementChatQuota() async {
+    return false;
+  }
 
   // LEGACY: file quota decremented server-side (file_upload flow)
-  Future<bool> decrementFileQuota() async { return false; }
+  Future<bool> decrementFileQuota() async {
+    return false;
+  }
 
   void refreshFileQuota() {
     update();
@@ -325,14 +352,18 @@ class ProfileController extends GetxController {
   }
 
   // LEGACY: clinical case quota server-side (analytical_generate / interactive_generate)
-  Future<bool> decrementClinicalCaseQuota() async { return false; }
+  Future<bool> decrementClinicalCaseQuota() async {
+    return false;
+  }
 
   void refreshClinicalCaseQuota() {
     update();
   }
 
   // LEGACY: quiz quota server-side (quiz_generate)
-  Future<bool> decrementQuizQuota() async { return false; }
+  Future<bool> decrementQuizQuota() async {
+    return false;
+  }
 
   void refreshQuizQuota() {
     update();

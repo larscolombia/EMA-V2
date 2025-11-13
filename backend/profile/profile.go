@@ -70,11 +70,8 @@ func getProfile(c *gin.Context) {
 		// Structured log for quota visibility
 		if sp, ok := activeSub["subscription_plan"].(map[string]interface{}); ok {
 			planName, _ := sp["name"].(string)
-			price, _ := sp["price"].(float64)
 			log.Printf("[PROFILE][QUOTA] user=%d plan=%s consultations=%v questionnaires=%v clinical_cases=%v files=%v", user.ID, planName,
 				activeSub["consultations"], activeSub["questionnaires"], activeSub["clinical_cases"], activeSub["files"])
-			// DEBUG: Log statistics field
-			log.Printf("[🔍 DEBUG STATS] user_id=%d statistics=%v plan=%s price=%.2f", user.ID, activeSub["statistics"], planName, price)
 		}
 	}
 	log.Printf("[PROFILE][GET] success id=%d email=%s hasActiveSub=%t", user.ID, user.Email, activeSub != nil)
@@ -293,9 +290,27 @@ func updateProfile(c *gin.Context) {
 	lastName := strings.TrimSpace(getString(payload, "last_name"))
 	city := strings.TrimSpace(getString(payload, "city"))
 	profession := strings.TrimSpace(getString(payload, "profession"))
-	log.Printf("[PROFILE][POST] update fields userID=%d first_name='%s' last_name='%s' city='%s' profession='%s'", user.ID, firstName, lastName, city, profession)
+	gender := strings.TrimSpace(getString(payload, "gender"))
+	
+	var age *int
+	if ageVal, ok := payload["age"]; ok && ageVal != nil {
+		if ageFloat, ok := ageVal.(float64); ok {
+			ageInt := int(ageFloat)
+			age = &ageInt
+		}
+	}
+	
+	var countryID *int
+	if countryVal, ok := payload["country_id"]; ok && countryVal != nil {
+		if countryFloat, ok := countryVal.(float64); ok {
+			countryInt := int(countryFloat)
+			countryID = &countryInt
+		}
+	}
+	
+	log.Printf("[PROFILE][POST] update fields userID=%d first_name='%s' last_name='%s' city='%s' profession='%s' gender='%s' age=%v country_id=%v", user.ID, firstName, lastName, city, profession, gender, age, countryID)
 
-	if err := migrations.UpdateUserProfile(user.ID, firstName, lastName, city, profession); err != nil {
+	if err := migrations.UpdateUserProfile(user.ID, firstName, lastName, city, profession, gender, age, countryID); err != nil {
 		log.Printf("[PROFILE][POST] DB update failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "No se pudo actualizar"})
 		return
@@ -316,7 +331,7 @@ func userToMap(u *migrations.User) map[string]interface{} {
 	if u == nil {
 		return nil
 	}
-	return map[string]interface{}{
+	m := map[string]interface{}{
 		"id":            u.ID,
 		"first_name":    u.FirstName,
 		"last_name":     u.LastName,
@@ -330,7 +345,15 @@ func userToMap(u *migrations.User) map[string]interface{} {
 		"profile_image": u.ProfileImage,
 		"city":          u.City,
 		"profession":    u.Profession,
+		"gender":        u.Gender,
 	}
+	if u.Age != nil {
+		m["age"] = *u.Age
+	}
+	if u.CountryID != nil {
+		m["country_id"] = *u.CountryID
+	}
+	return m
 }
 
 // normalizeImageExt returns a safe image extension based on filename and content-type.

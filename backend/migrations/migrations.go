@@ -18,6 +18,9 @@ type User struct {
 	ProfileImage string    `db:"profile_image"`
 	City         string    `db:"city"`
 	Profession   string    `db:"profession"`
+	Gender       string    `db:"gender"`
+	Age          *int      `db:"age"`
+	CountryID    *int      `db:"country_id"`
 	StripeCustomerID string `db:"stripe_customer_id"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
@@ -49,7 +52,7 @@ func Migrate() error {
 	if _, err := db.Exec(createUsers); err != nil {
 		return err
 	}
-	// Ensure optional columns exist (profile_image, city, profession)
+	// Ensure optional columns exist (profile_image, city, profession, gender, age, country_id)
 	if err := ensureColumnExists("users", "profile_image", "profile_image VARCHAR(255) DEFAULT ''"); err != nil {
 		return err
 	}
@@ -57,6 +60,15 @@ func Migrate() error {
 		return err
 	}
 	if err := ensureColumnExists("users", "profession", "profession VARCHAR(100) DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "gender", "gender VARCHAR(50) DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "age", "age INT DEFAULT NULL"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "country_id", "country_id INT DEFAULT NULL"); err != nil {
 		return err
 	}
 
@@ -125,9 +137,16 @@ func ensureColumnExists(table, column, columnDef string) error {
 		return err
 	}
 	if cnt == 0 {
+		log.Printf("[MIGRATION] Adding column %s.%s", table, column)
 		_, err := db.Exec("ALTER TABLE "+table+" ADD COLUMN "+columnDef)
-		return err
+		if err != nil {
+			log.Printf("[MIGRATION] ERROR adding column %s.%s: %v", table, column, err)
+			return err
+		}
+		log.Printf("[MIGRATION] Successfully added column %s.%s", table, column)
+		return nil
 	}
+	log.Printf("[MIGRATION] Column %s.%s already exists", table, column)
 	return nil
 }
 
@@ -304,8 +323,8 @@ func UpdateUserProfileImage(id int, path string) error {
 	return err
 }
 
-// UpdateUserProfile updates first/last name and optional city/profession
-func UpdateUserProfile(id int, firstName, lastName, city, profession string) error {
+// UpdateUserProfile updates first/last name and optional city/profession/gender/age/country
+func UpdateUserProfile(id int, firstName, lastName, city, profession, gender string, age, countryID *int) error {
 	if db == nil {
 		return fmt.Errorf("db is not initialized")
 	}
@@ -325,7 +344,16 @@ func UpdateUserProfile(id int, firstName, lastName, city, profession string) err
 	if profession == "" {
 		profession = cur.Profession
 	}
-	_, err := db.Exec("UPDATE users SET first_name = ?, last_name = ?, city = ?, profession = ?, updated_at = NOW() WHERE id = ?", firstName, lastName, city, profession, id)
+	if gender == "" {
+		gender = cur.Gender
+	}
+	if age == nil {
+		age = cur.Age
+	}
+	if countryID == nil {
+		countryID = cur.CountryID
+	}
+	_, err := db.Exec("UPDATE users SET first_name = ?, last_name = ?, city = ?, profession = ?, gender = ?, age = ?, country_id = ?, updated_at = NOW() WHERE id = ?", firstName, lastName, city, profession, gender, age, countryID, id)
 	return err
 }
 
