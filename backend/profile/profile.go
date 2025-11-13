@@ -316,7 +316,15 @@ func updateProfile(c *gin.Context) {
 		return
 	}
 	updated := migrations.GetUserByID(user.ID)
-	log.Printf("[PROFILE][POST] Updated user data: gender='%s' age=%v country_id=%v", updated.Gender, updated.Age, updated.CountryID)
+	ageVal := "nil"
+	if updated.Age != nil {
+		ageVal = fmt.Sprintf("%d", *updated.Age)
+	}
+	countryVal := "nil"
+	if updated.CountryID != nil {
+		countryVal = fmt.Sprintf("%d", *updated.CountryID)
+	}
+	log.Printf("[PROFILE][POST] Updated user data: gender='%s' age=%s country_id=%s", updated.Gender, ageVal, countryVal)
 	log.Printf("[PROFILE][POST] JSON update success for userID=%d", user.ID)
 	c.JSON(http.StatusOK, gin.H{"data": userToMap(updated)})
 }
@@ -353,8 +361,26 @@ func userToMap(u *migrations.User) map[string]interface{} {
 	}
 	if u.CountryID != nil {
 		m["country_id"] = *u.CountryID
+		m["country_name"] = getCountryName(*u.CountryID)
 	}
 	return m
+}
+
+// getCountryName returns the country name based on country ID
+func getCountryName(countryID int) string {
+	countries := map[int]string{
+		1: "Colombia",
+		2: "México",
+		3: "Perú",
+		4: "Argentina",
+		5: "Chile",
+		6: "España",
+		7: "Estados Unidos",
+	}
+	if name, ok := countries[countryID]; ok {
+		return name
+	}
+	return ""
 }
 
 // normalizeImageExt returns a safe image extension based on filename and content-type.

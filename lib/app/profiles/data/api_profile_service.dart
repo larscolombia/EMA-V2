@@ -15,6 +15,11 @@ class ApiProfileService extends ProfileService {
       final token = await AuthTokenProvider.instance.getToken();
       final effectiveId = profile.id == 0 ? '' : '${profile.id}';
       final url = Uri.parse('$apiUrl/user-detail/$effectiveId');
+
+      final updateMap = profile.toUpdateMap();
+      print('📤 [API] Enviando datos al servidor:');
+      print('   ${jsonEncode(updateMap)}');
+
       final response = await http.post(
         url,
         headers: {
@@ -22,11 +27,19 @@ class ApiProfileService extends ProfileService {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: jsonEncode(profile.toUpdateMap()),
+        body: jsonEncode(updateMap),
       );
 
       if (response.statusCode == 200) {
+        print('📥 [API] Respuesta del servidor:');
+        print('   ${response.body}');
+
         final updatedData = jsonDecode(response.body)['data'];
+        print('📋 [API] Datos parseados:');
+        print('   gender: ${updatedData['gender']}');
+        print('   age: ${updatedData['age']}');
+        print('   country_id: ${updatedData['country_id']}');
+
         return UserModel.fromMap(updatedData);
       } else {
         throw Exception(
@@ -185,10 +198,10 @@ class ApiProfileService extends ProfileService {
     final effectiveId = profile.id == 0 ? '' : '${profile.id}';
     // Prefer aggregated overview to reduce roundtrips; fallback to legacy endpoint
     final overviewUrl = Uri.parse('$apiUrl/user-overview/$effectiveId');
-    final response = await http.get(overviewUrl, headers: {
-      'Authorization': 'Bearer $token',
-      'Accept': 'application/json'
-    });
+    final response = await http.get(
+      overviewUrl,
+      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+    );
     if (response.statusCode == 200) {
       final resp = jsonDecode(response.body) as Map<String, dynamic>;
       final profileData = (resp['data']?['profile']) ?? resp['data'];
@@ -198,10 +211,10 @@ class ApiProfileService extends ProfileService {
     }
     // Fallback
     final legacyUrl = Uri.parse('$apiUrl/user-detail/$effectiveId');
-    final legacyResp = await http.get(legacyUrl, headers: {
-      'Authorization': 'Bearer $token',
-      'Accept': 'application/json'
-    });
+    final legacyResp = await http.get(
+      legacyUrl,
+      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
+    );
     if (legacyResp.statusCode == 200) {
       final responseMap = jsonDecode(legacyResp.body) as Map<String, dynamic>;
       final data = responseMap['data'];
@@ -210,6 +223,8 @@ class ApiProfileService extends ProfileService {
       }
       return profile;
     }
-    throw Exception('Error al obtener perfil detallado: ${response.statusCode} / ${legacyResp.statusCode}');
+    throw Exception(
+      'Error al obtener perfil detallado: ${response.statusCode} / ${legacyResp.statusCode}',
+    );
   }
 }
