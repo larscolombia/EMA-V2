@@ -297,8 +297,8 @@ class UserModel {
     final data = {
       'first_name': firstName,
       'last_name': lastName,
-      'genero': (gender?.trim().isEmpty ?? true) ? null : gender,
-      'edad': age,
+      'gender': (gender?.trim().isEmpty ?? true) ? null : gender,
+      'age': age,
       'country_id': countryId,
       'country_name':
           (countryName?.trim().isEmpty ?? true) ? null : countryName,

@@ -38,33 +38,31 @@ class EditProfileDialogState extends State<EditProfileDialog> {
     super.initState();
     _nameController = TextEditingController(text: widget.profile.firstName);
     _surnameController = TextEditingController(text: widget.profile.lastName);
-    _professionController =
-        TextEditingController(text: widget.profile.profession);
-    _ageController =
-        TextEditingController(text: widget.profile.age?.toString());
+    _professionController = TextEditingController(
+      text: widget.profile.profession,
+    );
+    _ageController = TextEditingController(
+      text: widget.profile.age?.toString(),
+    );
     _cityController = TextEditingController(text: widget.profile.city);
     _selectedCountryId = widget.profile.countryId;
-    
+
     // Verificar que el género actual esté en las opciones válidas
     final currentGender = widget.profile.gender;
-    print('🔍 [EditProfileDialog] Género actual del perfil: "$currentGender"');
-    print('🔍 [EditProfileDialog] Opciones válidas: $_genderOptions');
-    
+
     if (currentGender != null && _genderOptions.contains(currentGender)) {
       _selectedGender = currentGender;
-      print('✅ [EditProfileDialog] Género válido seleccionado: $_selectedGender');
     } else {
       // Si el género actual no está en las opciones válidas, usar null
       _selectedGender = null;
-      print('⚠️ [EditProfileDialog] Género no válido, usando null');
     }
   }
 
   TextStyle _headerStyle(BuildContext context) {
     return Theme.of(context).textTheme.titleLarge!.copyWith(
-          color: AppStyles.primaryColor,
-          fontWeight: FontWeight.bold,
-        );
+      color: AppStyles.primaryColor,
+      fontWeight: FontWeight.bold,
+    );
   }
 
   Future<void> _saveProfile() async {
@@ -73,8 +71,13 @@ class EditProfileDialogState extends State<EditProfileDialog> {
     try {
       final selectedCountry = widget.countries.firstWhere(
         (c) => c.id == _selectedCountryId,
-        orElse: () => CountryModel(
-            id: 0, name: 'Sin especificar', shortCode: 'XX', phoneCode: 00),
+        orElse:
+            () => CountryModel(
+              id: 0,
+              name: 'Sin especificar',
+              shortCode: 'XX',
+              phoneCode: 00,
+            ),
       );
 
       final updatedProfile = widget.profile.copyWith(
@@ -156,14 +159,16 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                             _buildTextFormField(
                               controller: _nameController,
                               label: 'Nombre',
-                              validator: (value) =>
-                                  value!.isEmpty ? 'Campo requerido' : null,
+                              validator:
+                                  (value) =>
+                                      value!.isEmpty ? 'Campo requerido' : null,
                             ),
                             _buildTextFormField(
                               controller: _surnameController,
                               label: 'Apellidos',
-                              validator: (value) =>
-                                  value!.isEmpty ? 'Campo requerido' : null,
+                              validator:
+                                  (value) =>
+                                      value!.isEmpty ? 'Campo requerido' : null,
                             ),
                             _buildTextFormField(
                               controller: _professionController,
@@ -177,21 +182,22 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                             DropdownButtonFormField<String>(
                               value: _selectedGender,
                               decoration: const InputDecoration(
-              
                                 filled: true,
                                 fillColor: Colors.white,
                                 border: OutlineInputBorder(
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(12)),
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(12),
+                                  ),
                                 ),
                                 hintText: 'Género',
                               ),
-                              items: _genderOptions.map((gender) {
-                                return DropdownMenuItem<String>(
-                                  value: gender,
-                                  child: Text(gender),
-                                );
-                              }).toList(),
+                              items:
+                                  _genderOptions.map((gender) {
+                                    return DropdownMenuItem<String>(
+                                      value: gender,
+                                      child: Text(gender),
+                                    );
+                                  }).toList(),
                               onChanged: (value) {
                                 setState(() {
                                   _selectedGender = value;
@@ -206,26 +212,28 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                                 filled: true,
                                 fillColor: Colors.white,
                                 border: OutlineInputBorder(
-                                  borderRadius:
-                                      BorderRadius.all(Radius.circular(12)),
+                                  borderRadius: BorderRadius.all(
+                                    Radius.circular(12),
+                                  ),
                                 ),
                               ),
-                              items: widget.countries.map((country) {
-                                return DropdownMenuItem<int>(
-                                  value: country.id,
-                                  child: Row(
-                                    children: [
-                                      CountryFlag.fromCountryCode(
-                                        country.shortCode,
-                                        height: 20,
-                                        width: 30,
+                              items:
+                                  widget.countries.map((country) {
+                                    return DropdownMenuItem<int>(
+                                      value: country.id,
+                                      child: Row(
+                                        children: [
+                                          CountryFlag.fromCountryCode(
+                                            country.shortCode,
+                                            height: 20,
+                                            width: 30,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(country.name),
+                                        ],
                                       ),
-                                      const SizedBox(width: 8),
-                                      Text(country.name),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
+                                    );
+                                  }).toList(),
                               onChanged: (value) {
                                 setState(() {
                                   _selectedCountryId = value;
@@ -263,7 +271,9 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                               side: const BorderSide(color: Colors.white),
                             ),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 20, vertical: 12),
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
                           ),
                           child: const Text('Cancelar'),
                         ),
@@ -276,7 +286,9 @@ class EditProfileDialogState extends State<EditProfileDialog> {
                               borderRadius: BorderRadius.circular(8),
                             ),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 20, vertical: 12),
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
                           ),
                           child: const Text('Guardar'),
                         ),
@@ -308,9 +320,7 @@ class EditProfileDialogState extends State<EditProfileDialog> {
           labelText: label,
           filled: true,
           fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
         keyboardType: keyboardType,
         validator: validator,

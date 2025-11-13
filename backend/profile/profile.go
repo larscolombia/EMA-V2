@@ -316,6 +316,7 @@ func updateProfile(c *gin.Context) {
 		return
 	}
 	updated := migrations.GetUserByID(user.ID)
+	log.Printf("[PROFILE][POST] Updated user data: gender='%s' age=%v country_id=%v", updated.Gender, updated.Age, updated.CountryID)
 	log.Printf("[PROFILE][POST] JSON update success for userID=%d", user.ID)
 	c.JSON(http.StatusOK, gin.H{"data": userToMap(updated)})
 }

@@ -167,13 +167,6 @@ class ProfileController extends GetxController {
 
   Future<bool> updateProfile(UserModel updatedProfile) async {
     try {
-      print('🔍 [UPDATE PROFILE] Datos a actualizar:');
-      print('  - Género: ${updatedProfile.gender}');
-      print('  - Edad: ${updatedProfile.age}');
-      print('  - País ID: ${updatedProfile.countryId}');
-      print('  - País Nombre: ${updatedProfile.countryName}');
-      print('  - Ciudad: ${updatedProfile.city}');
-
       Get.dialog(
         const Center(child: CircularProgressIndicator()),
         barrierDismissible: false,
@@ -185,25 +178,11 @@ class ProfileController extends GetxController {
       // Actualizar perfil
       final newProfile = await profileService.updateProfile(updatedProfile);
 
-      print('🔍 [UPDATE PROFILE] Respuesta del servidor:');
-      print('  - Género: ${newProfile.gender}');
-      print('  - Edad: ${newProfile.age}');
-      print('  - País ID: ${newProfile.countryId}');
-      print('  - País Nombre: ${newProfile.countryName}');
-      print('  - Ciudad: ${newProfile.city}');
-
       // Usar merge para preservar datos críticos
       final mergedProfile = mergeProfiles(
         currentProfile.value,
         newProfile,
       ).copyWith(authToken: currentToken);
-
-      print('🔍 [UPDATE PROFILE] Después del merge:');
-      print('  - Género: ${mergedProfile.gender}');
-      print('  - Edad: ${mergedProfile.age}');
-      print('  - País ID: ${mergedProfile.countryId}');
-      print('  - País Nombre: ${mergedProfile.countryName}');
-      print('  - Ciudad: ${mergedProfile.city}');
 
       currentProfile.value = mergedProfile;
 
