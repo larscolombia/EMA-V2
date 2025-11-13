@@ -35,7 +35,11 @@ func RegisterRoutes(r *gin.Engine) {
 	// Aggregated overview endpoint to reduce multiple sequential fetches on app start.
 	r.GET("/user-overview/:id", getOverview)
 	// Test completion endpoint for statistics tracking
-	r.POST("/record-test", recordTest)
+	r.POST("/record-test", func(c *gin.Context) {
+		log.Printf("🔥🔥🔥 [MIDDLEWARE] POST /record-test received - Method=%s Path=%s RemoteAddr=%s", 
+			c.Request.Method, c.Request.URL.Path, c.Request.RemoteAddr)
+		recordTest(c)
+	})
 }
 
 func getProfile(c *gin.Context) {
