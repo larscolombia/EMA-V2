@@ -9,21 +9,21 @@ import (
 )
 
 type User struct {
-	ID           int       `db:"id"`
-	FirstName    string    `db:"first_name"`
-	LastName     string    `db:"last_name"`
-	Email        string    `db:"email"`
-	Password     string    `db:"password"`
-	Role         string    `db:"role"`
-	ProfileImage string    `db:"profile_image"`
-	City         string    `db:"city"`
-	Profession   string    `db:"profession"`
-	Gender       string    `db:"gender"`
-	Age          *int      `db:"age"`
-	CountryID    *int      `db:"country_id"`
-	StripeCustomerID string `db:"stripe_customer_id"`
-	CreatedAt    time.Time `db:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at"`
+	ID               int       `db:"id"`
+	FirstName        string    `db:"first_name"`
+	LastName         string    `db:"last_name"`
+	Email            string    `db:"email"`
+	Password         string    `db:"password"`
+	Role             string    `db:"role"`
+	ProfileImage     string    `db:"profile_image"`
+	City             string    `db:"city"`
+	Profession       string    `db:"profession"`
+	Gender           string    `db:"gender"`
+	Age              *int      `db:"age"`
+	CountryID        *int      `db:"country_id"`
+	StripeCustomerID string    `db:"stripe_customer_id"`
+	CreatedAt        time.Time `db:"created_at"`
+	UpdatedAt        time.Time `db:"updated_at"`
 }
 
 var db *sql.DB
@@ -110,9 +110,15 @@ func Migrate() error {
 	}
 
 	// Ensure new Stripe-related columns exist (idempotent) for backward compatibility
-	if err := ensureColumnExists("subscription_plans", "stripe_product_id", "stripe_product_id VARCHAR(100) NULL"); err != nil { return err }
-	if err := ensureColumnExists("subscription_plans", "stripe_price_id", "stripe_price_id VARCHAR(100) NULL"); err != nil { return err }
-	if err := ensureColumnExists("users", "stripe_customer_id", "stripe_customer_id VARCHAR(100) NULL"); err != nil { return err }
+	if err := ensureColumnExists("subscription_plans", "stripe_product_id", "stripe_product_id VARCHAR(100) NULL"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("subscription_plans", "stripe_price_id", "stripe_price_id VARCHAR(100) NULL"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("users", "stripe_customer_id", "stripe_customer_id VARCHAR(100) NULL"); err != nil {
+		return err
+	}
 
 	// Medical categories table for quizzes/tests
 	createMedicalCategories := `
@@ -138,7 +144,7 @@ func ensureColumnExists(table, column, columnDef string) error {
 	}
 	if cnt == 0 {
 		log.Printf("[MIGRATION] Adding column %s.%s", table, column)
-		_, err := db.Exec("ALTER TABLE "+table+" ADD COLUMN "+columnDef)
+		_, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + columnDef)
 		if err != nil {
 			log.Printf("[MIGRATION] ERROR adding column %s.%s: %v", table, column, err)
 			return err
@@ -482,17 +488,25 @@ func GetActiveSubscriptionForUser(userID int) (map[string]interface{}, error) {
 
 // ResetActiveSubscriptionQuotas resets the latest subscription quotas to plan defaults.
 func ResetActiveSubscriptionQuotas(userID int) error {
-	if db == nil { return fmt.Errorf("db is not initialized") }
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
 	row := db.QueryRow("SELECT id, plan_id FROM subscriptions WHERE user_id=? ORDER BY id DESC LIMIT 1", userID)
 	var subID, planID int
 	if err := row.Scan(&subID, &planID); err != nil {
-		if err == sql.ErrNoRows { return nil }
+		if err == sql.ErrNoRows {
+			return nil
+		}
 		return err
 	}
 	prow := db.QueryRow("SELECT consultations, questionnaires, clinical_cases, files FROM subscription_plans WHERE id=? LIMIT 1", planID)
-	var c1,c2,c3,c4 int
-	if err := prow.Scan(&c1,&c2,&c3,&c4); err != nil { return err }
-	if _, err := db.Exec(`UPDATE subscriptions SET consultations=?, questionnaires=?, clinical_cases=?, files=? WHERE id=?`, c1,c2,c3,c4, subID); err != nil { return err }
-	log.Printf("[QUOTA][AUTO-RESET] user_id=%d sub_id=%d plan_id=%d consultations=%d questionnaires=%d clinical_cases=%d files=%d", userID, subID, planID, c1,c2,c3,c4)
+	var c1, c2, c3, c4 int
+	if err := prow.Scan(&c1, &c2, &c3, &c4); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE subscriptions SET consultations=?, questionnaires=?, clinical_cases=?, files=? WHERE id=?`, c1, c2, c3, c4, subID); err != nil {
+		return err
+	}
+	log.Printf("[QUOTA][AUTO-RESET] user_id=%d sub_id=%d plan_id=%d consultations=%d questionnaires=%d clinical_cases=%d files=%d", userID, subID, planID, c1, c2, c3, c4)
 	return nil
 }

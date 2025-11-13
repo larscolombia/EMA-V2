@@ -291,7 +291,7 @@ func updateProfile(c *gin.Context) {
 	city := strings.TrimSpace(getString(payload, "city"))
 	profession := strings.TrimSpace(getString(payload, "profession"))
 	gender := strings.TrimSpace(getString(payload, "gender"))
-	
+
 	var age *int
 	if ageVal, ok := payload["age"]; ok && ageVal != nil {
 		if ageFloat, ok := ageVal.(float64); ok {
@@ -299,7 +299,7 @@ func updateProfile(c *gin.Context) {
 			age = &ageInt
 		}
 	}
-	
+
 	var countryID *int
 	if countryVal, ok := payload["country_id"]; ok && countryVal != nil {
 		if countryFloat, ok := countryVal.(float64); ok {
@@ -307,7 +307,7 @@ func updateProfile(c *gin.Context) {
 			countryID = &countryInt
 		}
 	}
-	
+
 	log.Printf("[PROFILE][POST] update fields userID=%d first_name='%s' last_name='%s' city='%s' profession='%s' gender='%s' age=%v country_id=%v", user.ID, firstName, lastName, city, profession, gender, age, countryID)
 
 	if err := migrations.UpdateUserProfile(user.ID, firstName, lastName, city, profession, gender, age, countryID); err != nil {
