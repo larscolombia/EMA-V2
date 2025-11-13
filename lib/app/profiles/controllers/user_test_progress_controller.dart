@@ -26,8 +26,8 @@ class UserTestProgressController extends GetxController {
   final StatisticsRepository statisticsRepo = StatisticsRepository();
 
   // Campos actualizados para el nuevo sistema
-  final RxInt totalScore = 0.obs;           // Puntos totales obtenidos
-  final RxInt totalMaxScore = 0.obs;        // Puntos totales posibles
+  final RxInt totalScore = 0.obs; // Puntos totales obtenidos
+  final RxInt totalMaxScore = 0.obs; // Puntos totales posibles
   final RxDouble averagePercentage = 0.0.obs; // Promedio general %
 
   Future<void> loadTestScores({
@@ -63,7 +63,9 @@ class UserTestProgressController extends GetxController {
     try {
       isLoadingMonthlyScores.value = true;
       final scores = await progressService.fetchMonthlyScores(
-          userId: userId, authToken: authToken);
+        userId: userId,
+        authToken: authToken,
+      );
       monthlyScores.assignAll(scores);
     } catch (e) {
       monthlyScores.clear();
@@ -96,7 +98,9 @@ class UserTestProgressController extends GetxController {
   }) async {
     try {
       final tests = await progressService.fetchTotalTests(
-          userId: userId, authToken: authToken);
+        userId: userId,
+        authToken: authToken,
+      );
       totalTests.value = tests;
     } catch (e) {
       totalTests.value = 0;
@@ -109,7 +113,9 @@ class UserTestProgressController extends GetxController {
   }) async {
     try {
       final chats = await progressService.fetchTotalChats(
-          userId: userId, authToken: authToken);
+        userId: userId,
+        authToken: authToken,
+      );
       totalChats.value = chats;
     } catch (e) {
       totalChats.value = 0;
@@ -122,7 +128,9 @@ class UserTestProgressController extends GetxController {
   }) async {
     try {
       final count = await progressService.fetchClinicalCasesCount(
-          userId: userId, authToken: authToken);
+        userId: userId,
+        authToken: authToken,
+      );
       totalClinicalCases.value = count;
     } catch (e) {
       totalClinicalCases.value = 0;
@@ -156,7 +164,10 @@ class UserTestProgressController extends GetxController {
     ]);
 
     final newHash = _computeStatisticsHash(
-        testScores, monthlyScores, mostStudiedCategory.value);
+      testScores,
+      monthlyScores,
+      mostStudiedCategory.value,
+    );
 
     if (cachedHash == null || cachedHash != newHash) {
       await statisticsRepo.cacheStatistics(
@@ -181,10 +192,12 @@ class UserTestProgressController extends GetxController {
     List monthlyScoresList,
     dynamic category,
   ) {
-    final testScoresJson =
-        jsonEncode(testScoresList.map((e) => e.toString()).toList());
-    final monthlyScoresJson =
-        jsonEncode(monthlyScoresList.map((e) => e.toString()).toList());
+    final testScoresJson = jsonEncode(
+      testScoresList.map((e) => e.toString()).toList(),
+    );
+    final monthlyScoresJson = jsonEncode(
+      monthlyScoresList.map((e) => e.toString()).toList(),
+    );
     final categoryJson =
         category != null ? jsonEncode(category.toString()) : '';
     final combined = testScoresJson + monthlyScoresJson + categoryJson;

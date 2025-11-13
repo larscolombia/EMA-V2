@@ -1,7 +1,7 @@
 class MostStudiedCategory {
   final int categoryId;
   final String categoryName;
-  final int studyCount;  // Cantidad de tests realizados en esta categoría
+  final int studyCount; // Cantidad de tests realizados en esta categoría
 
   MostStudiedCategory({
     required this.categoryId,
@@ -18,10 +18,10 @@ class MostStudiedCategory {
   }
 
   Map<String, dynamic> toJson() => {
-        'category_id': categoryId,
-        'category_name': categoryName,
-        'study_count': studyCount,
-      };
+    'category_id': categoryId,
+    'category_name': categoryName,
+    'study_count': studyCount,
+  };
 
   @override
   String toString() => toJson().toString();

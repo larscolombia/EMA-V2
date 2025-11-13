@@ -243,10 +243,11 @@ class StatisticsSection extends StatelessWidget {
             progressController.monthlyScores.toList();
 
         // Extraemos el número de mes de la cadena "2024-11" y los puntos obtenidos
-        final monthNumbers = dynamicScores.map((score) {
-          final parts = score.mes.split('-');
-          return parts.length == 2 ? int.tryParse(parts[1]) ?? 1 : 1;
-        }).toList();
+        final monthNumbers =
+            dynamicScores.map((score) {
+              final parts = score.mes.split('-');
+              return parts.length == 2 ? int.tryParse(parts[1]) ?? 1 : 1;
+            }).toList();
         final puntosPorMes =
             dynamicScores.map((score) => score.puntos).toList();
 

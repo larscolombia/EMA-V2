@@ -14,7 +14,6 @@ import 'package:get/get.dart';
 
 import '../../profiles/profiles.dart';
 
-
 class QuizController extends GetxController with StateMixin<QuizModel> {
   ScrollController? _quizScrollController;
   final _actionsService = Get.find<ActionsService>();
@@ -53,7 +52,7 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
   Future<void> generate({
     required int numQuestions,
     required QuizzLevel level,
-    CategoryModel? category
+    CategoryModel? category,
   }) async {
     try {
       if (!profileController.canCreateMoreQuizzes()) {
@@ -92,7 +91,8 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
       showDetail(quiz: generateQuiz);
 
-      final QuizGenerateData generatedQuizData = await _quizzesService.generateQuiz(generateQuiz);
+      final QuizGenerateData generatedQuizData = await _quizzesService
+          .generateQuiz(generateQuiz);
 
       final QuizModel quizUpdated = generatedQuizData.quiz!;
 
@@ -101,7 +101,7 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
         quizUpdated.uid,
         quizUpdated.shortTitle,
         quizUpdated.title,
-        quizUpdated.categoryId
+        quizUpdated.categoryId,
       );
 
       _actionsService.insertAction(action);
@@ -110,16 +110,22 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
       _updateQuestions(generatedQuizData.questions);
 
-  // Quota consumption centralized in backend (quiz_generate flow)
+      // Quota consumption centralized in backend (quiz_generate flow)
     } catch (e) {
       change(null, status: RxStatus.error(e.toString()));
     }
   }
 
-  Future<void> saveAnswer({required QuestionResponseModel question, required AnswerModel answer}) async {
+  Future<void> saveAnswer({
+    required QuestionResponseModel question,
+    required AnswerModel answer,
+  }) async {
     try {
       isTyping.value = true; // Mostrar animación al iniciar
-      rxQuestions[_index.value] = await _quizzesService.saveAnswer(question, answer);
+      rxQuestions[_index.value] = await _quizzesService.saveAnswer(
+        question,
+        answer,
+      );
 
       _updateAnswersAndProgress();
 
@@ -165,7 +171,7 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
       try {
         final testProgressController = Get.find<UserTestProgressController>();
         final user = _userService.currentUser.value;
-        
+
         if (user.authToken.isNotEmpty && user.id > 0) {
           await testProgressController.recordTestCompletion(
             authToken: user.authToken,
@@ -221,12 +227,16 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
     _quizScrollController = scrollController;
   }
 
-  Future<void> _updateQuestions(List<QuestionResponseModel> newQuestions) async {
+  Future<void> _updateQuestions(
+    List<QuestionResponseModel> newQuestions,
+  ) async {
     try {
       rxQuestions.value = newQuestions;
       _index.value = 0;
       currentQuestion.value =
-          newQuestions.isNotEmpty ? newQuestions.first : QuestionResponseModel.empty();
+          newQuestions.isNotEmpty
+              ? newQuestions.first
+              : QuestionResponseModel.empty();
 
       _updateNumQuestions();
       _updateAnswersAndProgress();
@@ -246,13 +256,16 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
       _index.value = 0;
       currentQuestion.value =
-          loadedQuestions.isNotEmpty ? loadedQuestions.first : QuestionResponseModel.empty();
+          loadedQuestions.isNotEmpty
+              ? loadedQuestions.first
+              : QuestionResponseModel.empty();
 
       if (rxQuestions.isEmpty) {
         Notify.snackbar(
-            'Cuestionarios',
-            'No se encontraron preguntas para el cuestionario.',
-            NotifyType.info);
+          'Cuestionarios',
+          'No se encontraron preguntas para el cuestionario.',
+          NotifyType.info,
+        );
       } else {
         _updateNumQuestions();
         _updateAnswersAndProgress();
@@ -298,11 +311,11 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
 
     totalAnswers.value = totalAnswered;
 
-    progress.value = totalQuestions.value == 0
-      ? 0
-      : (totalAnswered / totalQuestions.value);
+    progress.value =
+        totalQuestions.value == 0 ? 0 : (totalAnswered / totalQuestions.value);
 
-    isComplete.value = totalQuestions.value > 0 && totalQuestions.value == totalAnswered;
+    isComplete.value =
+        totalQuestions.value > 0 && totalQuestions.value == totalAnswered;
 
     isEvaluated.value = value?.feedback.isNotEmpty ?? false;
   }

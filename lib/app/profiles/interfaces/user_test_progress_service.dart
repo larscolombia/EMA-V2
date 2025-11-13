@@ -19,15 +19,9 @@ abstract class UserTestProgressService {
   });
 
   // Nuevos métodos
-  Future<int> fetchTotalTests({
-    required int userId,
-    required String authToken,
-  });
+  Future<int> fetchTotalTests({required int userId, required String authToken});
 
-  Future<int> fetchTotalChats({
-    required int userId,
-    required String authToken,
-  });
+  Future<int> fetchTotalChats({required int userId, required String authToken});
 
   // Nuevo método para casos clínicos
   Future<int> fetchClinicalCasesCount({

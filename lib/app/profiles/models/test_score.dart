@@ -23,8 +23,8 @@ class TestScore {
 
 class TestProgressSummary {
   final int totalTests;
-  final int totalScore;        // Total de puntos obtenidos
-  final int totalMaxScore;     // Total de puntos posibles
+  final int totalScore; // Total de puntos obtenidos
+  final int totalMaxScore; // Total de puntos posibles
   final double averagePercentage; // Promedio general en porcentaje
 
   TestProgressSummary({
@@ -48,18 +48,16 @@ class TestProgressData {
   final List<TestScore> tests;
   final TestProgressSummary summary;
 
-  TestProgressData({
-    required this.tests,
-    required this.summary,
-  });
+  TestProgressData({required this.tests, required this.summary});
 
   factory TestProgressData.fromJson(Map<String, dynamic> json) {
     final data = json['data'];
-    final tests = data['tests'] != null
-        ? (data['tests'] as List)
-            .map((item) => TestScore.fromJson(item as Map<String, dynamic>))
-            .toList()
-        : <TestScore>[];
+    final tests =
+        data['tests'] != null
+            ? (data['tests'] as List)
+                .map((item) => TestScore.fromJson(item as Map<String, dynamic>))
+                .toList()
+            : <TestScore>[];
     final summary = TestProgressSummary.fromJson(data['resumen']);
     return TestProgressData(tests: tests, summary: summary);
   }

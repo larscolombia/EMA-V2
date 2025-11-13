@@ -1,7 +1,7 @@
 class MonthlyScore {
-  final String mes;         // Formato: "2024-11" (año-mes)
-  final int puntos;         // Total de puntos obtenidos en el mes
-  final int testsCount;     // Cantidad de tests realizados en el mes
+  final String mes; // Formato: "2024-11" (año-mes)
+  final int puntos; // Total de puntos obtenidos en el mes
+  final int testsCount; // Cantidad de tests realizados en el mes
 
   MonthlyScore({
     required this.mes,
@@ -19,10 +19,10 @@ class MonthlyScore {
 
   // Nuevo método para convertir a mapa
   Map<String, dynamic> toJson() => {
-        'mes': mes,
-        'puntos': puntos,
-        'tests_count': testsCount,
-      };
+    'mes': mes,
+    'puntos': puntos,
+    'tests_count': testsCount,
+  };
 
   // Sobrescribe toString para incluir la información real
   @override
