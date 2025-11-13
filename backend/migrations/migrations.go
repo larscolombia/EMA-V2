@@ -299,9 +299,9 @@ func GetUserByEmail(email string) *User {
 	if db == nil {
 		return nil
 	}
-	row := db.QueryRow("SELECT id, first_name, last_name, email, password, role, IFNULL(profile_image,''), IFNULL(city,''), IFNULL(profession,''), created_at, updated_at FROM users WHERE email = ? LIMIT 1", email)
+	row := db.QueryRow("SELECT id, first_name, last_name, email, password, role, IFNULL(profile_image,''), IFNULL(city,''), IFNULL(profession,''), IFNULL(gender,''), age, country_id, created_at, updated_at FROM users WHERE email = ? LIMIT 1", email)
 	var u User
-	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.ProfileImage, &u.City, &u.Profession, &u.CreatedAt, &u.UpdatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.ProfileImage, &u.City, &u.Profession, &u.Gender, &u.Age, &u.CountryID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil
 	}
 	return &u
@@ -312,9 +312,9 @@ func GetUserByID(id int) *User {
 	if db == nil {
 		return nil
 	}
-	row := db.QueryRow("SELECT id, first_name, last_name, email, password, role, IFNULL(profile_image,''), IFNULL(city,''), IFNULL(profession,''), created_at, updated_at FROM users WHERE id = ? LIMIT 1", id)
+	row := db.QueryRow("SELECT id, first_name, last_name, email, password, role, IFNULL(profile_image,''), IFNULL(city,''), IFNULL(profession,''), IFNULL(gender,''), age, country_id, created_at, updated_at FROM users WHERE id = ? LIMIT 1", id)
 	var u User
-	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.ProfileImage, &u.City, &u.Profession, &u.CreatedAt, &u.UpdatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Password, &u.Role, &u.ProfileImage, &u.City, &u.Profession, &u.Gender, &u.Age, &u.CountryID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil
 	}
 	return &u
