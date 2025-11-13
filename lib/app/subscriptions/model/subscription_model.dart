@@ -11,7 +11,8 @@ class Subscription {
   final int? frequency;
   final DateTime? endDate;
   final int statistics;
-  final bool active; // indicates if this plan is the currently active one for the user
+  final bool
+  active; // indicates if this plan is the currently active one for the user
 
   Subscription({
     required this.id,
@@ -25,12 +26,16 @@ class Subscription {
     required this.files,
     this.frequency,
     this.endDate,
-  this.statistics = 0, // valor por defecto
-  this.active = false,
+    this.statistics = 0, // valor por defecto
+    this.active = false,
   });
 
   factory Subscription.fromJson(Map<String, dynamic> json) {
     final plan = json['subscription_plan'];
+
+    // DEBUG: Print incoming JSON
+    print('🔍 [SUBSCRIPTION DEBUG] Incoming JSON: $json');
+    print('🔍 [SUBSCRIPTION DEBUG] Plan data: $plan');
 
     int _asInt(dynamic v, {int def = 0}) {
       if (v == null) return def;
@@ -94,7 +99,7 @@ class Subscription {
       }
     }
 
-    return Subscription(
+    final sub = Subscription(
       id: _asInt(json['id']), // Defaults to 0 if missing/null
       name: name,
       currency: currency,
@@ -116,8 +121,18 @@ class Subscription {
         json['statistics'],
         def: plan != null ? _asInt(plan['statistics']) : 0,
       ),
-      active: json['active'] == true || json['active'] == 1 || json['active'] == 'true',
+      active:
+          json['active'] == true ||
+          json['active'] == 1 ||
+          json['active'] == 'true',
     );
+
+    // DEBUG: Print final parsed values
+    print(
+      '🔍 [SUBSCRIPTION DEBUG] Parsed subscription - id: ${sub.id}, name: ${sub.name}, statistics: ${sub.statistics}, price: ${sub.price}',
+    );
+
+    return sub;
   }
 
   Map<String, dynamic> toJson() {
@@ -134,7 +149,7 @@ class Subscription {
       'frequency': frequency,
       'end_date': endDate?.toIso8601String(),
       'statistics': statistics,
-  'active': active,
+      'active': active,
     };
   }
 

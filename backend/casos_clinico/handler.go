@@ -26,7 +26,7 @@ type Assistant interface {
 	StreamAssistantMessage(ctx context.Context, threadID, prompt string) (<-chan string, error)
 	StreamAssistantMessageCompatible(ctx context.Context, threadID, prompt string) (<-chan string, error) // Hybrid wrapper
 	StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error)
-	StreamAssistantJSONCompatible(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) // Hybrid wrapper
+	StreamAssistantJSONCompatible(ctx context.Context, threadID, userPrompt, jsonInstructions, vectorStoreID string) (<-chan string, error) // Hybrid wrapper
 	// Métodos adicionales para búsqueda de evidencia (RAG + PubMed)
 	SearchInVectorStore(ctx context.Context, vectorStoreID, query string) (string, error)
 	SearchInVectorStoreWithMetadata(ctx context.Context, vectorStoreID, query string) (*openai.VectorSearchResult, error)
@@ -179,7 +179,7 @@ func (h *Handler) GenerateAnalytical(c *gin.Context) {
 		"Idioma: español. Sin markdown ni texto adicional.",
 	}, " ")
 
-	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr)
+	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
 		return
@@ -577,7 +577,7 @@ INSTRUCCIONES CRÍTICAS:
 	}
 
 	// Para mensajes normales: JSON
-	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr)
+	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
 		return
@@ -856,7 +856,7 @@ func (h *Handler) GenerateInteractive(c *gin.Context) {
 		"'data': { 'questions': { 'texto': string, 'tipo': 'open_ended'|'single_choice', 'opciones': array<string> } }.",
 		"Idioma: español. Sin markdown ni texto adicional.",
 	}, " ")
-	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr)
+	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
 		return
@@ -965,7 +965,7 @@ func (h *Handler) ChatInteractive(c *gin.Context) {
 		"Mantén un flujo de unos 10 turnos desde anamnesis hasta manejo.",
 		"Idioma: español. Sin texto fuera del JSON.",
 	}, " ")
-	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr)
+	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, userPrompt, instr, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant error"})
 		return
@@ -1108,7 +1108,7 @@ func (h *Handler) repairAnalyticalJSON(ctx context.Context, threadID, lastConten
 	}
 	prompt.WriteString(prev)
 	instr := "Responde estrictamente en JSON válido con la clave 'case'."
-	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr)
+	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr, "")
 	if err != nil {
 		return "", false
 	}
@@ -1136,7 +1136,7 @@ func (h *Handler) repairInteractiveGenerateJSON(ctx context.Context, threadID, l
 	}
 	prompt.WriteString(prev)
 	instr := "Responde estrictamente en JSON válido con las claves 'case' y 'data'."
-	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr)
+	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr, "")
 	if err != nil {
 		return "", false
 	}
@@ -1162,7 +1162,7 @@ func (h *Handler) repairAnalyticalChatJSON(ctx context.Context, threadID, lastCo
 	}
 	prompt.WriteString(prev)
 	instr := "Responde estrictamente en JSON válido con la clave 'respuesta'."
-	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr)
+	ch, err := h.aiAnalytical.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr, "")
 	if err != nil {
 		return "", false
 	}
@@ -1189,7 +1189,7 @@ func (h *Handler) repairInteractiveChatJSON(ctx context.Context, threadID, lastC
 	}
 	prompt.WriteString(prev)
 	instr := "Responde estrictamente en JSON válido con la clave 'data'."
-	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr)
+	ch, err := h.aiInteractive.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), instr, "")
 	if err != nil {
 		return "", false
 	}

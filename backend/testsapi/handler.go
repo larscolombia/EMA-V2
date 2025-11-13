@@ -23,6 +23,17 @@ type Assistant interface {
 	CreateThread(ctx context.Context) (string, error)
 	StreamAssistantMessage(ctx context.Context, threadID, prompt string) (<-chan string, error)
 	StreamAssistantJSON(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error)
+
+	// Responses API compatible methods
+	CreateThreadOrConversation(ctx context.Context) (string, error)
+	StreamResponseWithInstructionsCompatible(
+		ctx context.Context,
+		conversationID, userInput, instructions, vectorStoreID string,
+	) (<-chan string, error)
+	StreamAssistantJSONCompatible(
+		ctx context.Context,
+		threadID, userPrompt, jsonInstructions, vectorStoreID string,
+	) (<-chan string, error)
 }
 
 type Handler struct {
@@ -221,7 +232,7 @@ func (h *Handler) generate(c *gin.Context) {
 	sb.WriteString("Para single_choice incluye 4-5 opciones con una única respuesta correcta.\n")
 	sb.WriteString("Formato de respuesta: JSON estricto, sin texto adicional.")
 
-	threadID, err := h.ai.CreateThread(ctx)
+	threadID, err := h.ai.CreateThreadOrConversation(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant thread error"})
 		return
@@ -251,7 +262,7 @@ func (h *Handler) generate(c *gin.Context) {
 		"No incluyas texto fuera del JSON.",
 	)
 	jsonInstr := strings.Join(instr, " ")
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, sb.String(), jsonInstr)
+	ch, err := h.ai.StreamAssistantJSONCompatible(ctx, threadID, sb.String(), jsonInstr, vectorID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant run error"})
 		return
@@ -280,7 +291,7 @@ func (h *Handler) generate(c *gin.Context) {
 	if len(rawQuestions) == 0 {
 		log.Printf("[testsapi.generate] missing/invalid questions; attempting JSON repair (userId=%s)", c.Param("userId"))
 		// Try one repair cycle in the same thread to rewrite as strict JSON
-		repaired, repOK := h.repairGenerateJSON(ctx, threadID, content, req.NumQuestions, jsonInstr)
+		repaired, repOK := h.repairGenerateJSON(ctx, threadID, content, req.NumQuestions, jsonInstr, vectorID)
 		if repOK {
 			parsed = map[string]any{}
 			_ = json.Unmarshal([]byte(repaired), &parsed)
@@ -416,7 +427,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 	threadID := req.Thread
 	if strings.TrimSpace(threadID) == "" {
 		var err error
-		threadID, err = h.ai.CreateThread(ctx)
+		threadID, err = h.ai.CreateThreadOrConversation(ctx)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant thread error"})
 			return
@@ -455,7 +466,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 		"Responde en español.",
 		"No incluyas texto fuera del JSON.",
 	}, " ")
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, sb.String(), evalInstr)
+	ch, err := h.ai.StreamAssistantJSONCompatible(ctx, threadID, sb.String(), evalInstr, vectorID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "assistant run error"})
 		return
@@ -477,7 +488,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 		return
 	}
 	// Try a repair cycle on evaluation
-	if repaired, ok := h.repairEvaluationJSON(ctx, threadID, content, evalInstr); ok {
+	if repaired, ok := h.repairEvaluationJSON(ctx, threadID, content, evalInstr, vectorID); ok {
 		var parsed2 map[string]any
 		if err := json.Unmarshal([]byte(repaired), &parsed2); err == nil {
 			log.Printf("[testsapi.evaluate] repair succeeded; returning fixed JSON (uid=%s, test_id=%d)", req.UID, req.TestID)
@@ -855,7 +866,7 @@ func jaccardSimple(a, b map[string]struct{}) float64 {
 
 // repairGenerateJSON asks the assistant in the same thread to rewrite its last message
 // as strict JSON with exactly n questions. Returns the repaired JSON string and whether it succeeded.
-func (h *Handler) repairGenerateJSON(ctx context.Context, threadID, lastContent string, n int, baseInstr string) (string, bool) {
+func (h *Handler) repairGenerateJSON(ctx context.Context, threadID, lastContent string, n int, baseInstr, vectorID string) (string, bool) {
 	prompt := strings.Builder{}
 	prompt.WriteString("Tu último mensaje no cumple el formato requerido. Reescríbelo como un único objeto JSON válido. ")
 	prompt.WriteString("Debe contener la clave 'questions' con exactamente ")
@@ -867,7 +878,7 @@ func (h *Handler) repairGenerateJSON(ctx context.Context, threadID, lastContent 
 		prev = prev[:4000]
 	}
 	prompt.WriteString(prev)
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, prompt.String(), baseInstr)
+	ch, err := h.ai.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), baseInstr, vectorID)
 	if err != nil {
 		return "", false
 	}
@@ -884,7 +895,7 @@ func (h *Handler) repairGenerateJSON(ctx context.Context, threadID, lastContent 
 }
 
 // repairEvaluationJSON asks the assistant to rewrite evaluation as strict JSON using the same schema.
-func (h *Handler) repairEvaluationJSON(ctx context.Context, threadID, lastContent, baseInstr string) (string, bool) {
+func (h *Handler) repairEvaluationJSON(ctx context.Context, threadID, lastContent, baseInstr, vectorID string) (string, bool) {
 	prompt := strings.Builder{}
 	prompt.WriteString("Tu último mensaje no es JSON válido. Reescribe la evaluación como un único objeto JSON válido con las claves ")
 	prompt.WriteString("evaluation (array de {question_id:int, is_correct:0|1, fit:string}), correct_answers:int y fit_global:string. ")
@@ -894,7 +905,7 @@ func (h *Handler) repairEvaluationJSON(ctx context.Context, threadID, lastConten
 		prev = prev[:4000]
 	}
 	prompt.WriteString(prev)
-	ch, err := h.ai.StreamAssistantJSON(ctx, threadID, prompt.String(), baseInstr)
+	ch, err := h.ai.StreamAssistantJSONCompatible(ctx, threadID, prompt.String(), baseInstr, vectorID)
 	if err != nil {
 		return "", false
 	}

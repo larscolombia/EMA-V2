@@ -70,8 +70,11 @@ func getProfile(c *gin.Context) {
 		// Structured log for quota visibility
 		if sp, ok := activeSub["subscription_plan"].(map[string]interface{}); ok {
 			planName, _ := sp["name"].(string)
+			price, _ := sp["price"].(float64)
 			log.Printf("[PROFILE][QUOTA] user=%d plan=%s consultations=%v questionnaires=%v clinical_cases=%v files=%v", user.ID, planName,
 				activeSub["consultations"], activeSub["questionnaires"], activeSub["clinical_cases"], activeSub["files"])
+			// DEBUG: Log statistics field
+			log.Printf("[🔍 DEBUG STATS] user_id=%d statistics=%v plan=%s price=%.2f", user.ID, activeSub["statistics"], planName, price)
 		}
 	}
 	log.Printf("[PROFILE][GET] success id=%d email=%s hasActiveSub=%t", user.ID, user.Email, activeSub != nil)

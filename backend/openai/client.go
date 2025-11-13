@@ -4316,12 +4316,12 @@ func (c *Client) CreateThreadOrConversation(ctx context.Context) (string, error)
 }
 
 // StreamAssistantJSONCompatible wrapper que enruta entre Responses y Assistants API
-func (c *Client) StreamAssistantJSONCompatible(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
+func (c *Client) StreamAssistantJSONCompatible(ctx context.Context, threadID, userPrompt, jsonInstructions, vectorStoreID string) (<-chan string, error) {
 	if c.useResponsesAPI {
-		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true (JSON mode)", threadID)
+		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true (JSON mode, vectorStoreID=%s)", threadID, vectorStoreID)
 		// Para Responses API: userPrompt es el input, jsonInstructions van en instructions
-		// No usamos vector store para casos clínicos (no requiere RAG)
-		return c.StreamResponseWithInstructions(ctx, threadID, userPrompt, jsonInstructions, "")
+		// Usamos vectorStoreID para RAG si está disponible
+		return c.StreamResponseWithInstructions(ctx, threadID, userPrompt, jsonInstructions, vectorStoreID)
 	}
 	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (JSON mode)", threadID)
 	return c.StreamAssistantJSON(ctx, threadID, userPrompt, jsonInstructions)

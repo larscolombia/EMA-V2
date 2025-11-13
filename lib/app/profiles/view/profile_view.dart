@@ -17,6 +17,11 @@ class ProfileView extends GetView<ProfileController> {
 
     // Refrescar datos premium solo si tiene acceso a estadísticas
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final sub = controller.currentProfile.value.activeSubscription;
+      print(
+        '🔍 [DEBUG STATS] statistics=${sub?.statistics} name=${sub?.name} price=${sub?.price}',
+      );
+
       if (controller.currentProfile.value.activeSubscription?.statistics == 1 &&
           Get.find<UserTestProgressController>().testScores.isEmpty) {
         final progressController = Get.find<UserTestProgressController>();
@@ -78,7 +83,7 @@ class ProfileView extends GetView<ProfileController> {
 
           final hasStatistics =
               controller.currentProfile.value.activeSubscription?.statistics ==
-                  1;
+              1;
 
           return SingleChildScrollView(
             child: Column(
