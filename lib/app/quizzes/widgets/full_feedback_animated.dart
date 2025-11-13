@@ -260,35 +260,45 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       final pattern = entry.key;
       final normalized = entry.value;
 
-      // Patrón 1: Título SIN ## al inicio (casos legacy de quizzes)
-      // NO tocar si ya tiene formato "## Título"
-      text = text.replaceAllMapped(
-        RegExp(
-          '(?:^|\\n)\\s*($pattern)\\s*:',
-          caseSensitive: false,
-          multiLine: true,
-        ),
-        (m) {
-          // Solo reemplazar si NO tiene ## antes
-          final fullMatch = m.group(0)!;
-          if (fullMatch.contains('##')) {
-            return fullMatch; // Ya está bien formateado, no tocar
-          }
-          return '\n\n## $normalized\n\n';
-        },
-      );
+      // CRÍTICO: Verificar si ya existe un header Markdown con este título
+      // Si existe "## Puntuación" en el texto, NO convertir "Puntuación:" subsecuentes
+      final hasMarkdownHeader = RegExp(
+        r'^\s*#{1,6}\s+' + pattern + r'\s*$',
+        caseSensitive: false,
+        multiLine: true,
+      ).hasMatch(text);
 
-      // Patrón 2: Título pegado después de punto (sin ##)
-      text = text.replaceAllMapped(
-        RegExp('([.!?])\\s*($pattern)\\s*:', caseSensitive: false),
-        (m) {
-          final fullMatch = m.group(0)!;
-          if (fullMatch.contains('##')) {
-            return fullMatch; // Ya está bien formateado
-          }
-          return '${m.group(1)}\n\n## $normalized\n\n';
-        },
-      );
+      // Patrón 1: Título SIN ## al inicio (casos legacy de quizzes)
+      // NO tocar si ya tiene formato "## Título" O si ya existe un header Markdown
+      if (!hasMarkdownHeader) {
+        text = text.replaceAllMapped(
+          RegExp(
+            '(?:^|\\n)\\s*($pattern)\\s*:',
+            caseSensitive: false,
+            multiLine: true,
+          ),
+          (m) {
+            // Solo reemplazar si NO tiene ## antes
+            final fullMatch = m.group(0)!;
+            if (fullMatch.contains('##')) {
+              return fullMatch; // Ya está bien formateado, no tocar
+            }
+            return '\n\n## $normalized\n\n';
+          },
+        );
+
+        // Patrón 2: Título pegado después de punto (sin ##)
+        text = text.replaceAllMapped(
+          RegExp('([.!?])\\s*($pattern)\\s*:', caseSensitive: false),
+          (m) {
+            final fullMatch = m.group(0)!;
+            if (fullMatch.contains('##')) {
+              return fullMatch; // Ya está bien formateado
+            }
+            return '${m.group(1)}\n\n## $normalized\n\n';
+          },
+        );
+      }
     }
 
     // PASO 3: Asegurar espacio después de # en headers mal formados
@@ -515,8 +525,10 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
           scoreLines
               .join('\n')
               .replaceFirst(
+                // CRÍTICO: Solo remover prefijo si NO es un header Markdown (##)
+                // Para casos analíticos con "## Puntuación", preservar el header
                 RegExp(
-                  r'^(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n|resumen final)\s*:\s*',
+                  r'^(?!##\s*)(puntaje y calificaci[oó]n|puntuaci[oó]n|calificaci[oó]n|resumen final)\s*:\s*',
                   caseSensitive: false,
                 ),
                 '',
