@@ -35,9 +35,12 @@ func Init(database *sql.DB) {
 
 // Migrate creates required tables if they do not exist
 func Migrate() error {
+	log.Printf("[MIGRATION] 🔄 Starting database migrations...")
 	if db == nil {
 		return fmt.Errorf("db is not initialized")
 	}
+
+	log.Printf("[MIGRATION] Creating users table if not exists...")
 	createUsers := `
 	CREATE TABLE IF NOT EXISTS users (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -50,8 +53,11 @@ func Migrate() error {
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createUsers); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating users table: %v", err)
 		return err
 	}
+	log.Printf("[MIGRATION] ✅ users table ready")
+
 	// Ensure optional columns exist (profile_image, city, profession, gender, age, country_id)
 	if err := ensureColumnExists("users", "profile_image", "profile_image VARCHAR(255) DEFAULT ''"); err != nil {
 		return err
@@ -73,6 +79,7 @@ func Migrate() error {
 	}
 
 	// Subscriptions related tables
+	log.Printf("[MIGRATION] Creating subscription_plans table if not exists...")
 	createPlans := `
 	CREATE TABLE IF NOT EXISTS subscription_plans (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -88,8 +95,12 @@ func Migrate() error {
 		stripe_price_id VARCHAR(100) NULL
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createPlans); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating subscription_plans table: %v", err)
 		return err
 	}
+	log.Printf("[MIGRATION] ✅ subscription_plans table ready")
+
+	log.Printf("[MIGRATION] Creating subscriptions table if not exists...")
 	createSubs := `
 	CREATE TABLE IF NOT EXISTS subscriptions (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -106,8 +117,10 @@ func Migrate() error {
 		FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE CASCADE
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createSubs); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating subscriptions table: %v", err)
 		return err
 	}
+	log.Printf("[MIGRATION] ✅ subscriptions table ready")
 
 	// Ensure new Stripe-related columns exist (idempotent) for backward compatibility
 	if err := ensureColumnExists("subscription_plans", "stripe_product_id", "stripe_product_id VARCHAR(100) NULL"); err != nil {
@@ -121,6 +134,7 @@ func Migrate() error {
 	}
 
 	// Medical categories table for quizzes/tests
+	log.Printf("[MIGRATION] Creating medical_categories table if not exists...")
 	createMedicalCategories := `
 	CREATE TABLE IF NOT EXISTS medical_categories (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -130,10 +144,13 @@ func Migrate() error {
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createMedicalCategories); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating medical_categories table: %v", err)
 		return err
 	}
+	log.Printf("[MIGRATION] ✅ medical_categories table ready")
 
 	// Test history table for tracking completed tests/quizzes
+	log.Printf("[MIGRATION] Creating test_history table if not exists...")
 	createTestHistory := `
 	CREATE TABLE IF NOT EXISTS test_history (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -149,9 +166,12 @@ func Migrate() error {
 		INDEX idx_user_category (user_id, category_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
 	if _, err := db.Exec(createTestHistory); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating test_history table: %v", err)
 		return err
 	}
+	log.Printf("[MIGRATION] ✅ test_history table ready")
 
+	log.Printf("[MIGRATION] ✅ All migrations completed successfully")
 	return nil
 }
 
