@@ -495,17 +495,27 @@ func uploadToCloudinary(file *multipart.FileHeader, userID int) (string, error) 
 
 // recordTest handles POST /record-test for recording test completions
 func recordTest(c *gin.Context) {
+	log.Printf("[RECORD_TEST] 🚀 INICIO - Received POST request to /record-test")
+	log.Printf("[RECORD_TEST] Headers: %v", c.Request.Header)
+
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
 	if token == "" {
+		log.Printf("[RECORD_TEST] ❌ No token provided")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token requerido"})
 		return
 	}
+
+	log.Printf("[RECORD_TEST] Token received: %s...", token[:20])
+
 	email, ok := login.GetEmailFromToken(token)
 	if !ok {
+		log.Printf("[RECORD_TEST] ❌ Invalid token")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
 		return
 	}
+
+	log.Printf("[RECORD_TEST] Token valid for email: %s", email)
 	user := migrations.GetUserByEmail(email)
 	if user == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
