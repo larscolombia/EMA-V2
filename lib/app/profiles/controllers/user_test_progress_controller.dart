@@ -1,5 +1,6 @@
 import 'package:get/get.dart';
 import 'package:ema_educacion_medica_avanzada/app/profiles/profiles.dart';
+import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import '../repositories/statistics_repository.dart';
@@ -213,6 +214,10 @@ class UserTestProgressController extends GetxController {
     int? categoryId,
   }) async {
     try {
+      print(
+        '[STATS] Registrando test: $testName score=$scoreObtained/$maxScore categoryId=$categoryId',
+      );
+
       await progressService.recordTestCompletion(
         authToken: authToken,
         testName: testName,
@@ -220,6 +225,21 @@ class UserTestProgressController extends GetxController {
         maxScore: maxScore,
         categoryId: categoryId,
       );
+
+      print('[STATS] Test registrado exitosamente, recargando estadísticas...');
+
+      // Forzar recarga inmediata de estadísticas
+      final user = Get.find<UserService>().currentUser.value;
+      if (user.id > 0) {
+        await Future.wait([
+          loadTestScores(userId: user.id, authToken: authToken),
+          loadMonthlyScores(userId: user.id, authToken: authToken),
+          loadMostStudiedCategory(userId: user.id, authToken: authToken),
+        ]);
+        print(
+          '[STATS] Estadísticas recargadas: totalScore=${totalScore.value}/${totalMaxScore.value}',
+        );
+      }
     } catch (e) {
       // Registrar error pero no bloquear el flujo
       print('[ERROR] No se pudo registrar test: $e');

@@ -538,14 +538,17 @@ func recordTest(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[RECORD_TEST] Attempting to record: userID=%d testName=%s score=%d/%d categoryID=%v",
+		user.ID, payload.TestName, payload.ScoreObtained, payload.MaxScore, payload.CategoryID)
+
 	// Registrar en test_history
 	if err := migrations.RecordTestCompletion(user.ID, payload.CategoryID, payload.TestName, payload.ScoreObtained, payload.MaxScore); err != nil {
-		log.Printf("[RECORD_TEST] Error recording test for userID=%d: %v", user.ID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo registrar el test"})
+		log.Printf("[RECORD_TEST] ❌ Error recording test for userID=%d: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo registrar el test", "details": err.Error()})
 		return
 	}
 
-	log.Printf("[RECORD_TEST] Success: userID=%d testName=%s score=%d/%d categoryID=%v",
+	log.Printf("[RECORD_TEST] ✅ Success: userID=%d testName=%s score=%d/%d categoryID=%v",
 		user.ID, payload.TestName, payload.ScoreObtained, payload.MaxScore, payload.CategoryID)
 
 	c.JSON(http.StatusOK, gin.H{

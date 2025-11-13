@@ -55,36 +55,30 @@ class StatisticsSection extends StatelessWidget {
               final totalChatsQuota = sub?.consultations ?? 0;
               final totalTestsQuota = sub?.questionnaires ?? 0;
               final totalClinicalQuota = sub?.clinicalCases ?? 0;
-              return Row(
+              return Column(
                 children: [
-                  Expanded(
-                    child: _buildStatisticCard(
-                      context,
-                      'Chats',
-                      progressController.totalChats.value,
-                      AppIcons.chats(height: 32, width: 32),
-                      total: totalChatsQuota,
-                    ),
+                  _buildStatisticCard(
+                    context,
+                    'Chats',
+                    progressController.totalChats.value,
+                    AppIcons.chats(height: 32, width: 32),
+                    total: totalChatsQuota,
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _buildStatisticCard(
-                      context,
-                      'Cuestionarios',
-                      progressController.totalTests.value,
-                      AppIcons.quizzesGeneral(height: 32, width: 32),
-                      total: totalTestsQuota,
-                    ),
+                  const SizedBox(height: 12),
+                  _buildStatisticCard(
+                    context,
+                    'Cuestionarios',
+                    progressController.totalTests.value,
+                    AppIcons.quizzesGeneral(height: 32, width: 32),
+                    total: totalTestsQuota,
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _buildStatisticCard(
-                      context,
-                      'Casos Clínicos',
-                      progressController.totalClinicalCases.value,
-                      AppIcons.clinicalCaseAnalytical(height: 32, width: 32),
-                      total: totalClinicalQuota,
-                    ),
+                  const SizedBox(height: 12),
+                  _buildStatisticCard(
+                    context,
+                    'Casos Clínicos',
+                    progressController.totalClinicalCases.value,
+                    AppIcons.clinicalCaseAnalytical(height: 32, width: 32),
+                    total: totalClinicalQuota,
                   ),
                 ],
               );
@@ -625,47 +619,46 @@ class StatisticsSection extends StatelessWidget {
             ? (count / safeTotal).clamp(0.0, 1.0).toDouble()
             : 0.0;
     return Container(
-      constraints: const BoxConstraints(minHeight: 100),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppStyles.grey220.withAlpha((0.5 * 255).toInt()),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              icon,
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
+          icon,
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
                   label,
-                  style: _labelStyle(context).copyWith(fontSize: 13),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  style: _labelStyle(
+                    context,
+                  ).copyWith(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            showTotal ? '$count / $total' : '$count',
-            style: _countStyle(context),
-          ),
-          if (showTotal) ...[
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: progress.isNaN ? 0.0 : progress,
-                minHeight: 5,
-                backgroundColor: AppStyles.grey200,
-                color: AppStyles.primaryColor,
-              ),
+                const SizedBox(height: 8),
+                Text(
+                  showTotal ? '$count / $total' : '$count',
+                  style: _countStyle(context).copyWith(fontSize: 24),
+                ),
+                if (showTotal) ...[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress.isNaN ? 0.0 : progress,
+                      minHeight: 6,
+                      backgroundColor: AppStyles.grey200,
+                      color: AppStyles.primaryColor,
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
