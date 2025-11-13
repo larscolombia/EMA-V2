@@ -12,10 +12,10 @@ func RecordTestCompletion(userID int, categoryID *int, testName string, scoreObt
 	if db == nil {
 		return fmt.Errorf("db is not initialized")
 	}
-	
-	log.Printf("[STATS] Recording test: userID=%d categoryID=%v testName=%s score=%d/%d", 
+
+	log.Printf("[STATS] Recording test: userID=%d categoryID=%v testName=%s score=%d/%d",
 		userID, categoryID, testName, scoreObtained, maxScore)
-	
+
 	_, err := db.Exec(
 		"INSERT INTO test_history (user_id, category_id, test_name, score_obtained, max_score) VALUES (?, ?, ?, ?, ?)",
 		userID, categoryID, testName, scoreObtained, maxScore,
