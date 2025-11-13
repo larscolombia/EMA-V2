@@ -4146,6 +4146,136 @@ func (c *Client) StreamResponseWithInstructions(ctx context.Context, conversatio
 	return out, nil
 }
 
+// StreamResponseWithImage procesa análisis de imágenes usando Chat Completions API
+// (Responses API aún no soporta imágenes nativamente, así que usamos Chat Completions)
+func (c *Client) StreamResponseWithImage(ctx context.Context, conversationID, prompt, imagePath string) (<-chan string, error) {
+	if c.key == "" {
+		return nil, errors.New("openai api key not configured")
+	}
+
+	log.Printf("[responses][StreamWithImage][start] conversation=%s file=%s", conversationID, filepath.Base(imagePath))
+
+	out := make(chan string, 100)
+	go func() {
+		defer close(out)
+
+		// 1. Leer imagen y convertir a base64
+		imageData, err := os.ReadFile(imagePath)
+		if err != nil {
+			log.Printf("[responses][StreamWithImage][read_error] conversation=%s file=%s err=%v", 
+				conversationID, filepath.Base(imagePath), err)
+			return
+		}
+
+		// Detectar tipo MIME
+		mimeType := "image/jpeg"
+		ext := strings.ToLower(filepath.Ext(imagePath))
+		switch ext {
+		case ".png":
+			mimeType = "image/png"
+		case ".webp":
+			mimeType = "image/webp"
+		case ".gif":
+			mimeType = "image/gif"
+		}
+
+		base64Image := base64.StdEncoding.EncodeToString(imageData)
+		imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Image)
+
+		// Instrucciones para análisis de imágenes médicas
+		systemPrompt := `Eres un asistente médico experto analizando una imagen clínica.
+
+REGLAS CRÍTICAS:
+1. Analiza ÚNICAMENTE lo que ves en la imagen proporcionada
+2. NO inventes información que no sea visible
+3. Sé específico sobre hallazgos visuales
+4. Si la imagen no es clara o no es médica, indícalo
+
+FORMATO DE RESPUESTA:
+- Descripción de lo observado en la imagen
+- Hallazgos relevantes (si aplica)
+- Consideraciones clínicas basadas en la imagen
+- Limitaciones de tu análisis (calidad de imagen, ángulo, etc.)
+
+Si la pregunta del usuario es específica (ej: "¿hay fractura?"), responde esa pregunta directamente basándote en la imagen.
+
+Mantén un tono profesional pero accesible.`
+
+		// 2. Construir request de Chat Completions con vision
+		payload := map[string]any{
+			"model": "gpt-4o", // Modelo con vision
+			"messages": []map[string]any{
+				{
+					"role":    "system",
+					"content": systemPrompt,
+				},
+				{
+					"role": "user",
+					"content": []map[string]any{
+						{
+							"type": "text",
+							"text": prompt,
+						},
+						{
+							"type": "image_url",
+							"image_url": map[string]any{
+								"url": imageURL,
+							},
+						},
+					},
+				},
+			},
+			"max_tokens": 2000,
+		}
+
+		// 3. Llamar a Chat Completions API
+		respCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		resp, err := c.doJSON(respCtx, http.MethodPost, "/chat/completions", payload)
+		if err != nil {
+			log.Printf("[responses][StreamWithImage][error] conversation=%s err=%v", conversationID, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			log.Printf("[responses][StreamWithImage][status_error] conversation=%s code=%d body=%s",
+				conversationID, resp.StatusCode, sanitizeBody(string(b)))
+			return
+		}
+
+		// 4. Parsear respuesta
+		var response struct {
+			ID      string `json:"id"`
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			log.Printf("[responses][StreamWithImage][parse_error] conversation=%s err=%v", conversationID, err)
+			return
+		}
+
+		// 5. Extraer texto de la respuesta
+		if len(response.Choices) > 0 && response.Choices[0].Message.Content != "" {
+			text := response.Choices[0].Message.Content
+			out <- text
+			log.Printf("[responses][StreamWithImage][success] conversation=%s response_id=%s chars=%d",
+				conversationID, response.ID, len(text))
+			return
+		}
+
+		log.Printf("[responses][StreamWithImage][warn] conversation=%s no_text_found", conversationID)
+	}()
+
+	return out, nil
+}
+
 // resolveModelForResponses mapea modelos antiguos a los nuevos de Responses API
 func resolveModelForResponses(model string) string {
 	if model == "" {
@@ -4207,4 +4337,14 @@ func (c *Client) StreamAssistantMessageCompatible(ctx context.Context, threadID,
 	}
 	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (message mode)", threadID)
 	return c.StreamAssistantMessage(ctx, threadID, prompt)
+}
+
+// StreamMessageWithImageCompatible wrapper que enruta entre Responses y Assistants API para análisis de imágenes
+func (c *Client) StreamMessageWithImageCompatible(ctx context.Context, threadID, prompt, imagePath string) (<-chan string, error) {
+	if c.useResponsesAPI {
+		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true (image mode)", threadID)
+		return c.StreamResponseWithImage(ctx, threadID, prompt, imagePath)
+	}
+	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (image mode)", threadID)
+	return c.StreamAssistantMessageWithImage(ctx, threadID, prompt, imagePath)
 }

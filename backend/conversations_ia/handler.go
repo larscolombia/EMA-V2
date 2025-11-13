@@ -70,6 +70,7 @@ type AIClient interface {
 	// Métodos compatibles para Responses API (con fallback automático a Assistants API)
 	CreateThreadOrConversation(ctx context.Context) (string, error)
 	StreamResponseWithInstructionsCompatible(ctx context.Context, threadID, userMessage, instructions, vectorStoreID string) (<-chan string, error)
+	StreamMessageWithImageCompatible(ctx context.Context, threadID, prompt, imagePath string) (<-chan string, error)
 }
 
 // SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
@@ -336,7 +337,8 @@ Instrucciones:
 		if err != nil {
 			return nil, err
 		}
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
+		// CRÍTICO: Usar método compatible que funciona con Responses API (conv_xxx) y Assistants API (thread_xxx)
+		stream, err := h.AI.StreamResponseWithInstructionsCompatible(ctx, threadID, prompt, docOnlyPrompt, vsID)
 		if err != nil {
 			return nil, err
 		}
@@ -374,7 +376,8 @@ Instrucciones:
 		// Usar prompt mejorado con fallbacks inteligentes
 		docOnlyPrompt := h.buildDocOnlyPromptEnhanced(prompt, docNames)
 
-		stream, err := h.AI.StreamAssistantWithSpecificVectorStore(ctx, threadID, docOnlyPrompt, vsID)
+		// CRÍTICO: Usar método compatible que funciona con Responses API (conv_xxx) y Assistants API (thread_xxx)
+		stream, err := h.AI.StreamResponseWithInstructionsCompatible(ctx, threadID, prompt, docOnlyPrompt, vsID)
 		if err != nil {
 			return nil, err
 		}
@@ -811,7 +814,10 @@ func smallTalkReply(s string) string {
 }
 
 func NewHandler(ai AIClient) *Handler {
-	return &Handler{AI: ai, threadTopics: make(map[string]*topicState)}
+	return &Handler{
+		AI:           ai,
+		threadTopics: make(map[string]*topicState),
+	}
 }
 func (h *Handler) SetQuotaValidator(fn func(ctx context.Context, c *gin.Context, flow string) error) {
 	h.quotaValidator = fn
@@ -992,18 +998,25 @@ func (h *Handler) Message(c *gin.Context) {
 // handleMultipart replica lógica esencial de PDF/audio del chat original, sin fallback Chat Completions.
 func (h *Handler) handleMultipart(c *gin.Context) {
 	prompt := c.PostForm("prompt")
-	threadID := c.PostForm("thread_id")
-	focusDocID := c.PostForm("focus_doc_id") // Nuevo parámetro para limitar a un documento específico
-	if !strings.HasPrefix(threadID, "thread_") {
-		log.Printf("[conv][Message][multipart][error] invalid_thread=%s", threadID)
+	clientThreadID := c.PostForm("thread_id") // Puede ser conv_xxx o thread_xxx
+	focusDocID := c.PostForm("focus_doc_id")  // Nuevo parámetro para limitar a un documento específico
+	// CRÍTICO: Aceptar tanto thread_ (Assistants API) como conv_ (Responses API)
+	if !strings.HasPrefix(clientThreadID, "thread_") && !strings.HasPrefix(clientThreadID, "conv_") {
+		log.Printf("[conv][Message][multipart][error] invalid_thread=%s", clientThreadID)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "thread_id inválido"})
 		return
 	}
+
+	// Usar thread ID directamente (OpenAI Responses API acepta conv_xxx nativamente)
+	threadID := clientThreadID
+
 	upFile, err := c.FormFile("file")
 
-	// Si no hay archivo pero tampoco hay error, probablemente fue rechazado por Nginx por tamaño
-	if upFile == nil && err != nil {
-		log.Printf("[conv][Message][multipart][error] no_file_received err=%v", err)
+	// CRÍTICO: Distinguir entre "no hay archivo adjunto" (OK) vs "error al recibir archivo" (ERROR)
+	// - upFile == nil && err == "http: no such file" → Usuario NO adjuntó archivo (solo texto) → OK
+	// - upFile == nil && err != nil && err != "http: no such file" → Error real (tamaño, nginx, etc.) → ERROR
+	if upFile == nil && err != nil && err.Error() != "http: no such file" {
+		log.Printf("[conv][Message][multipart][error] file_upload_failed err=%v", err)
 		// Si parece ser un error de tamaño (common en uploads grandes)
 		if strings.Contains(strings.ToLower(err.Error()), "size") || strings.Contains(strings.ToLower(err.Error()), "large") {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
@@ -1014,7 +1027,7 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no se pudo recibir el archivo", "detail": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "error al recibir archivo", "detail": err.Error()})
 		return
 	}
 	start := time.Now()
@@ -1045,7 +1058,7 @@ func (h *Handler) handleMultipart(c *gin.Context) {
 			c.Header("X-Quota-Remaining", toString(v))
 		}
 		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-		c.Header("X-Thread-ID", threadID)
+		c.Header("X-Thread-ID", clientThreadID) // CRÍTICO: Retornar ID original para el frontend
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", source) // Indicar qué fuente se usó
 		if len(resp.AllowedSources) > 0 {
@@ -1297,7 +1310,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 			c.Header("X-PDF-Text-Coverage", fmt.Sprintf("%.1f", metadata.TextCoveragePercent))
 			c.Header("X-PDF-Pages", strconv.Itoa(metadata.PageCount))
 			c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-			c.Header("X-Thread-ID", threadID)
+			c.Header("X-Thread-ID", threadID) // Retornar thread ID al frontend
 			c.Header("X-Source-Used", "pdf_scanned_error")
 			log.Printf("[conv][PDF][scanned_response] thread=%s file=%s", threadID, fname)
 
@@ -1528,7 +1541,7 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 		c.Header("X-RAG-File", fname)
 		c.Header("X-RAG-Prompt", "doc-only-v1")
 		c.Header("X-Assistant-Start-Ms", time.Since(start).String())
-		c.Header("X-Thread-ID", threadID)
+		c.Header("X-Thread-ID", threadID) // Retornar thread ID al frontend
 		c.Header("X-Strict-Threads", "1")
 		c.Header("X-Source-Used", "doc_only")
 		c.Header("X-PDF-Size-MB", fmt.Sprintf("%.2f", fileSizeMB))
@@ -1552,7 +1565,8 @@ No puedo buscar ni citar contenido de documentos que solo contienen imágenes.`,
 	docNames := []string{fname}
 	p := h.buildDocOnlyPromptEnhanced(base, docNames)
 
-	stream, err := h.AI.StreamAssistantWithSpecificVectorStore(c.Request.Context(), threadID, p, vsID)
+	// CRÍTICO: Usar método compatible que funciona con Responses API (conv_xxx) y Assistants API (thread_xxx)
+	stream, err := h.AI.StreamResponseWithInstructionsCompatible(c.Request.Context(), threadID, base, p, vsID)
 	if err != nil {
 		log.Printf("[conv][PDF][error] stream err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})
@@ -1631,8 +1645,8 @@ func (h *Handler) handleImage(c *gin.Context, threadID, prompt string, upFile *m
 	log.Printf("[conv][IMAGE][start] thread=%s file=%s size_mb=%.2f prompt_len=%d",
 		threadID, fname, sizeMB, len(base))
 
-	// Llamar al método de vision streaming (sube imagen + crea mensaje + hace stream)
-	stream, err := h.AI.StreamAssistantMessageWithImage(c.Request.Context(), threadID, base, tmp)
+	// CRÍTICO: Usar método compatible que funciona con Responses API (conv_xxx) y Assistants API (thread_xxx)
+	stream, err := h.AI.StreamMessageWithImageCompatible(c.Request.Context(), threadID, base, tmp)
 	if err != nil {
 		log.Printf("[conv][IMAGE][error] stream err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg(err)})

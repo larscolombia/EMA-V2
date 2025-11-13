@@ -94,15 +94,25 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
     // Score block (como markdown para mostrar subsecciones con formato)
     if (parsed.scoreBlock.isNotEmpty) {
-      children.add(
-        Text(
-          'Puntaje y Calificacion:',
-          style: labelStyle,
-          textAlign: TextAlign.justify,
-        ),
-      );
-      children.add(const SizedBox(height: 8));
       final mdScore = _normalizeMarkdown(parsed.scoreBlock.trim());
+      // CRÍTICO: Solo mostrar título "Puntaje y Calificacion:" si el contenido
+      // NO comienza con un header Markdown (casos interactivos/quizzes)
+      // Para casos analíticos que comienzan con "# Resumen Clínico", omitir el título
+      final startsWithMarkdownHeader = RegExp(
+        r'^\s{0,3}#{1,6}\s',
+      ).hasMatch(mdScore);
+
+      if (!startsWithMarkdownHeader) {
+        children.add(
+          Text(
+            'Puntaje y Calificacion:',
+            style: labelStyle,
+            textAlign: TextAlign.justify,
+          ),
+        );
+        children.add(const SizedBox(height: 8));
+      }
+
       children.add(
         Theme(
           data: _markdownTheme(context, mdBaseStyle.color),
@@ -224,68 +234,81 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
     text = text.replaceAll(RegExp(r'\s+##\s*$', multiLine: true), '');
     text = text.replaceAll(RegExp(r'\.\s*#\s+'), '. ');
 
-    // PASO 2: Detectar y normalizar títulos específicos de secciones
+    // PASO 2: Normalizar headers markdown SOLO si NO están ya formateados correctamente
+    // CRÍTICO: Para casos analíticos del backend, los headers ya vienen bien formateados
+    // Solo normalizar headers mal formados (sin #, con :, pegados a texto anterior)
     final sectionPatterns = {
       'Resumen Clínico': 'Resumen Clínico',
       'Resumen clínico': 'Resumen Clínico',
-      'Desempeño global': 'Desempeño Global',
-      'Desempeño Global': 'Desempeño Global',
-      'Desempeño': 'Desempeño',
-      'Síntesis': 'Síntesis',
-      'Sintesis': 'Síntesis',
-      'Fortaleza\\s*s?': 'Fortalezas',
+      'Desempeño [Gg]lobal': 'Desempeño Global',
       'Áreas de mejor\\s*a': 'Áreas de Mejora',
       'Areas de mejora': 'Áreas de Mejora',
-      'Recomendaciones accionable\\s*s?': 'Recomendaciones Accionables',
-      'Recomendaciones Accionables': 'Recomendaciones Accionables',
-      'Errores crítico\\s*s?': 'Errores Críticos',
-      'Errores critico\\s*s?': 'Errores Críticos',
-      'Errores Críticos': 'Errores Críticos',
+      'Recomendaciones [Aa]ccionable\\s*s?': 'Recomendaciones',
+      'Recomendaciones': 'Recomendaciones',
+      'Errores [Cc]rítico\\s*s?': 'Errores Críticos',
+      'Errores [Cc]ritico\\s*s?': 'Errores Críticos',
+      'Fortaleza\\s*s?': 'Fortalezas',
       'Puntuación': 'Puntuación',
       'Puntuacion': 'Puntuación',
       'Puntaje': 'Puntaje',
       'Referencias': 'Referencias',
+      'Síntesis': 'Síntesis',
+      'Sintesis': 'Síntesis',
     };
 
     for (final entry in sectionPatterns.entries) {
       final pattern = entry.key;
       final normalized = entry.value;
 
-      // Patrón 1: Título al inicio de línea o después de salto, con o sin #
+      // Patrón 1: Título SIN ## al inicio (casos legacy de quizzes)
+      // NO tocar si ya tiene formato "## Título"
       text = text.replaceAllMapped(
         RegExp(
-          '(?:^|\\n)\\s*#{0,6}\\s*($pattern)\\s*(:|\\b)',
+          '(?:^|\\n)\\s*($pattern)\\s*:',
           caseSensitive: false,
           multiLine: true,
         ),
-        (m) => '\n\n## $normalized\n\n',
+        (m) {
+          // Solo reemplazar si NO tiene ## antes
+          final fullMatch = m.group(0)!;
+          if (fullMatch.contains('##')) {
+            return fullMatch; // Ya está bien formateado, no tocar
+          }
+          return '\n\n## $normalized\n\n';
+        },
       );
 
-      // Patrón 2: Título pegado después de punto
+      // Patrón 2: Título pegado después de punto (sin ##)
       text = text.replaceAllMapped(
-        RegExp('([.!?])\\s*#{0,6}\\s*($pattern)\\b', caseSensitive: false),
-        (m) => '${m.group(1)}\n\n## $normalized\n\n',
+        RegExp('([.!?])\\s*($pattern)\\s*:', caseSensitive: false),
+        (m) {
+          final fullMatch = m.group(0)!;
+          if (fullMatch.contains('##')) {
+            return fullMatch; // Ya está bien formateado
+          }
+          return '${m.group(1)}\n\n## $normalized\n\n';
+        },
       );
     }
 
-    // PASO 3: Limpiar duplicados como "PuntuaciónPuntuación"
+    // PASO 3: Asegurar espacio después de # en headers mal formados
+    // Solo si el header NO tiene espacio después de ##
+    text = text.replaceAllMapped(
+      RegExp(r'^(\s*#{1,6})([^#\s])', multiLine: true),
+      (m) => '${m.group(1)} ${m.group(2)}',
+    );
+
+    // PASO 4: Limpiar duplicados como "PuntuaciónPuntuación"
     text = text.replaceAllMapped(RegExp(r'(\w+)\1', caseSensitive: false), (m) {
       final word = m.group(1)!;
       // Solo limpiar si es una palabra larga (título duplicado)
       return word.length > 5 ? word : m.group(0)!;
     });
 
-    // PASO 4: Separar items numerados largos
+    // PASO 5: Separar items numerados largos
     text = text.replaceAllMapped(
       RegExp(r'([.!?])\s*(\d+[\).])\s+'),
       (m) => '${m.group(1)}\n\n${m.group(2)} ',
-    );
-
-    // PASO 5: Limpiar headers markdown genéricos mal formateados
-    // Asegurar espacio después de #
-    text = text.replaceAllMapped(
-      RegExp(r'^(\s*#{1,6})([^#\s])', multiLine: true),
-      (m) => '${m.group(1)} ${m.group(2)}',
     );
 
     // PASO 6: Limpiar excesos
@@ -447,19 +470,30 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
       final trimmed = lines[i].trim();
       final lower = trimmed.toLowerCase();
 
-      if (lower.startsWith('referencias:') && refStartIdx == -1) {
+      // Detectar sección de Referencias (formato backend: "## Referencias" o "Referencias:")
+      if ((lower.startsWith('## referencias') ||
+              lower.startsWith('referencias:')) &&
+          refStartIdx == -1) {
         refStartIdx = i;
-      } else if ((lower.startsWith('puntaje y calificación') ||
+      }
+      // Detectar inicio de evaluación/puntaje (múltiples formatos)
+      else if ((lower.startsWith('puntaje y calificación') ||
               lower.startsWith('puntaje y calificacion') ||
               lower.startsWith('puntuación') ||
               lower.startsWith('puntuacion') ||
+              lower.startsWith('## puntuación') ||
+              lower.startsWith('## puntuacion') ||
               lower.startsWith('calificación') ||
               lower.startsWith('calificacion') ||
               lower.startsWith('resumen final:') || // Formato backend nuevo
+              lower.startsWith('# resumen clínico') || // Casos analíticos
+              lower.startsWith('# resumen clinico') ||
               lower.startsWith('puntaje:')) && // Línea de puntaje directo
           scoreStartIdx == -1) {
         scoreStartIdx = i;
-      } else if ((lower.startsWith('retroalimentación') ||
+      }
+      // Detectar retroalimentación (opcional, solo en quizzes)
+      else if ((lower.startsWith('retroalimentación') ||
               lower.startsWith('retroalimentacion')) &&
           retroStartIdx == -1) {
         retroStartIdx = i;
@@ -468,6 +502,8 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
     // Segunda pasada: extraer contenido de cada sección
     // SCORE: captura TODO hasta referencias o retroalimentación
+    // CRÍTICO: Para casos analíticos, si no hay scoreStartIdx detectado pero sí refStartIdx,
+    // entonces TODO antes de referencias es el score (incluye # Resumen Clínico completo)
     if (scoreStartIdx >= 0) {
       final scoreLines = <String>[];
       for (int i = scoreStartIdx; i < lines.length; i++) {
@@ -486,6 +522,13 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
                 '',
               )
               .trim();
+    } else if (refStartIdx >= 0) {
+      // CASOS ANALÍTICOS: Sin scoreStartIdx detectado, score es TODO antes de referencias
+      final scoreLines = lines.sublist(0, refStartIdx);
+      score = scoreLines.join('\n').trim();
+    } else if (scoreStartIdx == -1 && refStartIdx == -1) {
+      // Sin ningún índice detectado: todo es score
+      score = norm.trim();
     }
 
     if (retroStartIdx >= 0) {
@@ -508,12 +551,18 @@ class _FullFeedbackAnimatedState extends State<FullFeedbackAnimated> {
 
     if (refStartIdx >= 0) {
       final refLines = <String>[];
-      // Tomar TODAS las líneas después de "Referencias:" hasta el final
+      // CRÍTICO: Incluir el encabezado "## Referencias" en el contenido
+      // para que ChatMarkdownWrapper lo renderice correctamente
+      refLines.add(lines[refStartIdx]); // Agregar encabezado
+
+      // Tomar TODAS las líneas después de "Referencias:" hasta el final del documento
       for (int i = refStartIdx + 1; i < lines.length; i++) {
         final trimmed = lines[i].trim();
-        // Detener solo si encontramos otra sección PRINCIPAL (no subsecciones)
+        // NO detenerse en subsecciones de referencias (ej: "- Libro X")
+        // Solo detener si encontramos otra sección PRINCIPAL que no sea parte de referencias
         if (trimmed.toLowerCase().startsWith('resumen final:') ||
-            trimmed.toLowerCase().startsWith('retroalimentación:')) {
+            trimmed.toLowerCase().startsWith('retroalimentación:') ||
+            trimmed.toLowerCase().startsWith('# ')) {
           break;
         }
         refLines.add(lines[i]);

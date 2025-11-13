@@ -151,6 +151,18 @@ class ChatController extends GetxService {
       threadId = value;
       // debug: persisted thread id recovered
       Logger.debug('threadId recovered prefs="$threadId"');
+
+      // CRÍTICO: Migración a Responses API - Limpiar threadId antiguo (thread_*)
+      // Si detectamos un threadId con prefijo "thread_", lo limpiamos automáticamente
+      // para forzar la creación de una nueva conversación con la API de Responses (conv_*)
+      if (threadId.startsWith('thread_')) {
+        Logger.warn(
+          'legacy threadId detected in prefs (thread_*), clearing for migration to conv_*',
+        );
+        threadId = '';
+        threadPref.setValue('');
+      }
+
       // Ya no forzamos reset inmediato: permitimos reanudar conversación existente.
       // Si más adelante se detecta inconsistencia (por ejemplo, backend responde 404),
       // se limpiará explícitamente en el flujo de error de startChat o sendMessage.
@@ -246,6 +258,17 @@ class ChatController extends GetxService {
       if (chat != null) {
         currentChat.value = chat;
         threadId = chat.threadId;
+
+        // CRÍTICO: Migración a Responses API - Validar threadId
+        // Si el chat cargado tiene un threadId antiguo (thread_*), lo limpiamos
+        if (threadId.startsWith('thread_')) {
+          Logger.warn(
+            'legacy threadId in loaded chat (thread_*), clearing for migration',
+          );
+          threadId = '';
+          // No guardamos en prefs aquí porque se guardará cuando se envíe el primer mensaje
+        }
+
         threadPref.setValue(threadId);
       } else {
         throw Exception('Chat no encontrado con ID: $chatId');
@@ -520,6 +543,26 @@ class ChatController extends GetxService {
     }
 
     try {
+      // CRÍTICO: Migración a Responses API - Limpiar threadId antiguo (thread_*)
+      // Si detectamos un threadId con prefijo "thread_", lo limpiamos para forzar
+      // la creación de una nueva conversación con la API de Responses (conv_*)
+      if (threadId.startsWith('thread_')) {
+        Logger.warn(
+          'legacy threadId detected (thread_*), migrating to conv_* by resetting',
+        );
+        threadId = '';
+        threadPref.setValue('');
+        // Mostrar mensaje temporal al usuario explicando la migración
+        if (messages.isNotEmpty) {
+          messages.add(
+            ChatMessageModel.temporal(
+              'Iniciando nueva conversación con la API actualizada...',
+              true,
+            ),
+          );
+        }
+      }
+
       isSending.value = true;
       isTyping.value = true;
       print(

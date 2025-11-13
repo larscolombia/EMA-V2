@@ -127,7 +127,7 @@ class ApiClinicalCaseData {
   ) async {
     // Flujo nuevo: /casos-interactivos/mensaje
     final storage = const FlutterSecureStorage();
-    final threadId = await storage.read(key: 'interactive_strict_thread_id');
+    var threadId = await storage.read(key: 'interactive_strict_thread_id');
 
     final Map<String, dynamic> body = {
       'thread_id': threadId,
@@ -289,7 +289,8 @@ class ApiClinicalCaseData {
     );
 
     final storage = const FlutterSecureStorage();
-    final threadId = await storage.read(key: 'interactive_case_thread_id');
+    var threadId = await storage.read(key: 'interactive_case_thread_id');
+
     print('[API_SEND] 🔑 Thread ID: $threadId');
 
     final body = {'thread_id': threadId, 'mensaje': userMessage.text};
