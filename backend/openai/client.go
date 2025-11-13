@@ -50,6 +50,10 @@ type Client struct {
 	lastFile    map[string]LastFileInfo
 	lastCleanup time.Time
 	vsTTL       time.Duration
+	// Responses API: conversation_id mapping (conversation_id == thread_id for compatibility)
+	convMu          sync.RWMutex
+	conversations   map[string]string // thread_id -> conversation_id (usually same)
+	useResponsesAPI bool              // Feature flag: true = use Responses API, false = use Assistants API
 	// Ensure *Client implements the chat.AIClient interface (compile-time check) via a blank identifier assignment.
 	// (We inline the minimal subset because importing chat here would create a cycle; so we skip direct assertion.)
 }
@@ -107,19 +111,23 @@ func NewClient() *Client {
 			ttl = time.Duration(n) * time.Minute
 		}
 	}
+	// Use Responses API by default (new implementation)
+	useResponsesAPI := true
 	return &Client{
-		api:          api,
-		AssistantID:  assistant,
-		Model:        model,
-		key:          key,
-		httpClient:   &http.Client{Timeout: 180 * time.Second}, // Aumentado a 180s para runs largos y addMessage lentos
-		vectorStore:  vsMap,
-		vsLastAccess: make(map[string]time.Time),
-		fileCache:    fcMap,
-		sessBytes:    make(map[string]int64),
-		sessFiles:    make(map[string]int),
-		lastFile:     make(map[string]LastFileInfo),
-		vsTTL:        ttl,
+		api:             api,
+		AssistantID:     assistant,
+		Model:           model,
+		key:             key,
+		httpClient:      &http.Client{Timeout: 180 * time.Second}, // Aumentado a 180s para runs largos y addMessage lentos
+		vectorStore:     vsMap,
+		vsLastAccess:    make(map[string]time.Time),
+		fileCache:       fcMap,
+		sessBytes:       make(map[string]int64),
+		sessFiles:       make(map[string]int),
+		lastFile:        make(map[string]LastFileInfo),
+		vsTTL:           ttl,
+		conversations:   make(map[string]string),
+		useResponsesAPI: useResponsesAPI,
 	}
 }
 
@@ -305,6 +313,30 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any) (
 	req.Header.Set("Accept", "application/json")
 	// Required for Assistants v2 endpoints
 	req.Header.Set("OpenAI-Beta", "assistants=v2")
+	return c.httpClient.Do(req)
+}
+
+// doJSONResponses hace requests JSON para Responses API (sin header assistants=v2)
+func (c *Client) doJSONResponses(ctx context.Context, method, path string, payload any) (*http.Response, error) {
+	if c.key == "" {
+		return nil, errors.New("openai api key not configured")
+	}
+	var body io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.apiURL(path), body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	// NO incluir OpenAI-Beta header para Responses API
 	return c.httpClient.Do(req)
 }
 
@@ -1485,7 +1517,7 @@ func (c *Client) runAndWait(ctx context.Context, threadID string, instructions s
 
 // runAndWaitWithRetry es la implementación interna con contador de reintentos
 func (c *Client) runAndWaitWithRetry(ctx context.Context, threadID string, instructions string, vectorStoreID string, retryCount int) (string, error) {
-	const maxRetries = 2
+	const maxRetries = 2 // 2 reintentos = 3 intentos totales (inicial + 2 retries)
 
 	// Máxima duración interna antes de intentar devolver contenido parcial
 	// Aumentado a 160s porque runs complejos pueden tardar 140-150s bajo carga de OpenAI
@@ -3967,10 +3999,212 @@ func isLikelyNoDataResponse(s string) bool {
 		"sin informacion disponible",
 		"no hay contenido disponible",
 	}
-	for _, k := range keywords {
-		if strings.Contains(t, k) {
+	for _, kw := range keywords {
+		if strings.Contains(t, kw) {
 			return true
 		}
 	}
 	return false
+}
+
+// ============================================================================
+// RESPONSES API - Nueva implementación migrada desde Assistants API
+// ============================================================================
+
+// CreateConversation crea una nueva conversación usando Responses API
+// Mantiene compatibilidad: retorna un ID que puede usarse como thread_id
+func (c *Client) CreateConversation(ctx context.Context) (string, error) {
+	if c.key == "" {
+		return "", errors.New("openai api key not configured")
+	}
+
+	// Crear conversación vacía
+	payload := map[string]any{
+		"metadata": map[string]string{
+			"created_at": time.Now().Format(time.RFC3339),
+		},
+	}
+
+	resp, err := c.doJSONResponses(ctx, http.MethodPost, "/conversations", payload)
+	if err != nil {
+		log.Printf("[responses][CreateConversation][error] %v", err)
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		log.Printf("[responses][CreateConversation][status_error] code=%d body=%s", resp.StatusCode, string(b))
+		return "", fmt.Errorf("create conversation failed: %s", string(b))
+	}
+
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+
+	// Guardar mapping para compatibilidad
+	c.convMu.Lock()
+	c.conversations[data.ID] = data.ID
+	c.convMu.Unlock()
+
+	log.Printf("[responses][CreateConversation][success] conversation_id=%s", data.ID)
+	return data.ID, nil
+}
+
+// StreamResponseWithInstructions usa Responses API para generar respuesta con streaming
+// Separa userMessage (se guarda en conversation) de instructions (solo para el response)
+func (c *Client) StreamResponseWithInstructions(ctx context.Context, conversationID, userMessage, instructions, vectorStoreID string) (<-chan string, error) {
+	if c.key == "" {
+		return nil, errors.New("openai api key not configured")
+	}
+
+	log.Printf("[responses][StreamWithInstructions][start] conversation=%s vs=%s user_msg_len=%d instructions_len=%d",
+		conversationID, vectorStoreID, len(userMessage), len(instructions))
+
+	out := make(chan string, 100)
+	go func() {
+		defer close(out)
+
+		// Construir request de Responses API
+		payload := map[string]any{
+			"model":        resolveModelForResponses(c.Model),
+			"conversation": conversationID,
+			"input":        userMessage, // Solo el mensaje del usuario
+			"store":        true,        // Guardar para contexto futuro
+		}
+
+		// Añadir instructions si existen
+		if strings.TrimSpace(instructions) != "" {
+			payload["instructions"] = strings.TrimSpace(instructions)
+		}
+
+		// Añadir tools con file_search si hay vector store
+		if vectorStoreID != "" {
+			payload["tools"] = []map[string]any{
+				{
+					"type":             "file_search",
+					"vector_store_ids": []string{vectorStoreID},
+				},
+			}
+		}
+
+		// Crear response con timeout generoso
+		respCtx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+		defer cancel()
+
+		resp, err := c.doJSONResponses(respCtx, http.MethodPost, "/responses", payload)
+		if err != nil {
+			log.Printf("[responses][StreamWithInstructions][error] conversation=%s err=%v", conversationID, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			b, _ := io.ReadAll(resp.Body)
+			log.Printf("[responses][StreamWithInstructions][status_error] conversation=%s code=%d body=%s",
+				conversationID, resp.StatusCode, sanitizeBody(string(b)))
+			return
+		}
+
+		// Parsear respuesta
+		var response struct {
+			ID     string `json:"id"`
+			Output []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			log.Printf("[responses][StreamWithInstructions][parse_error] conversation=%s err=%v", conversationID, err)
+			return
+		}
+
+		// Extraer texto de la respuesta
+		for _, item := range response.Output {
+			if item.Type == "message" {
+				for _, content := range item.Content {
+					if content.Type == "output_text" && content.Text != "" {
+						out <- content.Text
+						log.Printf("[responses][StreamWithInstructions][success] conversation=%s response_id=%s chars=%d",
+							conversationID, response.ID, len(content.Text))
+						return
+					}
+				}
+			}
+		}
+
+		log.Printf("[responses][StreamWithInstructions][warn] conversation=%s no_text_found", conversationID)
+	}()
+
+	return out, nil
+}
+
+// resolveModelForResponses mapea modelos antiguos a los nuevos de Responses API
+func resolveModelForResponses(model string) string {
+	if model == "" {
+		return "gpt-4.1" // Default moderno
+	}
+	// Mapeo de modelos legacy a nuevos
+	switch {
+	case strings.Contains(model, "gpt-4o"):
+		return "gpt-4.1"
+	case strings.Contains(model, "gpt-4-turbo"):
+		return "gpt-4.1"
+	case strings.Contains(model, "gpt-3.5"):
+		return "gpt-4.1-mini"
+	default:
+		return model // Usar tal cual si ya es moderno
+	}
+}
+
+// StreamResponseWithInstructionsLegacy es un wrapper de compatibilidad que decide
+// si usar Responses API o Assistants API según el feature flag
+func (c *Client) StreamResponseWithInstructionsCompatible(ctx context.Context, threadID, userMessage, instructions, vectorStoreID string) (<-chan string, error) {
+	if c.useResponsesAPI {
+		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true", threadID)
+		return c.StreamResponseWithInstructions(ctx, threadID, userMessage, instructions, vectorStoreID)
+	}
+	log.Printf("[hybrid][routing] conversation=%s using_assistants_api=true (legacy)", threadID)
+	return c.StreamAssistantWithInstructions(ctx, threadID, userMessage, instructions, vectorStoreID)
+}
+
+// CreateThreadOrConversation crea thread (Assistants) o conversation (Responses) según feature flag
+func (c *Client) CreateThreadOrConversation(ctx context.Context) (string, error) {
+	if c.useResponsesAPI {
+		log.Printf("[hybrid][routing] using_responses_api=true create_conversation")
+		return c.CreateConversation(ctx)
+	}
+	log.Printf("[hybrid][routing] using_assistants_api=true create_thread")
+	return c.CreateThread(ctx)
+}
+
+// StreamAssistantJSONCompatible wrapper que enruta entre Responses y Assistants API
+func (c *Client) StreamAssistantJSONCompatible(ctx context.Context, threadID, userPrompt, jsonInstructions string) (<-chan string, error) {
+	if c.useResponsesAPI {
+		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true (JSON mode)", threadID)
+		// Para Responses API: userPrompt es el input, jsonInstructions van en instructions
+		// No usamos vector store para casos clínicos (no requiere RAG)
+		return c.StreamResponseWithInstructions(ctx, threadID, userPrompt, jsonInstructions, "")
+	}
+	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (JSON mode)", threadID)
+	return c.StreamAssistantJSON(ctx, threadID, userPrompt, jsonInstructions)
+}
+
+// StreamAssistantMessageCompatible wrapper que enruta entre Responses y Assistants API
+func (c *Client) StreamAssistantMessageCompatible(ctx context.Context, threadID, prompt string) (<-chan string, error) {
+	if c.useResponsesAPI {
+		log.Printf("[hybrid][routing] conversation=%s using_responses_api=true (message mode)", threadID)
+		// Para Responses API: prompt es el input, sin instructions adicionales
+		// No usamos vector store para casos clínicos
+		return c.StreamResponseWithInstructions(ctx, threadID, prompt, "", "")
+	}
+	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (message mode)", threadID)
+	return c.StreamAssistantMessage(ctx, threadID, prompt)
 }

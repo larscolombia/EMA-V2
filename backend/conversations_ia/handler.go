@@ -67,6 +67,9 @@ type AIClient interface {
 	QuickVectorSearchMultiple(ctx context.Context, vectorStoreID, query string, maxResults int) ([]*openai.VectorSearchResult, error)
 	// ExtractPDFMetadataFromPath analiza un PDF y detecta si tiene texto extraíble
 	ExtractPDFMetadataFromPath(filePath string) *openai.PDFMetadata
+	// Métodos compatibles para Responses API (con fallback automático a Assistants API)
+	CreateThreadOrConversation(ctx context.Context) (string, error)
+	StreamResponseWithInstructionsCompatible(ctx context.Context, threadID, userMessage, instructions, vectorStoreID string) (<-chan string, error)
 }
 
 // SmartResponse encapsula tanto el stream generado como los metadatos necesarios para validar la respuesta antes de exponerla al usuario.
@@ -676,7 +679,8 @@ Instrucciones:
 
 	// NUEVO: Separar userMessage (pregunta original) de instructions (contexto completo)
 	// Solo el userMessage se guarda en el thread, instructions se usa solo para el run
-	stream, err := h.AI.StreamAssistantWithInstructions(ctx, threadID, prompt, input, targetVectorID)
+	// Usar método compatible que decide entre Responses API o Assistants API según feature flag
+	stream, err := h.AI.StreamResponseWithInstructionsCompatible(ctx, threadID, prompt, input, targetVectorID)
 	if err != nil {
 		return nil, err
 	}
@@ -839,11 +843,13 @@ func (h *Handler) Start(c *gin.Context) {
 	}
 	start := time.Now()
 	log.Printf("[conv][Start][begin] assistant_id=%s", h.AI.GetAssistantID())
-	tid, err := h.AI.CreateThread(c.Request.Context())
-	if err != nil || !strings.HasPrefix(tid, "thread_") {
+
+	// Usar método compatible que decide entre Responses API o Assistants API según feature flag
+	tid, err := h.AI.CreateThreadOrConversation(c.Request.Context())
+	if err != nil || !strings.HasPrefix(tid, "thread_") && !strings.HasPrefix(tid, "conv_") {
 		code := classifyErr(err)
 		// Incluimos más detalles para facilitar debug remoto
-		log.Printf("[conv][Start][error] create_thread code=%s err=%v assistant_id=%s", code, err, h.AI.GetAssistantID())
+		log.Printf("[conv][Start][error] create_thread_or_conversation code=%s err=%v assistant_id=%s", code, err, h.AI.GetAssistantID())
 		status := http.StatusInternalServerError
 		if code == "assistant_not_configured" {
 			status = http.StatusServiceUnavailable
@@ -901,7 +907,7 @@ func (h *Handler) Message(c *gin.Context) {
 		Prompt     string `json:"prompt"`
 		FocusDocID string `json:"focus_doc_id,omitempty"` // ID del PDF específico para limitarse solo a ese documento
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || !strings.HasPrefix(req.ThreadID, "thread_") {
+	if err := c.ShouldBindJSON(&req); err != nil || (!strings.HasPrefix(req.ThreadID, "thread_") && !strings.HasPrefix(req.ThreadID, "conv_")) {
 		log.Printf("[conv][Message][json][error] bind_or_thread_invalid thread=%s err=%v", req.ThreadID, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "parámetros inválidos"})
 		return
