@@ -126,7 +126,6 @@ class StatisticsSection extends StatelessWidget {
         }
         final totalEarned = progressController.totalScore.value;
         final totalPossible = progressController.totalMaxScore.value;
-        final averagePercent = progressController.averagePercentage.value;
 
         return Container(
           padding: const EdgeInsets.all(16),
@@ -607,58 +606,177 @@ class StatisticsSection extends StatelessWidget {
     int? total,
   }) {
     final showTotal = total != null && total > 0;
-    int safeTotal;
-    if (showTotal) {
-      // Here analyzer knows total is non-null
-      safeTotal = total; // ignore: null_check_always_fails
-    } else {
-      safeTotal = 0;
-    }
+
+    // IMPORTANTE: 'total' ya representa los DISPONIBLES que vienen del backend
+    // en active_subscription.consultations/questionnaires/clinical_cases
+    // NO es el total del plan, sino los que quedan
+    final remaining = showTotal ? total : 0;
+
     final double progress =
-        showTotal && safeTotal != 0
-            ? (count / safeTotal).clamp(0.0, 1.0).toDouble()
+        showTotal && total != 0
+            ? (count / (count + total)).clamp(0.0, 1.0).toDouble()
             : 0.0;
+
+    // Calcular porcentaje para mostrar (basado en usados vs total real)
+    final totalReal = showTotal ? count + total : 0;
+    final percentage =
+        showTotal && totalReal > 0 ? ((count / totalReal) * 100).round() : 0;
+
+    // Determinar color basado en el porcentaje de uso
+    Color progressColor;
+    if (percentage >= 90) {
+      progressColor = Colors.red.shade600; // Crítico
+    } else if (percentage >= 70) {
+      progressColor = Colors.orange.shade600; // Advertencia
+    } else if (percentage >= 50) {
+      progressColor = Colors.amber.shade600; // Moderado
+    } else {
+      progressColor = AppStyles.primaryColor; // Normal
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppStyles.grey220.withAlpha((0.5 * 255).toInt()),
         borderRadius: BorderRadius.circular(12),
+        border:
+            showTotal && percentage >= 90
+                ? Border.all(color: Colors.red.shade300, width: 2)
+                : null,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          icon,
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+          Row(
+            children: [
+              icon,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
                   label,
                   style: _labelStyle(
                     context,
                   ).copyWith(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  showTotal ? '$count / $total' : '$count',
-                  style: _countStyle(context).copyWith(fontSize: 24),
-                ),
-                if (showTotal) ...[
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: progress.isNaN ? 0.0 : progress,
-                      minHeight: 6,
-                      backgroundColor: AppStyles.grey200,
-                      color: AppStyles.primaryColor,
+              ),
+              if (showTotal)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: progressColor.withAlpha((0.15 * 255).toInt()),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$percentage%',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: progressColor,
                     ),
                   ),
-                ],
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (!showTotal) ...[
+            Text('$count', style: _countStyle(context).copyWith(fontSize: 24)),
+          ] else ...[
+            // Barra de progreso
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: progress.isNaN ? 0.0 : progress,
+                minHeight: 8,
+                backgroundColor: AppStyles.grey200,
+                color: progressColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Disponibles a la derecha
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (remaining <= 5 && remaining > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 12,
+                            color: Colors.orange.shade700,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Quedan pocos',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.orange.shade700,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else if (remaining == 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade100,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.block,
+                            size: 12,
+                            color: Colors.red.shade700,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Agotado',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.red.shade700,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                Text(
+                  'Disponibles: $remaining',
+                  style: _labelStyle(context).copyWith(
+                    fontSize: 11,
+                    color: AppStyles.primary900.withValues(alpha: 0.7),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
-          ),
+          ],
         ],
       ),
     );

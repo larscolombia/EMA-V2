@@ -310,5 +310,14 @@ class UserModel {
     return data;
   }
 
+  // Helper method para verificar si el usuario es admin
+  bool get isAdmin {
+    // Verifica en el array de roles
+    if (roles.isNotEmpty) {
+      return roles.any((role) => role.name.toLowerCase() == 'admin');
+    }
+    return false;
+  }
+
   String toJson() => json.encode(toMap());
 }

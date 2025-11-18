@@ -392,6 +392,57 @@ class ClinicalCaseController extends GetxController
           );
           // Guardar en DB pero NO mostrarlo en el chat aún
           clinicalCaseServive.insertMessage(_pendingInteractiveSummary.value!);
+
+          // Registrar caso completado para estadísticas
+          try {
+            final testProgressController =
+                Get.find<UserTestProgressController>();
+            final user = userService.currentUser.value;
+            final clinicalCase = currentCase.value;
+
+            if (user.authToken.isNotEmpty &&
+                user.id > 0 &&
+                clinicalCase != null) {
+              // Extraer puntuación de la evaluación generada por la IA
+              final scoreMatch = RegExp(
+                r'Puntuación:\s*(\d+)\s*/\s*(\d+)',
+                caseSensitive: false,
+              ).firstMatch(summaryText);
+
+              int scoreObtained = 10;
+              int maxScore = 10;
+
+              if (scoreMatch != null && scoreMatch.groupCount >= 2) {
+                final obtained = int.tryParse(scoreMatch.group(1) ?? '');
+                final max = int.tryParse(scoreMatch.group(2) ?? '');
+
+                if (obtained != null && max != null && max > 0) {
+                  scoreObtained = obtained;
+                  maxScore = max;
+                  print(
+                    '[INTERACTIVE] 📊 Puntuación extraída: $scoreObtained/$maxScore',
+                  );
+                }
+              } else {
+                print(
+                  '[INTERACTIVE] ⚠️ No se encontró puntuación, usando valores por defecto',
+                );
+              }
+
+              await testProgressController.recordTestCompletion(
+                authToken: user.authToken,
+                testName: 'Caso Clínico: ${clinicalCase.title}',
+                scoreObtained: scoreObtained,
+                maxScore: maxScore,
+                categoryId: null,
+              );
+              print(
+                '[INTERACTIVE] ✅ Estadísticas registradas: $scoreObtained/$maxScore puntos',
+              );
+            }
+          } catch (e) {
+            print('[INTERACTIVE] ❌ Error registrando estadísticas: $e');
+          }
         }
         interactiveEvaluationGenerated.value = false; // aún no mostrado
         isTyping.value = false; // Make sure to set typing to false
@@ -424,6 +475,57 @@ class ClinicalCaseController extends GetxController
             clinicalCaseServive.insertMessage(
               _pendingInteractiveSummary.value!,
             );
+
+            // Registrar caso completado para estadísticas
+            try {
+              final testProgressController =
+                  Get.find<UserTestProgressController>();
+              final user = userService.currentUser.value;
+              final clinicalCase = currentCase.value;
+
+              if (user.authToken.isNotEmpty &&
+                  user.id > 0 &&
+                  clinicalCase != null) {
+                // Extraer puntuación de la evaluación generada por la IA
+                final scoreMatch = RegExp(
+                  r'Puntuación:\s*(\d+)\s*/\s*(\d+)',
+                  caseSensitive: false,
+                ).firstMatch(summaryText);
+
+                int scoreObtained = 10;
+                int maxScore = 10;
+
+                if (scoreMatch != null && scoreMatch.groupCount >= 2) {
+                  final obtained = int.tryParse(scoreMatch.group(1) ?? '');
+                  final max = int.tryParse(scoreMatch.group(2) ?? '');
+
+                  if (obtained != null && max != null && max > 0) {
+                    scoreObtained = obtained;
+                    maxScore = max;
+                    print(
+                      '[INTERACTIVE_MAX] 📊 Puntuación extraída: $scoreObtained/$maxScore',
+                    );
+                  }
+                } else {
+                  print(
+                    '[INTERACTIVE_MAX] ⚠️ No se encontró puntuación, usando valores por defecto',
+                  );
+                }
+
+                await testProgressController.recordTestCompletion(
+                  authToken: user.authToken,
+                  testName: 'Caso Clínico: ${clinicalCase.title}',
+                  scoreObtained: scoreObtained,
+                  maxScore: maxScore,
+                  categoryId: null,
+                );
+                print(
+                  '[INTERACTIVE_MAX] ✅ Estadísticas registradas: $scoreObtained/$maxScore puntos',
+                );
+              }
+            } catch (e) {
+              print('[INTERACTIVE_MAX] ❌ Error registrando estadísticas: $e');
+            }
           }
           interactiveEvaluationGenerated.value = false;
           isTyping.value = false;
@@ -600,6 +702,56 @@ class ClinicalCaseController extends GetxController
 
       evaluationGenerated.value = true;
       print('[GENERATE_EVAL] ✅ Estado evaluationGenerated=true');
+
+      // Registrar caso completado para estadísticas (igual que los quizzes)
+      try {
+        final testProgressController = Get.find<UserTestProgressController>();
+        final user = userService.currentUser.value;
+
+        if (user.authToken.isNotEmpty && user.id > 0) {
+          // Extraer puntuación de la evaluación generada por la IA
+          // Formato esperado: "Puntuación: NN/100" o "Puntuación: NN / 100"
+          final scoreMatch = RegExp(
+            r'Puntuación:\s*(\d+)\s*/\s*(\d+)',
+            caseSensitive: false,
+          ).firstMatch(evalMessage.text);
+
+          int scoreObtained = 10; // Valor por defecto si no se encuentra
+          int maxScore = 10;
+
+          if (scoreMatch != null && scoreMatch.groupCount >= 2) {
+            final obtained = int.tryParse(scoreMatch.group(1) ?? '');
+            final max = int.tryParse(scoreMatch.group(2) ?? '');
+
+            if (obtained != null && max != null && max > 0) {
+              scoreObtained = obtained;
+              maxScore = max;
+              print(
+                '[GENERATE_EVAL] 📊 Puntuación extraída: $scoreObtained/$maxScore',
+              );
+            }
+          } else {
+            print(
+              '[GENERATE_EVAL] ⚠️ No se encontró puntuación en formato NN/100, usando valores por defecto',
+            );
+          }
+
+          await testProgressController.recordTestCompletion(
+            authToken: user.authToken,
+            testName: 'Caso Clínico: ${clinicalCase.title}',
+            scoreObtained: scoreObtained,
+            maxScore: maxScore,
+            categoryId:
+                null, // Los casos clínicos no tienen categoría específica
+          );
+          print(
+            '[GENERATE_EVAL] ✅ Estadísticas registradas: $scoreObtained/$maxScore puntos',
+          );
+        }
+      } catch (e) {
+        // No bloquear el flujo si falla el registro de estadísticas
+        print('[CLINICAL_CASE] Error registrando estadísticas: $e');
+      }
 
       // SEGUNDO: Navegar a la pantalla de evaluación DESPUÉS de generar
       print('[GENERATE_EVAL] 🧭 Navegando a pantalla de evaluación...');

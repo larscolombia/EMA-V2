@@ -155,6 +155,8 @@ class UserTestProgressController extends GetxController {
       );
     }
 
+    // fetchTestScores ya invalida el cache con forceRefresh: true
+    // Los demás métodos usarán ese mismo cache actualizado
     await Future.wait([
       loadTestScores(userId: userId, authToken: authToken),
       loadMonthlyScores(userId: userId, authToken: authToken),
@@ -228,16 +230,22 @@ class UserTestProgressController extends GetxController {
 
       print('[STATS] Test registrado exitosamente, recargando estadísticas...');
 
-      // Forzar recarga inmediata de estadísticas
+      // Forzar recarga inmediata de estadísticas SIN cache
       final user = Get.find<UserService>().currentUser.value;
       if (user.id > 0) {
+        // Invalidar cache del overview service
+        progressService.invalidateCache();
+
         await Future.wait([
           loadTestScores(userId: user.id, authToken: authToken),
           loadMonthlyScores(userId: user.id, authToken: authToken),
           loadMostStudiedCategory(userId: user.id, authToken: authToken),
+          loadTotalTests(userId: user.id, authToken: authToken),
+          loadTotalChats(userId: user.id, authToken: authToken),
+          loadClinicalCasesCount(userId: user.id, authToken: authToken),
         ]);
         print(
-          '[STATS] Estadísticas recargadas: totalScore=${totalScore.value}/${totalMaxScore.value}',
+          '[STATS] Estadísticas recargadas: totalScore=${totalScore.value}/${totalMaxScore.value} totalTests=${totalTests.value} totalChats=${totalChats.value}',
         );
       }
     } catch (e) {

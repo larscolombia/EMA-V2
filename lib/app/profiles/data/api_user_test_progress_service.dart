@@ -8,15 +8,41 @@ import '../../../config/constants/constants.dart';
 
 class ApiUserTestProgressService extends UserTestProgressService {
   Map<int, Map<String, dynamic>> _overviewCache = {}; // userId -> overview data
+  Map<int, Future<Map<String, dynamic>>?> _pendingRequests =
+      {}; // Para evitar múltiples llamadas simultáneas
 
   Future<Map<String, dynamic>> _fetchOverview({
     required int userId,
     required String authToken,
     bool forceRefresh = false,
   }) async {
+    // Si no es refresh forzado y hay cache, usarlo
     if (!forceRefresh && _overviewCache.containsKey(userId)) {
       return _overviewCache[userId]!;
     }
+
+    // Si ya hay una petición en curso, esperarla
+    if (_pendingRequests[userId] != null) {
+      return await _pendingRequests[userId]!;
+    }
+
+    // Crear nueva petición
+    final request = _doFetchOverview(userId: userId, authToken: authToken);
+    _pendingRequests[userId] = request;
+
+    try {
+      final data = await request;
+      _overviewCache[userId] = data;
+      return data;
+    } finally {
+      _pendingRequests[userId] = null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _doFetchOverview({
+    required int userId,
+    required String authToken,
+  }) async {
     final url = Uri.parse('$apiUrl/user-overview/$userId');
     final response = await http.get(
       url,
@@ -45,7 +71,6 @@ class ApiUserTestProgressService extends UserTestProgressService {
           );
         }
       } catch (_) {}
-      _overviewCache[userId] = data; // cache entire overview
       return data;
     }
     throw Exception('Error overview: ${response.statusCode}');
@@ -56,7 +81,12 @@ class ApiUserTestProgressService extends UserTestProgressService {
     required int userId,
     required String authToken,
   }) async {
-    final data = await _fetchOverview(userId: userId, authToken: authToken);
+    // Solo este método fuerza refresh, los demás usarán el cache actualizado
+    final data = await _fetchOverview(
+      userId: userId,
+      authToken: authToken,
+      forceRefresh: true,
+    );
 
     // test_progress ahora tiene estructura: {summary: {...}, recent_tests: [...]}
     final testProgressData = data['stats']?['test_progress'];
@@ -158,6 +188,11 @@ class ApiUserTestProgressService extends UserTestProgressService {
     }
 
     // Invalidar cache para forzar actualización en próxima consulta
+    _overviewCache.clear();
+  }
+
+  @override
+  void invalidateCache() {
     _overviewCache.clear();
   }
 }

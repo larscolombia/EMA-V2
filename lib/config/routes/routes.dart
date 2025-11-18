@@ -10,6 +10,7 @@ enum Routes {
   login,
   register,
   forgotPassword,
+  resetPassword,
   profile,
   quizDetail,
   quizFeedBack,
@@ -45,6 +46,9 @@ enum Routes {
 
       case forgotPassword:
         return '/forgot-password';
+
+      case resetPassword:
+        return '/reset-password';
 
       case profile:
         return '/profile/:uid';

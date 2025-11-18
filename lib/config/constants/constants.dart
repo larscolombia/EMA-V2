@@ -2,13 +2,21 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 
 /// Permite sobre-escribir la URL base usando --dart-define=API_BASE_URL=https://... al construir.
-const String _envApiBase = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+const String _envApiBase = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: '',
+);
+
 /// Fuerza backend local automáticamente en compilaciones debug si no se pasó API_BASE_URL.
 /// Controlable vía --dart-define=FORCE_LOCAL=1. Por defecto desactivado.
-const String _forceLocalFlag = String.fromEnvironment('FORCE_LOCAL', defaultValue: '0');
+const String _forceLocalFlag = String.fromEnvironment(
+  'FORCE_LOCAL',
+  defaultValue: '0',
+);
 const bool forceLocalInDebug = _forceLocalFlag == '1';
 
 String _computeLocal() {
+  // Backend corre en puerto 8080
   if (kIsWeb) return 'http://localhost:8080';
   try {
     if (Platform.isAndroid) return 'http://10.0.2.2:8080';
@@ -18,14 +26,14 @@ String _computeLocal() {
 
 // URL base computada (renombrada para evitar choque con getters de ApiConstants)
 final String _computedApiUrl = () {
-  // Permitir APP_ENV=dev desde --dart-define para forzar local siempre
+  // Permitir APP_ENV=dev desde --dart-define para forzar local
   const String appEnv = String.fromEnvironment('APP_ENV', defaultValue: '');
   if (appEnv == 'dev') return _computeLocal();
   // 1. dart-define tiene prioridad absoluta
   if (_envApiBase.trim().isNotEmpty) return _envApiBase.trim();
-  // 2. En debug podemos forzar local automáticamente
+  // 2. En debug podemos forzar local automáticamente con FORCE_LOCAL=1
   if (kDebugMode && forceLocalInDebug) return _computeLocal();
-  // 3. Fallback producción
+  // 3. Por defecto siempre usar producción
   return 'https://emma.drleonardoherrera.com';
 }();
 

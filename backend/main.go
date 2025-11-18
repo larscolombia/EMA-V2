@@ -71,6 +71,34 @@ func main() {
 	go mk.Start()
 
 	r := gin.Default()
+
+	// CORS middleware para desarrollo local
+	r.Use(func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		// Permitir localhost en cualquier puerto para desarrollo
+		if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, Authorization, X-CSRF-Token")
+			c.Header("Access-Control-Expose-Headers", "Content-Length, X-Token-Expiry")
+			c.Header("Access-Control-Max-Age", "86400")
+		}
+		// Producción: permitir dominio específico
+		if origin == "https://emma.drleonardoherrera.com" {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, Authorization, X-CSRF-Token")
+			c.Header("Access-Control-Expose-Headers", "Content-Length, X-Token-Expiry")
+		}
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+
 	// Replace default Recovery with custom JSON-aware recovery for /conversations/*
 	r.Use(func(c *gin.Context) {
 		defer func() {
@@ -142,6 +170,7 @@ func main() {
 	r.POST("/session/refresh", login.RefreshHandler)
 	r.POST("/register", login.RegisterHandler)
 	r.POST("/password/forgot", login.ForgotPasswordHandler)
+	r.POST("/password/reset", login.ResetPasswordHandler)
 	r.POST("/password/change", login.ChangePasswordHandler)
 
 	// Profile routes and static media

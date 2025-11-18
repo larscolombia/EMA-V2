@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -39,16 +40,28 @@ type tokenPayload struct {
 
 func sessionDurations(remember bool) time.Duration {
 	defHours := 12
-	if v := os.Getenv("SESSION_DEFAULT_HOURS"); v != "" { if n, err := strconv.Atoi(v); err == nil && n > 0 { defHours = n } }
+	if v := os.Getenv("SESSION_DEFAULT_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			defHours = n
+		}
+	}
 	remDays := 30
-	if v := os.Getenv("SESSION_REMEMBER_DAYS"); v != "" { if n, err := strconv.Atoi(v); err == nil && n > 0 { remDays = n } }
-	if remember { return time.Hour * 24 * time.Duration(remDays) }
+	if v := os.Getenv("SESSION_REMEMBER_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			remDays = n
+		}
+	}
+	if remember {
+		return time.Hour * 24 * time.Duration(remDays)
+	}
 	return time.Hour * time.Duration(defHours)
 }
 
 func sessionSecret() []byte {
 	s := os.Getenv("SESSION_SECRET")
-	if s == "" { s = "dev-insecure-secret" }
+	if s == "" {
+		s = "dev-insecure-secret"
+	}
 	return []byte(s)
 }
 
@@ -65,31 +78,47 @@ func signToken(email string, dur time.Duration, remember bool) (string, int64, e
 
 func parseToken(token string) (tokenPayload, bool) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 { return tokenPayload{}, false }
+	if len(parts) != 3 {
+		return tokenPayload{}, false
+	}
 	unsigned := parts[0] + "." + parts[1]
 	mac := hmac.New(sha256.New, sessionSecret())
 	mac.Write([]byte(unsigned))
 	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(expected), []byte(parts[2])) { return tokenPayload{}, false }
+	if !hmac.Equal([]byte(expected), []byte(parts[2])) {
+		return tokenPayload{}, false
+	}
 	pb, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil { return tokenPayload{}, false }
+	if err != nil {
+		return tokenPayload{}, false
+	}
 	var tp tokenPayload
-	if err := json.Unmarshal(pb, &tp); err != nil { return tokenPayload{}, false }
-	if tp.Exp < time.Now().Unix() { return tokenPayload{}, false }
-	if exp, blk := blacklist[token]; blk && exp >= time.Now().Unix() { return tokenPayload{}, false }
+	if err := json.Unmarshal(pb, &tp); err != nil {
+		return tokenPayload{}, false
+	}
+	if tp.Exp < time.Now().Unix() {
+		return tokenPayload{}, false
+	}
+	if exp, blk := blacklist[token]; blk && exp >= time.Now().Unix() {
+		return tokenPayload{}, false
+	}
 	return tp, true
 }
 
 func generateJTI() string {
 	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil { return time.Now().Format("20060102150405") }
+	if _, err := rand.Read(b); err != nil {
+		return time.Now().Format("20060102150405")
+	}
 	return hex.EncodeToString(b)
 }
 
 // GetEmailFromToken validates signature + expiry and returns email
 func GetEmailFromToken(token string) (string, bool) {
 	tp, ok := parseToken(token)
-	if !ok { return "", false }
+	if !ok {
+		return "", false
+	}
 	return tp.Email, true
 }
 
@@ -114,6 +143,8 @@ func Handler(c *gin.Context) {
 			"first_name":    user.FirstName,
 			"last_name":     user.LastName,
 			"email":         user.Email,
+			"role":          user.Role,
+			"roles":         []gin.H{{"name": user.Role}}, // Compatibilidad con frontend
 			"full_name":     user.FirstName + " " + user.LastName,
 			"status":        true,
 			"language":      "es",
@@ -122,7 +153,7 @@ func Handler(c *gin.Context) {
 			"updated_at":    user.UpdatedAt.Format(time.RFC3339),
 			"profile_image": "",
 		}
-	c.JSON(http.StatusOK, gin.H{"token": token, "user": userRes, "expires_at": exp, "remember": creds.Remember})
+		c.JSON(http.StatusOK, gin.H{"token": token, "user": userRes, "expires_at": exp, "remember": creds.Remember})
 	} else {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Credenciales inválidas"})
 	}
@@ -131,7 +162,10 @@ func Handler(c *gin.Context) {
 func SessionHandler(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido"}); return }
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido"})
+		return
+	}
 	tp, ok := parseToken(token)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido"})
@@ -148,6 +182,8 @@ func SessionHandler(c *gin.Context) {
 		"first_name":    user.FirstName,
 		"last_name":     user.LastName,
 		"email":         user.Email,
+		"role":          user.Role,
+		"roles":         []gin.H{{"name": user.Role}}, // Compatibilidad con frontend
 		"full_name":     user.FirstName + " " + user.LastName,
 		"status":        true,
 		"language":      "es",
@@ -163,9 +199,14 @@ func SessionHandler(c *gin.Context) {
 func LogoutHandler(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == "" { c.JSON(http.StatusBadRequest, gin.H{"error": "Token requerido"}); return }
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token requerido"})
+		return
+	}
 	// Add to blacklist until its natural expiry (best effort)
-	if tp, ok := parseToken(token); ok { blacklist[token] = tp.Exp }
+	if tp, ok := parseToken(token); ok {
+		blacklist[token] = tp.Exp
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "Sesión cerrada"})
 }
 
@@ -213,8 +254,104 @@ func ForgotPasswordHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos"})
 		return
 	}
-	// We acknowledge the request to reset the password.
+
+	p.Email = strings.TrimSpace(strings.ToLower(p.Email))
+
+	// Check if user exists (silent fail for security)
+	user := migrations.GetUserByEmail(p.Email)
+	if user != nil {
+		// Generate reset token
+		token := generateJTI() + generateJTI() // 32 chars token
+		expiresAt := time.Now().Add(1 * time.Hour)
+
+		// Delete any existing tokens for this email
+		_ = migrations.DeletePasswordResetToken(p.Email)
+
+		// Store token in database
+		if err := migrations.CreatePasswordResetToken(p.Email, token, expiresAt); err != nil {
+			log.Printf("Error creating password reset token for %s: %v", p.Email, err)
+			c.JSON(http.StatusOK, gin.H{"message": "Si el correo existe, se enviarán instrucciones"})
+			return
+		}
+
+		// Build reset link
+		// TODO: Cambiar a https://emma.drleonardoherrera.com para producción
+		frontendURL := "http://localhost:52444"
+		resetLink := fmt.Sprintf("%s/#/reset-password?token=%s&email=%s", frontendURL, token, p.Email)
+
+		// Send email
+		if err := mailer.SendPasswordReset(p.Email, resetLink); err != nil {
+			log.Printf("Error sending password reset email to %s: %v", p.Email, err)
+			// Don't reveal if email sending failed
+		}
+	}
+
+	// Always return success to avoid user enumeration
 	c.JSON(http.StatusOK, gin.H{"message": "Si el correo existe, se enviarán instrucciones"})
+}
+
+type ResetPasswordPayload struct {
+	Email       string `json:"email"`
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+func ResetPasswordHandler(c *gin.Context) {
+	var p ResetPasswordPayload
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos"})
+		return
+	}
+
+	p.Email = strings.TrimSpace(strings.ToLower(p.Email))
+	p.Token = strings.TrimSpace(p.Token)
+
+	if p.Email == "" || p.Token == "" || p.NewPassword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Campos requeridos faltantes"})
+		return
+	}
+
+	if len(p.NewPassword) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "La contraseña debe tener al menos 6 caracteres"})
+		return
+	}
+
+	// Validate token
+	valid, err := migrations.ValidatePasswordResetToken(p.Email, p.Token)
+	if err != nil {
+		log.Printf("Error validating reset token for %s: %v", p.Email, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al validar el token"})
+		return
+	}
+
+	if !valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
+		return
+	}
+
+	// Get user
+	user := migrations.GetUserByEmail(p.Email)
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
+
+	// Update password
+	if err := migrations.UpdateUserPassword(user.ID, p.NewPassword); err != nil {
+		log.Printf("Error updating password for %s: %v", p.Email, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo actualizar la contraseña"})
+		return
+	}
+
+	// Delete used token
+	_ = migrations.DeletePasswordResetToken(p.Email)
+
+	// Send confirmation email
+	if err := mailer.SendPasswordChanged(p.Email); err != nil {
+		log.Printf("Error sending password changed notification to %s: %v", p.Email, err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Contraseña actualizada exitosamente"})
 }
 
 type ChangePasswordPayload struct {
@@ -254,13 +391,21 @@ func ChangePasswordHandler(c *gin.Context) {
 func RefreshHandler(c *gin.Context) {
 	auth := c.GetHeader("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == "" { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token requerido"}); return }
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token requerido"})
+		return
+	}
 	tp, ok := parseToken(token)
-	if !ok { c.JSON(http.StatusUnauthorized, gin.H{"error":"Token inválido o expirado"}); return }
-	dur := time.Until(time.Unix(tp.Exp,0))
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token inválido o expirado"})
+		return
+	}
+	dur := time.Until(time.Unix(tp.Exp, 0))
 	// Recalculate full duration based on remember flag if remaining <50% to extend period
 	baseDur := sessionDurations(tp.Rem)
-	if dur < baseDur/2 { dur = baseDur } // extend window
+	if dur < baseDur/2 {
+		dur = baseDur
+	} // extend window
 	newToken, newExp, _ := signToken(tp.Email, dur, tp.Rem)
 	// Blacklist old token
 	blacklist[token] = tp.Exp
@@ -274,8 +419,10 @@ func TokenExpiryHeader() gin.HandlerFunc {
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if token != "" {
 			if tp, ok := parseToken(token); ok {
-				c.Writer.Header().Set("X-Token-Expires-At", strconv.FormatInt(tp.Exp,10))
-				if tp.Rem { c.Writer.Header().Set("X-Token-Remember", "1") }
+				c.Writer.Header().Set("X-Token-Expires-At", strconv.FormatInt(tp.Exp, 10))
+				if tp.Rem {
+					c.Writer.Header().Set("X-Token-Remember", "1")
+				}
 			}
 		}
 		c.Next()

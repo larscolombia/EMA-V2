@@ -1,15 +1,18 @@
 // Todo: https://pub.dev/packages/google_fonts#licensing-fonts
 // https://pub.dev/documentation/google_fonts/latest/google_fonts/GoogleFonts/config.html
 import 'package:ema_educacion_medica_avanzada/app/app_ui.dart';
+import 'package:ema_educacion_medica_avanzada/core/di/di.dart';
 import 'package:flutter/material.dart';
 import 'config/constants/constants.dart';
 import 'package:google_fonts/google_fonts.dart';
-
 
 void main() async {
   GoogleFonts.config.allowRuntimeFetching = false;
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Register dependencies
+  await registerDependencies();
 
   // Log de URL base en arranque para diagnóstico.
   // Ignorar en producción si se desea eliminar después.

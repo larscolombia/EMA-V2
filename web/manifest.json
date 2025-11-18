@@ -1,13 +1,14 @@
 {
-    "name": "ema_educacion_medica_avanzada",
-    "short_name": "ema_educacion_medica_avanzada",
+    "name": "EMA - Educación Médica Avanzada",
+    "short_name": "EMA",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "description": "Plataforma de formación médica con casos clínicos interactivos, cuestionarios y asistente IA.",
+    "orientation": "any",
     "prefer_related_applications": false,
+    "categories": ["education", "medical", "health"],
     "icons": [
         {
             "src": "icons/Icon-192.png",

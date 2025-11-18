@@ -1,33 +1,15 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:ema_educacion_medica_avanzada/config/config.dart';
 import 'package:ema_educacion_medica_avanzada/core/core.dart';
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import '../../app/profiles/repositories/statistics_repository.dart'; // Nueva importación
 // auth_token_provider is re-exported via core/core.dart
 
 class LaravelAuthService extends GetxService {
-  // Cliente HTTP personalizado que ignora errores SSL en debug
+  // Cliente HTTP estándar compatible con web
   http.Client _createHttpClient() {
-    if (kDebugMode) {
-      final ioClient =
-          HttpClient()
-            ..badCertificateCallback = (
-              X509Certificate cert,
-              String host,
-              int port,
-            ) {
-              print(
-                '⚠️ WARNING: Ignoring SSL certificate error for $host (DEBUG MODE ONLY)',
-              );
-              return true; // Ignora errores de certificado en modo debug
-            };
-      return IOClient(ioClient);
-    }
     return http.Client();
   }
 
@@ -43,7 +25,7 @@ class LaravelAuthService extends GetxService {
         'remember': false,
       });
       final url = '$apiUrl/login';
-      final headers = {HttpHeaders.contentTypeHeader: 'application/json'};
+      final headers = {'Content-Type': 'application/json'};
 
       print('🔐 LOGIN REQUEST:');
       print('URL: $url');
@@ -86,8 +68,8 @@ class LaravelAuthService extends GetxService {
       final client = _createHttpClient();
       final url = '$apiUrl/logout';
       final headers = {
-        HttpHeaders.contentTypeHeader: 'application/json',
-        HttpHeaders.authorizationHeader: 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
       };
 
       final response = await client.post(Uri.parse(url), headers: headers);
@@ -147,12 +129,43 @@ class LaravelAuthService extends GetxService {
     }
   }
 
+  Future<void> resetPassword(
+    String email,
+    String token,
+    String newPassword,
+  ) async {
+    final client = _createHttpClient();
+    final url = Uri.parse('$apiUrl/password/reset');
+
+    print('🔑 RESET PASSWORD REQUEST:');
+    print('URL: $url');
+    print('Email: $email');
+
+    final response = await client.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'email': email,
+        'token': token,
+        'new_password': newPassword,
+      }),
+    );
+
+    print('🔑 RESET PASSWORD RESPONSE:');
+    print('Status: ${response.statusCode}');
+    print('Body: ${response.body}');
+
+    if (response.statusCode != 200) {
+      throw Exception('Reset password failed: ${response.body}');
+    }
+  }
+
   Future<UserModel> getUser(String token) async {
     final client = _createHttpClient();
     final url = Uri.parse('$apiUrl/session');
     final headers = {
-      HttpHeaders.contentTypeHeader: 'application/json',
-      HttpHeaders.authorizationHeader: 'Bearer $token',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
     };
 
     final response = await client.get(url, headers: headers);

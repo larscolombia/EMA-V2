@@ -173,17 +173,35 @@ class QuizController extends GetxController with StateMixin<QuizModel> {
         final user = _userService.currentUser.value;
 
         if (user.authToken.isNotEmpty && user.id > 0) {
+          final scoreObtained = quizEvaluated.score ?? 0;
+          final maxScore = totalQuestions.value;
+          final categoryInfo =
+              quizEvaluated.categoryId != null
+                  ? 'Categoría: ${quizEvaluated.categoryId}'
+                  : 'General (sin categoría)';
+
+          print('[QUIZ] 📊 Registrando estadísticas...');
+          print('[QUIZ] 📝 Título: ${quizEvaluated.title}');
+          print('[QUIZ] 🎯 Puntuación: $scoreObtained/$maxScore');
+          print('[QUIZ] 📂 $categoryInfo');
+
           await testProgressController.recordTestCompletion(
             authToken: user.authToken,
             testName: quizEvaluated.title,
-            scoreObtained: quizEvaluated.score ?? 0,
-            maxScore: totalQuestions.value,
+            scoreObtained: scoreObtained,
+            maxScore: maxScore,
             categoryId: quizEvaluated.categoryId,
+          );
+
+          print('[QUIZ] ✅ Estadísticas registradas exitosamente');
+        } else {
+          print(
+            '[QUIZ] ⚠️ Usuario no autenticado, saltando registro de estadísticas',
           );
         }
       } catch (e) {
         // No bloquear el flujo si falla el registro de estadísticas
-        print('[QUIZ] Error registrando estadísticas: $e');
+        print('[QUIZ] ❌ Error registrando estadísticas: $e');
       }
 
       showDetail(quiz: quizEvaluated);

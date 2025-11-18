@@ -1,4 +1,5 @@
 // import 'package:ema_educacion_medica_avanzada/common/bindings.dart';
+import 'package:ema_educacion_medica_avanzada/admin/config/admin_routes.dart';
 import 'package:ema_educacion_medica_avanzada/app/actions/screens/actions_list_screen.dart';
 import 'package:ema_educacion_medica_avanzada/app/chat/chat.dart';
 import 'package:ema_educacion_medica_avanzada/app/clinical_cases/clinical_cases.dart';
@@ -13,43 +14,23 @@ import 'package:get/get.dart';
 
 part 'routes.dart';
 
-
 class AppPages {
   AppPages._();
 
   static final routes = [
-    GetPage(
-      name: Routes.actionsList.name,
-      page: () => ActionsListScreen(),
-    ),
-    GetPage(
-      name: Routes.start.name,
-      page: () => StartScreen(),
-    ),
-    GetPage(
-      name: Routes.home.name,
-      page: () => ChatHomeView(),
-    ),
-    GetPage(
-      name: Routes.profile.name,
-      page: () => ProfileView(),
-    ),
-    GetPage(
-      name: Routes.subscriptions.name,
-      page: () => SubscriptionsView(),
-    ),
-    GetPage(
-      name: Routes.login.name,
-      page: () => LoginScreen(),
-    ),
-    GetPage(
-      name: Routes.register.name,
-      page: () => RegisterFormView(),
-    ),
+    // Rutas de la aplicación móvil/usuario normal
+    GetPage(name: Routes.actionsList.name, page: () => ActionsListScreen()),
+    GetPage(name: Routes.start.name, page: () => StartScreen()),
+    GetPage(name: Routes.home.name, page: () => ChatHomeView()),
+    GetPage(name: Routes.profile.name, page: () => ProfileView()),
+    GetPage(name: Routes.subscriptions.name, page: () => SubscriptionsView()),
+    GetPage(name: Routes.login.name, page: () => LoginScreen()),
+    GetPage(name: Routes.register.name, page: () => RegisterFormView()),
     GetPage(
       name: Routes.forgotPassword.name,
       page: () => ForgotPasswordScreen(),
     ),
+    GetPage(name: Routes.resetPassword.name, page: () => ResetPasswordScreen()),
     GetPage(
       name: Routes.clinicalCaseAnalytical.name,
       page: () => ClinicalCaseAnalyticalView(),
@@ -62,13 +43,10 @@ class AppPages {
       name: Routes.clinicalCaseEvaluation.name,
       page: () => ClinicalCaseEvaluationView(),
     ),
-    GetPage(
-      name: Routes.quizDetail.name,
-      page: () => QuizDetailView(),
-    ),
-    GetPage(
-      name: Routes.quizFeedBack.name,
-      page: () => QuizFeedBackView(),
-    ),
+    GetPage(name: Routes.quizDetail.name, page: () => QuizDetailView()),
+    GetPage(name: Routes.quizFeedBack.name, page: () => QuizFeedBackView()),
+
+    // Rutas del panel administrativo
+    ...AdminRoutes.routes,
   ];
 }

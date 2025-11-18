@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:get/get.dart';
 
-
 class AppLayout extends StatelessWidget {
   final _actionsDrawerController = Get.find<ActionsDrawerListController>();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -30,7 +29,8 @@ class AppLayout extends StatelessWidget {
   });
 
   bool _navigationLocked() {
-    bool locked = chatController.isSending.value || chatController.isTyping.value;
+    bool locked =
+        chatController.isSending.value || chatController.isTyping.value;
     if (Get.isRegistered<ClinicalCaseController>()) {
       locked = locked || Get.find<ClinicalCaseController>().isTyping.value;
     }
@@ -47,25 +47,21 @@ class AppLayout extends StatelessWidget {
         final disabled = _navigationLocked();
         return IconButton(
           color: Colors.black,
-          icon: backRoute.isEmpty
-              ? AppIcons.menuSquare(
-                  height: 34,
-                  width: 34,
-                )
-              : AppIcons.arrowLeftSquare(
-                  height: 34,
-                  width: 34,
-                ),
-          onPressed: disabled
-              ? null
-              : () {
-                  if (backRoute.isNotEmpty) {
-                    Get.toNamed(backRoute);
-                  } else {
-                    _actionsDrawerController.loadActions(0);
-                    _scaffoldKey.currentState!.openDrawer();
-                  }
-                },
+          icon:
+              backRoute.isEmpty
+                  ? AppIcons.menuSquare(height: 34, width: 34)
+                  : AppIcons.arrowLeftSquare(height: 34, width: 34),
+          onPressed:
+              disabled
+                  ? null
+                  : () {
+                    if (backRoute.isNotEmpty) {
+                      Get.toNamed(backRoute);
+                    } else {
+                      _actionsDrawerController.loadActions(0);
+                      _scaffoldKey.currentState!.openDrawer();
+                    }
+                  },
         );
       }),
       title: TextButton(
@@ -87,17 +83,18 @@ class AppLayout extends StatelessWidget {
               height: 34,
               width: 34,
             ),
-            onPressed: disabled
-                ? null
-                : () {
-                    chatController.cleanChat();
+            onPressed:
+                disabled
+                    ? null
+                    : () {
+                      chatController.cleanChat();
 
-                    Get.toNamed(Routes.home.name, preventDuplicates: true);
+                      Get.toNamed(Routes.home.name, preventDuplicates: true);
 
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      chatController.focusOnChatInputText();
-                    });
-                  },
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        chatController.focusOnChatInputText();
+                      });
+                    },
           );
         }),
         SizedBox(width: 4),
@@ -108,7 +105,7 @@ class AppLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return KeyboardDismissOnTap(
-      dismissOnCapturedTaps: true,
+      dismissOnCapturedTaps: false,
       child: WillPopScope(
         onWillPop: () async {
           if (_navigationLocked()) {
@@ -124,9 +121,7 @@ class AppLayout extends StatelessWidget {
         child: Scaffold(
           key: _scaffoldKey,
           appBar: appBar(),
-          body: SafeArea(
-            child: body,
-          ),
+          body: SafeArea(child: body),
           drawer: AppDrawer(
             userProfile: userService.currentUser.value,
             chatController: chatController,

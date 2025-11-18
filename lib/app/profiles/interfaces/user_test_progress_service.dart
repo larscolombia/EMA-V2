@@ -37,4 +37,7 @@ abstract class UserTestProgressService {
     required int maxScore,
     int? categoryId,
   });
+
+  // Invalidar caché para forzar recarga
+  void invalidateCache();
 }

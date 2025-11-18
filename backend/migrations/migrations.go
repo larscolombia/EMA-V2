@@ -133,6 +133,24 @@ func Migrate() error {
 		return err
 	}
 
+	// Password resets table for recovery tokens
+	log.Printf("[MIGRATION] Creating password_resets table if not exists...")
+	createPasswordResets := `
+	CREATE TABLE IF NOT EXISTS password_resets (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		email VARCHAR(191) NOT NULL,
+		token VARCHAR(255) NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP NOT NULL,
+		INDEX idx_email_token (email, token),
+		INDEX idx_expires (expires_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+	if _, err := db.Exec(createPasswordResets); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating password_resets table: %v", err)
+		return err
+	}
+	log.Printf("[MIGRATION] ✅ password_resets table ready")
+
 	// Medical categories table for quizzes/tests
 	log.Printf("[MIGRATION] Creating medical_categories table if not exists...")
 	createMedicalCategories := `
@@ -171,7 +189,79 @@ func Migrate() error {
 	}
 	log.Printf("[MIGRATION] ✅ test_history table ready")
 
+	// Asegurar que todos los usuarios existentes tengan un rol
+	if err := ensureUsersHaveRole(); err != nil {
+		log.Printf("[MIGRATION] ⚠️ WARNING ensuring users have roles: %v", err)
+	}
+
+	// Crear usuario admin por defecto si no existe
+	if err := createDefaultAdminUser(); err != nil {
+		log.Printf("[MIGRATION] ⚠️ WARNING creating default admin user: %v", err)
+		// No retornar error para no bloquear la migración completa
+	}
+
 	log.Printf("[MIGRATION] ✅ All migrations completed successfully")
+	return nil
+}
+
+// ensureUsersHaveRole actualiza todos los usuarios sin rol para que tengan 'user'
+func ensureUsersHaveRole() error {
+	log.Printf("[MIGRATION] Ensuring all users have a role...")
+
+	updateQuery := "UPDATE users SET role = 'user' WHERE role IS NULL OR role = ''"
+	result, err := db.Exec(updateQuery)
+	if err != nil {
+		return fmt.Errorf("error updating users without role: %v", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		log.Printf("[MIGRATION] ✅ Updated %d users to have 'user' role", rowsAffected)
+	} else {
+		log.Printf("[MIGRATION] ✅ All users already have roles assigned")
+	}
+
+	return nil
+}
+
+// createDefaultAdminUser crea el usuario administrador por defecto si no existe
+func createDefaultAdminUser() error {
+	adminEmail := "drleonardoherrerac@gmail.com"
+
+	// Verificar si el usuario ya existe
+	var count int
+	checkQuery := "SELECT COUNT(*) FROM users WHERE email = ?"
+	if err := db.QueryRow(checkQuery, adminEmail).Scan(&count); err != nil {
+		return fmt.Errorf("error checking admin user: %v", err)
+	}
+
+	if count > 0 {
+		log.Printf("[MIGRATION] ✅ Admin user already exists: %s", adminEmail)
+		return nil
+	}
+
+	// Crear el usuario admin
+	// Nota: La contraseña debería ser hasheada en producción
+	// Por ahora usamos una contraseña temporal que el admin debe cambiar
+	insertQuery := `
+		INSERT INTO users (first_name, last_name, email, password, role, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+	`
+
+	_, err := db.Exec(
+		insertQuery,
+		"Leonardo",
+		"Herrera",
+		adminEmail,
+		"admin123",    // Contraseña temporal - DEBE SER CAMBIADA
+		"super_admin", // Rol para panel admin
+	)
+
+	if err != nil {
+		return fmt.Errorf("error creating admin user: %v", err)
+	}
+
+	log.Printf("[MIGRATION] ✅ Default admin user created: %s (password: admin123 - PLEASE CHANGE)", adminEmail)
 	return nil
 }
 
@@ -434,6 +524,49 @@ func EmailExists(email string) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// CreatePasswordResetToken creates a new password reset token for the given email
+func CreatePasswordResetToken(email, token string, expiresAt time.Time) error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	_, err := db.Exec(
+		"INSERT INTO password_resets (email, token, expires_at) VALUES (?, ?, ?)",
+		email, token, expiresAt,
+	)
+	return err
+}
+
+// ValidatePasswordResetToken checks if the token is valid and not expired
+func ValidatePasswordResetToken(email, token string) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("db is not initialized")
+	}
+	var count int
+	query := "SELECT COUNT(1) FROM password_resets WHERE email = ? AND token = ? AND expires_at > NOW()"
+	if err := db.QueryRow(query, email, token).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// DeletePasswordResetToken removes used or expired tokens for the given email
+func DeletePasswordResetToken(email string) error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	_, err := db.Exec("DELETE FROM password_resets WHERE email = ?", email)
+	return err
+}
+
+// CleanExpiredPasswordResets removes expired tokens (cleanup job)
+func CleanExpiredPasswordResets() error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+	_, err := db.Exec("DELETE FROM password_resets WHERE expires_at < NOW()")
+	return err
 }
 
 // EnsureFreeSubscriptionForUser creates a Free subscription for the user if none exists

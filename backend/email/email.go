@@ -45,6 +45,29 @@ func SendPasswordChanged(to string) error {
 	return nil
 }
 
+// SendPasswordReset envía el correo con el enlace de recuperación de contraseña
+func SendPasswordReset(to, resetLink string) error {
+	subject := "Recuperación de contraseña - EMA"
+	body := fmt.Sprintf(`Hola,
+
+Recibimos una solicitud para restablecer tu contraseña.
+
+Haz clic en el siguiente enlace para crear una nueva contraseña:
+%s
+
+Este enlace expirará en 1 hora.
+
+Si no solicitaste este cambio, puedes ignorar este correo.
+
+Saludos,
+Equipo EMA`, resetLink)
+	if err := send(to, subject, body); err != nil {
+		return err
+	}
+	log.Printf("[EMAIL] password reset sent to %s", to)
+	return nil
+}
+
 // SendUpgradeSuggestion envía un correo promocionando los planes premium.
 func SendUpgradeSuggestion(to string) error {
 	subject := "Actualiza a un plan premium"

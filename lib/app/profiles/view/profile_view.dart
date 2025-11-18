@@ -8,24 +8,55 @@ import 'package:ema_educacion_medica_avanzada/core/users/user_service.dart';
 
 import '../widgets/premium_feature_wrapper.dart';
 
-class ProfileView extends GetView<ProfileController> {
+import 'dart:async';
+
+class ProfileView extends StatefulWidget {
   const ProfileView({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final UserService userService = Get.find<UserService>();
+  State<ProfileView> createState() => _ProfileViewState();
+}
 
-    // Refrescar datos premium solo si tiene acceso a estadísticas
+class _ProfileViewState extends State<ProfileView> {
+  Timer? _refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (controller.currentProfile.value.activeSubscription?.statistics == 1 &&
-          Get.find<UserTestProgressController>().testScores.isEmpty) {
+      final controller = Get.find<ProfileController>();
+      if (controller.currentProfile.value.activeSubscription?.statistics == 1) {
         final progressController = Get.find<UserTestProgressController>();
+
+        // Cargar estadísticas iniciales
         progressController.refreshAllStatistics(
           userId: controller.currentProfile.value.id,
           authToken: controller.currentProfile.value.authToken,
         );
+
+        // Configurar polling cada 2 minutos para detectar cambios automáticamente
+        _refreshTimer = Timer.periodic(const Duration(minutes: 2), (timer) {
+          if (mounted) {
+            progressController.refreshAllStatistics(
+              userId: controller.currentProfile.value.id,
+              authToken: controller.currentProfile.value.authToken,
+            );
+          }
+        });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final UserService userService = Get.find<UserService>();
 
     return Scaffold(
       appBar: AppBar(
