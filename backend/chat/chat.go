@@ -342,9 +342,14 @@ func (h *Handler) Message(c *gin.Context) {
 		if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
 			// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
 			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" {
-				prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
-					"Pregunta: " + prompt + "\n\n" +
-					"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
+				prompt = "Responde basándote EXCLUSIVAMENTE en los documentos PDF adjuntos a este hilo. No uses conocimiento externo.\n\n" +
+					"Pregunta del usuario: " + prompt + "\n\n" +
+					"Instrucciones:\n" +
+					"1. Responde de forma clara, profesional y directa usando SOLO la información de los PDFs\n" +
+					"2. Si necesitas citar, indica la sección/página del documento\n" +
+					"3. Si el PDF no contiene información para responder, di claramente: 'El documento adjunto no contiene información sobre esto'\n" +
+					"4. NO inventes ni agregues información que no esté en los PDFs\n" +
+					"5. Al final agrega: 'Fuente: [nombre del documento]'"
 				c.Header("X-Source-Used", "doc_only")
 			} else if strings.TrimSpace(prompt) != "" {
 				// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed
@@ -417,9 +422,14 @@ func (h *Handler) Message(c *gin.Context) {
 		// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
 		prompt := req.Prompt
 		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" {
-			prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
-				"Pregunta: " + prompt + "\n\n" +
-				"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
+			prompt = "Responde basándote EXCLUSIVAMENTE en los documentos PDF adjuntos a este hilo. No uses conocimiento externo.\n\n" +
+				"Pregunta del usuario: " + prompt + "\n\n" +
+				"Instrucciones:\n" +
+				"1. Responde de forma clara, profesional y directa usando SOLO la información de los PDFs\n" +
+				"2. Si necesitas citar, indica la sección/página del documento\n" +
+				"3. Si el PDF no contiene información para responder, di claramente: 'El documento adjunto no contiene información sobre esto'\n" +
+				"4. NO inventes ni agregues información que no esté en los PDFs\n" +
+				"5. Al final agrega: 'Fuente: [nombre del documento]'\n"
 			c.Header("X-Source-Used", "doc_only")
 		} else if strings.TrimSpace(prompt) != "" {
 			// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed
