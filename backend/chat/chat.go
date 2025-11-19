@@ -342,14 +342,16 @@ func (h *Handler) Message(c *gin.Context) {
 		if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
 			// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
 			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" {
-				prompt = "Responde basándote EXCLUSIVAMENTE en los documentos PDF adjuntos a este hilo. No uses conocimiento externo.\n\n" +
-					"Pregunta del usuario: " + prompt + "\n\n" +
-					"Instrucciones:\n" +
-					"1. Responde de forma clara, profesional y directa usando SOLO la información de los PDFs\n" +
-					"2. Si necesitas citar, indica la sección/página del documento\n" +
-					"3. Si el PDF no contiene información para responder, di claramente: 'El documento adjunto no contiene información sobre esto'\n" +
-					"4. NO inventes ni agregues información que no esté en los PDFs\n" +
-					"5. Al final agrega: 'Fuente: [nombre del documento]'"
+				prompt = "INSTRUCCIÓN CRÍTICA: Responde ÚNICAMENTE con información que aparezca TEXTUALMENTE en los documentos PDF adjuntos. NO inventes, NO supongas, NO uses conocimiento general.\n\n" +
+					"Pregunta: " + prompt + "\n\n" +
+					"REGLAS OBLIGATORIAS:\n" +
+					"• Lee cuidadosamente el contenido REAL del PDF antes de responder\n" +
+					"• Si el PDF tiene secciones/estructura, descríbelas TAL COMO APARECEN (no inventes 'Antecedentes', 'Metodología', etc. si no están)\n" +
+					"• Para resúmenes: extrae los puntos principales que REALMENTE aparecen en el texto\n" +
+					"• Si algo no está en el PDF, di EXPLÍCITAMENTE: 'Esta información no aparece en el documento'\n" +
+					"• NO agregues términos médicos, estructura académica, ni información que no esté en el PDF\n" +
+					"• Al final: 'Fuente: [nombre del PDF]'\n\n" +
+					"RECUERDA: Es mejor decir 'no está en el documento' que inventar."
 				c.Header("X-Source-Used", "doc_only")
 			} else if strings.TrimSpace(prompt) != "" {
 				// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed
@@ -422,14 +424,16 @@ func (h *Handler) Message(c *gin.Context) {
 		// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
 		prompt := req.Prompt
 		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" {
-			prompt = "Responde basándote EXCLUSIVAMENTE en los documentos PDF adjuntos a este hilo. No uses conocimiento externo.\n\n" +
-				"Pregunta del usuario: " + prompt + "\n\n" +
-				"Instrucciones:\n" +
-				"1. Responde de forma clara, profesional y directa usando SOLO la información de los PDFs\n" +
-				"2. Si necesitas citar, indica la sección/página del documento\n" +
-				"3. Si el PDF no contiene información para responder, di claramente: 'El documento adjunto no contiene información sobre esto'\n" +
-				"4. NO inventes ni agregues información que no esté en los PDFs\n" +
-				"5. Al final agrega: 'Fuente: [nombre del documento]'\n"
+			prompt = "INSTRUCCIÓN CRÍTICA: Responde ÚNICAMENTE con información que aparezca TEXTUALMENTE en los documentos PDF adjuntos. NO inventes, NO supongas, NO uses conocimiento general.\n\n" +
+				"Pregunta: " + prompt + "\n\n" +
+				"REGLAS OBLIGATORIAS:\n" +
+				"• Lee cuidadosamente el contenido REAL del PDF antes de responder\n" +
+				"• Si el PDF tiene secciones/estructura, descríbelas TAL COMO APARECEN (no inventes 'Antecedentes', 'Metodología', etc. si no están)\n" +
+				"• Para resúmenes: extrae los puntos principales que REALMENTE aparecen en el texto\n" +
+				"• Si algo no está en el PDF, di EXPLÍCITAMENTE: 'Esta información no aparece en el documento'\n" +
+				"• NO agregues términos médicos, estructura académica, ni información que no esté en el PDF\n" +
+				"• Al final: 'Fuente: [nombre del PDF]'\n\n" +
+				"RECUERDA: Es mejor decir 'no está en el documento' que inventar."
 			c.Header("X-Source-Used", "doc_only")
 		} else if strings.TrimSpace(prompt) != "" {
 			// Conversación general (sin PDFs): exigir fuentes de biblioteca + PubMed

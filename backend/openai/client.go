@@ -2684,7 +2684,7 @@ func (c *Client) QuickVectorSearch(ctx context.Context, vectorStoreID, query str
 	}
 
 	payload := map[string]any{"query": query}
-	
+
 	// Retry con backoff exponencial para errores transitorios de OpenAI
 	var resp *http.Response
 	var err error
@@ -2795,7 +2795,7 @@ func (c *Client) QuickVectorSearchMultiple(ctx context.Context, vectorStoreID, q
 	}
 
 	payload := map[string]any{"query": query}
-	
+
 	// Retry con backoff exponencial para errores transitorios de OpenAI
 	var resp *http.Response
 	var err error
