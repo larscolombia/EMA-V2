@@ -1,0 +1,9 @@
+﻿# Redirección para Apache (si aplica)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Para Flutter web: todas las rutas sin archivo físico van a index.html
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ index.html [L]
+</IfModule>
