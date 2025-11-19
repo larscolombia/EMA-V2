@@ -274,12 +274,12 @@ func ForgotPasswordHandler(c *gin.Context) {
 			return
 		}
 
-		// Build reset link
-		// TODO: Cambiar a https://emma.drleonardoherrera.com para producción
-		frontendURL := "http://localhost:52444"
-		resetLink := fmt.Sprintf("%s/#/reset-password?token=%s&email=%s", frontendURL, token, p.Email)
-
-		// Send email
+		// Build reset link - usa variable de entorno o fallback a producción
+		frontendURL := os.Getenv("FRONTEND_URL")
+		if frontendURL == "" {
+			frontendURL = "https://emma.drleonardoherrera.com"
+		}
+		resetLink := fmt.Sprintf("%s/#/reset-password?token=%s&email=%s", frontendURL, token, p.Email) // Send email
 		if err := mailer.SendPasswordReset(p.Email, resetLink); err != nil {
 			log.Printf("Error sending password reset email to %s: %v", p.Email, err)
 			// Don't reveal if email sending failed

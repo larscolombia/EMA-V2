@@ -24,8 +24,10 @@ import (
 	"ema-backend/openai"
 	"ema-backend/profile"
 	"ema-backend/quota"
+	"ema-backend/stats"
 	"ema-backend/subscriptions"
 	"ema-backend/testsapi"
+	"ema-backend/vectorstores"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -66,6 +68,9 @@ func main() {
 	if err := migrations.SeedMedicalCategories(); err != nil {
 		log.Printf("seed medical categories failed: %v", err)
 	}
+
+	// Initialize stats package with DB
+	stats.Init(db)
 
 	mk := marketing.NewService(db)
 	go mk.Start()
@@ -202,6 +207,13 @@ func main() {
 
 	// Countries route (simple list)
 	countries.RegisterRoutes(r)
+
+	// Admin statistics routes
+	stats.RegisterAdminRoutes(r)
+
+	// Admin vector stores management routes
+	adminGroup := r.Group("/admin")
+	vectorstores.RegisterRoutes(adminGroup, db, ai)
 
 	// Medical categories
 	catRepo := categories.NewRepository(db)

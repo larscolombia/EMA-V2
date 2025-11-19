@@ -4348,3 +4348,133 @@ func (c *Client) StreamMessageWithImageCompatible(ctx context.Context, threadID,
 	log.Printf("[hybrid][routing] thread=%s using_assistants_api=true (image mode)", threadID)
 	return c.StreamAssistantMessageWithImage(ctx, threadID, prompt, imagePath)
 }
+
+// ============================================================================
+// Public API Methods for Vector Store Management (Admin Panel)
+// ============================================================================
+
+// UploadFile sube un archivo a OpenAI y retorna su file ID
+func (c *Client) UploadFile(ctx context.Context, filePath, purpose string) (string, error) {
+	if c.key == "" {
+		return "", fmt.Errorf("OpenAI API key not set")
+	}
+
+	// Verificar que el archivo existe
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return "", fmt.Errorf("file not found: %s", filePath)
+	}
+
+	// Abrir archivo para upload
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	// Subir a OpenAI
+	resp, err := c.doMultipart(ctx, http.MethodPost, "/files", map[string]io.Reader{
+		"file":    f,
+		"purpose": bytes.NewBufferString(purpose),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("file upload failed: %s", string(b))
+	}
+
+	var data struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+
+	log.Printf("[openai][UploadFile] uploaded file_id=%s filename=%s", data.ID, filepath.Base(filePath))
+	return data.ID, nil
+}
+
+// DeleteFile elimina un archivo de OpenAI
+func (c *Client) DeleteFile(ctx context.Context, fileID string) error {
+	return c.deleteFile(ctx, fileID)
+}
+
+// VectorStoreFileDetail contiene información detallada de un archivo en un vector store
+type VectorStoreFileDetail struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Status    string `json:"status"`
+}
+
+// ListVectorStoreFilesDetailed lista archivos de un vector store con detalles completos
+func (c *Client) ListVectorStoreFilesDetailed(ctx context.Context, vectorStoreID string) ([]VectorStoreFileDetail, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/vector_stores/"+vectorStoreID+"/files?limit=100", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("OpenAI API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	// Solo devolver IDs y status, sin metadata adicional
+	// El handler decidirá cuáles necesitan metadata
+	files := make([]VectorStoreFileDetail, len(result.Data))
+	for i, f := range result.Data {
+		files[i] = VectorStoreFileDetail{
+			ID:     f.ID,
+			Status: f.Status,
+		}
+	}
+
+	return files, nil
+}
+
+// GetFileInfo obtiene información de un archivo específico (público para el handler)
+func (c *Client) GetFileInfo(ctx context.Context, fileID string) (*FileInfoResponse, error) {
+	return c.getFileInfo(ctx, fileID)
+}
+
+// FileInfoResponse estructura de respuesta de la API de files
+type FileInfoResponse struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	Bytes    int64  `json:"bytes"`
+	Purpose  string `json:"purpose"`
+}
+
+// getFileInfo obtiene información de un archivo específico
+func (c *Client) getFileInfo(ctx context.Context, fileID string) (*FileInfoResponse, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/files/"+fileID, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("file not found or error: %d", resp.StatusCode)
+	}
+
+	var info FileInfoResponse
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+
+	return &info, nil
+}

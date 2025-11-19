@@ -189,6 +189,56 @@ func Migrate() error {
 	}
 	log.Printf("[MIGRATION] ✅ test_history table ready")
 
+	// Vector Stores tables for multi-vector-store management
+	log.Printf("[MIGRATION] Creating vector_stores table if not exists...")
+	createVectorStores := `
+	CREATE TABLE IF NOT EXISTS vector_stores (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(255) NOT NULL COMMENT 'Nombre descriptivo del vector store',
+		vector_store_id VARCHAR(255) NOT NULL UNIQUE COMMENT 'ID del vector store en OpenAI (vs_xxx)',
+		description TEXT COMMENT 'Descripción del propósito del vector store',
+		category VARCHAR(100) COMMENT 'Categoría (medicina_general, cardiologia, neurologia, etc)',
+		is_default BOOLEAN DEFAULT FALSE COMMENT 'Si es el vector store por defecto',
+		file_count INT DEFAULT 0 COMMENT 'Número de archivos en el vector store',
+		total_bytes BIGINT DEFAULT 0 COMMENT 'Tamaño total en bytes',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		INDEX idx_category (category),
+		INDEX idx_default (is_default)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+	if _, err := db.Exec(createVectorStores); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating vector_stores table: %v", err)
+		return err
+	}
+	log.Printf("[MIGRATION] ✅ vector_stores table ready")
+
+	log.Printf("[MIGRATION] Creating vector_store_files table if not exists...")
+	createVectorStoreFiles := `
+	CREATE TABLE IF NOT EXISTS vector_store_files (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		vector_store_id VARCHAR(255) NOT NULL COMMENT 'ID del vector store en OpenAI',
+		file_id VARCHAR(255) NOT NULL COMMENT 'ID del archivo en OpenAI (file-xxx)',
+		filename VARCHAR(500) NOT NULL COMMENT 'Nombre original del archivo',
+		file_size BIGINT COMMENT 'Tamaño del archivo en bytes',
+		status VARCHAR(50) DEFAULT 'processing' COMMENT 'Estado: processing, completed, failed',
+		uploaded_by INT COMMENT 'ID del admin que subió el archivo',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		UNIQUE KEY unique_file_vector (vector_store_id, file_id),
+		INDEX idx_vector_store (vector_store_id),
+		INDEX idx_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+	if _, err := db.Exec(createVectorStoreFiles); err != nil {
+		log.Printf("[MIGRATION] ❌ ERROR creating vector_store_files table: %v", err)
+		return err
+	}
+	log.Printf("[MIGRATION] ✅ vector_store_files table ready")
+
+	// Seed default vector store if it doesn't exist
+	if err := seedDefaultVectorStore(); err != nil {
+		log.Printf("[MIGRATION] ⚠️ WARNING seeding default vector store: %v", err)
+	}
+
 	// Asegurar que todos los usuarios existentes tengan un rol
 	if err := ensureUsersHaveRole(); err != nil {
 		log.Printf("[MIGRATION] ⚠️ WARNING ensuring users have roles: %v", err)
@@ -283,6 +333,65 @@ func ensureColumnExists(table, column, columnDef string) error {
 		return nil
 	}
 	log.Printf("[MIGRATION] Column %s.%s already exists", table, column)
+	return nil
+}
+
+// seedDefaultVectorStore inserts the default global vector store if it doesn't exist
+func seedDefaultVectorStore() error {
+	if db == nil {
+		return fmt.Errorf("db is not initialized")
+	}
+
+	log.Printf("[MIGRATION] Seeding default vector stores...")
+
+	// Vector stores a crear
+	vectorStores := []struct {
+		Name          string
+		VectorStoreID string
+		Description   string
+		Category      string
+		IsDefault     bool
+	}{
+		{
+			Name:          "Biblioteca Médica General",
+			VectorStoreID: "vs_680fc484cef081918b2b9588b701e2f4",
+			Description:   "Vector store principal con libros de medicina general y especialidades",
+			Category:      "Medicina General",
+			IsDefault:     true,
+		},
+		{
+			Name:          "Banco de Preguntas",
+			VectorStoreID: "vs_691deb92da488191aaeefba2b80406d7",
+			Description:   "Base de datos de preguntas y cuestionarios médicos",
+			Category:      "Cuestionarios",
+			IsDefault:     false,
+		},
+	}
+
+	insertQuery := `
+		INSERT INTO vector_stores (name, vector_store_id, description, category, is_default, file_count)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), category = VALUES(category)
+	`
+
+	for _, vs := range vectorStores {
+		_, err := db.Exec(
+			insertQuery,
+			vs.Name,
+			vs.VectorStoreID,
+			vs.Description,
+			vs.Category,
+			vs.IsDefault,
+			0,
+		)
+
+		if err != nil {
+			log.Printf("[MIGRATION] ⚠️ Warning creating vector store %s: %v", vs.VectorStoreID, err)
+		} else {
+			log.Printf("[MIGRATION] ✅ Vector store ready: %s (%s)", vs.Name, vs.VectorStoreID)
+		}
+	}
+
 	return nil
 }
 

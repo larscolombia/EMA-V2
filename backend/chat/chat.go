@@ -340,8 +340,8 @@ func (h *Handler) Message(c *gin.Context) {
 		formThreadID := h.resolveAssistantThread(c, c.PostForm("thread_id"))
 		log.Printf("[chat][Message][multipart.tail] resolved_thread=%s assistant_id=%s prompt_len=%d", formThreadID, h.AI.GetAssistantID(), len(prompt))
 		if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(formThreadID, "thread_") {
-			// Si el hilo ya tiene documentos, solo forzar doc-only si el prompt hace referencia al PDF/documento
-			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" && referencesDocument(prompt) {
+			// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
+			if h.AI.CountThreadFiles(formThreadID) > 0 && strings.TrimSpace(prompt) != "" {
 				prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
 					"Pregunta: " + prompt + "\n\n" +
 					"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."
@@ -414,9 +414,9 @@ func (h *Handler) Message(c *gin.Context) {
 	// Use Assistants flow when configured
 	resolved := h.resolveAssistantThread(c, req.ThreadID)
 	if h.AI.GetAssistantID() != "" && len(h.AI.GetAssistantID()) >= 5 && strings.HasPrefix(h.AI.GetAssistantID(), "asst_") && strings.HasPrefix(resolved, "thread_") {
-		// Si el hilo ya tiene documentos cargados, forzar modo doc-only para esta pregunta
+		// Si el hilo ya tiene documentos PDF cargados, SIEMPRE forzar doc-only (prioridad al contexto del usuario)
 		prompt := req.Prompt
-		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" && referencesDocument(prompt) {
+		if h.AI.CountThreadFiles(resolved) > 0 && strings.TrimSpace(prompt) != "" {
 			prompt = "Tu única fuente de información son los documentos PDF adjuntos de este hilo.\n\n" +
 				"Pregunta: " + prompt + "\n\n" +
 				"Reglas estrictas:\n- No agregues conocimiento externo; no inventes.\n- No repitas párrafos o fragmentos textuales completos salvo que se te pida explícitamente.\n- Si la pregunta no puede contestarse con la información del PDF, responde exactamente: \"El documento no contiene información para responder esta pregunta.\".\n- Estilo: profesional, claro y preciso; prioriza la precisión antes que la extensión.\n- Añade al final: \"Fuente: documentos adjuntos del hilo\"."

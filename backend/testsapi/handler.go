@@ -138,10 +138,8 @@ func (h *Handler) generate(c *gin.Context) {
 	}
 
 	// PASO 1: Realizar búsquedas en libros y PubMed para basar las preguntas en fuentes confiables
-	vectorID := os.Getenv("CUESTIONARIOS_VECTOR_STORE_ID")
-	if vectorID == "" {
-		vectorID = "vs_680fc484cef081918b2b9588b701e2f4" // vector por defecto de cuestionarios médicos
-	}
+	// Vector store específico para banco de preguntas médicas
+	vectorID := "vs_691deb92da488191aaeefba2b80406d7"
 
 	// Construir query de búsqueda basada en categorías o medicina interna
 	searchQuery := "medicina interna"
@@ -337,10 +335,8 @@ func (h *Handler) evaluate(c *gin.Context) {
 	defer cancel()
 
 	// PASO 1: Buscar en fuentes médicas para fundamentar la evaluación
-	vectorID := os.Getenv("CUESTIONARIOS_VECTOR_STORE_ID")
-	if vectorID == "" {
-		vectorID = "vs_680fc484cef081918b2b9588b701e2f4"
-	}
+	// Vector store específico para banco de preguntas médicas
+	vectorID := "vs_691deb92da488191aaeefba2b80406d7"
 
 	// Construir query basada en las respuestas del usuario para buscar contexto relevante
 	searchQuery := "evaluación médica"
