@@ -378,9 +378,21 @@ func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string
 	var err error
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		resp, err = c.doJSON(ctx, http.MethodPost, "/vector_stores", payload)
+		// Crear contexto hijo con timeout independiente para cada intento
+		attemptCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		resp, err = c.doJSON(attemptCtx, http.MethodPost, "/vector_stores", payload)
+		cancel() // Liberar recursos inmediatamente
+
 		if err != nil {
 			if attempt < maxRetries {
+				// Verificar si el contexto padre sigue válido antes de reintentar
+				select {
+				case <-ctx.Done():
+					fmt.Printf("ERROR: Parent context canceled before retry for thread: %s\n", threadID)
+					return "", ctx.Err()
+				default:
+				}
+
 				backoff := time.Duration(attempt*attempt) * time.Second // 1s, 4s
 				log.Printf("[vector_store][retry] thread=%s attempt=%d/%d err=%v backoff=%v", threadID, attempt, maxRetries, err, backoff)
 				time.Sleep(backoff)
@@ -395,6 +407,15 @@ func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string
 			// Error del servidor de OpenAI - reintentar
 			b, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+
+			// Verificar si el contexto padre sigue válido
+			select {
+			case <-ctx.Done():
+				fmt.Printf("ERROR: Parent context canceled before retry for thread: %s\n", threadID)
+				return "", ctx.Err()
+			default:
+			}
+
 			backoff := time.Duration(attempt*attempt) * time.Second
 			log.Printf("[vector_store][retry] thread=%s attempt=%d/%d status=%d err=%s backoff=%v", threadID, attempt, maxRetries, resp.StatusCode, string(b), backoff)
 			time.Sleep(backoff)
@@ -2663,10 +2684,50 @@ func (c *Client) QuickVectorSearch(ctx context.Context, vectorStoreID, query str
 	}
 
 	payload := map[string]any{"query": query}
-	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
-	if err != nil {
-		return nil, err
+	
+	// Retry con backoff exponencial para errores transitorios de OpenAI
+	var resp *http.Response
+	var err error
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Contexto hijo con timeout independiente para cada intento
+		attemptCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		resp, err = c.doJSON(attemptCtx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
+		cancel()
+
+		if err != nil {
+			if attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
+				backoff := time.Duration(attempt*attempt) * time.Second
+				log.Printf("[vector_search][retry] vs=%s attempt=%d/%d err=%v backoff=%v", vectorStoreID, attempt, maxRetries, err, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			return nil, err
+		}
+
+		// Verificar status code
+		if resp.StatusCode >= 500 && attempt < maxRetries {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			backoff := time.Duration(attempt*attempt) * time.Second
+			log.Printf("[vector_search][retry] vs=%s attempt=%d/%d status=%d err=%s backoff=%v", vectorStoreID, attempt, maxRetries, resp.StatusCode, string(b), backoff)
+			time.Sleep(backoff)
+			continue
+		}
+
+		break
 	}
+
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
@@ -2734,10 +2795,50 @@ func (c *Client) QuickVectorSearchMultiple(ctx context.Context, vectorStoreID, q
 	}
 
 	payload := map[string]any{"query": query}
-	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
-	if err != nil {
-		return nil, err
+	
+	// Retry con backoff exponencial para errores transitorios de OpenAI
+	var resp *http.Response
+	var err error
+	maxAttempts := 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Contexto hijo con timeout independiente para cada intento
+		attemptCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		resp, err = c.doJSON(attemptCtx, http.MethodPost, "/vector_stores/"+vectorStoreID+"/search", payload)
+		cancel()
+
+		if err != nil {
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+				}
+				backoff := time.Duration(attempt*attempt) * time.Second
+				log.Printf("[vector_search_multi][retry] vs=%s attempt=%d/%d err=%v backoff=%v", vectorStoreID, attempt, maxAttempts, err, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			return nil, err
+		}
+
+		// Verificar status code
+		if resp.StatusCode >= 500 && attempt < maxAttempts {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			backoff := time.Duration(attempt*attempt) * time.Second
+			log.Printf("[vector_search_multi][retry] vs=%s attempt=%d/%d status=%d err=%s backoff=%v", vectorStoreID, attempt, maxAttempts, resp.StatusCode, string(b), backoff)
+			time.Sleep(backoff)
+			continue
+		}
+
+		break
 	}
+
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
