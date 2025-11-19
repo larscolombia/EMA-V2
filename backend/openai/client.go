@@ -369,14 +369,42 @@ func (c *Client) ensureVectorStore(ctx context.Context, threadID string) (string
 		return id, nil
 	}
 	c.vsMu.RUnlock()
-	// create new vector store named with threadID
+	// create new vector store named with threadID (con retry para errores transitorios)
 	payload := map[string]any{"name": "vs_session_" + threadID}
 	fmt.Printf("DEBUG: Creating new vector store for thread: %s\n", threadID)
-	resp, err := c.doJSON(ctx, http.MethodPost, "/vector_stores", payload)
-	if err != nil {
-		fmt.Printf("ERROR: Failed to create vector store: %v\n", err)
-		return "", err
+
+	// Retry con backoff exponencial (hasta 3 intentos)
+	var resp *http.Response
+	var err error
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, err = c.doJSON(ctx, http.MethodPost, "/vector_stores", payload)
+		if err != nil {
+			if attempt < maxRetries {
+				backoff := time.Duration(attempt*attempt) * time.Second // 1s, 4s
+				log.Printf("[vector_store][retry] thread=%s attempt=%d/%d err=%v backoff=%v", threadID, attempt, maxRetries, err, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			fmt.Printf("ERROR: Failed to create vector store after %d attempts: %v\n", maxRetries, err)
+			return "", err
+		}
+
+		// Verificar status code
+		if resp.StatusCode >= 500 && attempt < maxRetries {
+			// Error del servidor de OpenAI - reintentar
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			backoff := time.Duration(attempt*attempt) * time.Second
+			log.Printf("[vector_store][retry] thread=%s attempt=%d/%d status=%d err=%s backoff=%v", threadID, attempt, maxRetries, resp.StatusCode, string(b), backoff)
+			time.Sleep(backoff)
+			continue
+		}
+
+		// Éxito o error del cliente (4xx) - no reintentar
+		break
 	}
+
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
@@ -2867,9 +2895,7 @@ func canonicalDocKey(raw string) string {
 		return ""
 	}
 	for _, ext := range []string{".pdf", ".docx", ".doc", ".txt"} {
-		if strings.HasSuffix(base, ext) {
-			base = strings.TrimSuffix(base, ext)
-		}
+		base = strings.TrimSuffix(base, ext)
 	}
 	base = strings.ReplaceAll(base, "-", "_")
 	base = strings.ReplaceAll(base, " ", "_")

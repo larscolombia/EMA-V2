@@ -140,13 +140,14 @@ func (h *Handler) generate(c *gin.Context) {
 	// PASO 1: Realizar búsquedas en libros y PubMed para basar las preguntas en fuentes confiables
 	// Vector store específico para banco de preguntas médicas
 	vectorID := "vs_691deb92da488191aaeefba2b80406d7"
+	log.Printf("[testsapi.generate] VECTOR_CONFIGURED: using vector_store_id=%s (Banco de Preguntas)", vectorID)
 
 	// Construir query de búsqueda basada en categorías o medicina interna
 	searchQuery := "medicina interna"
 	if len(catNames) > 0 {
 		searchQuery = strings.Join(catNames, " ")
 	}
-	log.Printf("[testsapi.generate] searching sources: categories=%v query=%s", catNames, searchQuery)
+	log.Printf("[testsapi.generate] searching sources: categories=%v query=%s vector_id=%s", catNames, searchQuery, vectorID)
 
 	// Buscar en libros (vector store)
 	vectorContext := ""
@@ -337,6 +338,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 	// PASO 1: Buscar en fuentes médicas para fundamentar la evaluación
 	// Vector store específico para banco de preguntas médicas
 	vectorID := "vs_691deb92da488191aaeefba2b80406d7"
+	log.Printf("[testsapi.evaluate] VECTOR_CONFIGURED: using vector_store_id=%s (Banco de Preguntas)", vectorID)
 
 	// Construir query basada en las respuestas del usuario para buscar contexto relevante
 	searchQuery := "evaluación médica"
@@ -344,7 +346,7 @@ func (h *Handler) evaluate(c *gin.Context) {
 		// Usar la primera pregunta como contexto de búsqueda
 		searchQuery = req.Items[0].Answer
 	}
-	log.Printf("[testsapi.evaluate] searching sources for evaluation: query=%s", searchQuery)
+	log.Printf("[testsapi.evaluate] searching sources for evaluation: query=%s vector_id=%s", searchQuery, vectorID)
 
 	// Buscar contexto en libros
 	vectorContext := ""
