@@ -493,6 +493,11 @@ type UserListItem struct {
 
 // getUsersList returns paginated list of users with filters
 // Query params: limit, offset, search, has_subscription, plan_id, sort_by, order
+//
+// This endpoint returns ONE row per user, showing their most relevant subscription:
+// - Priority 1: Active subscription (end_date IS NULL OR end_date > NOW)
+// - Priority 2: Most recent subscription by start_date DESC
+// This prevents users from appearing multiple times when they have multiple subscriptions.
 func getUsersList(c *gin.Context) {
 	if db == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
@@ -506,6 +511,8 @@ func getUsersList(c *gin.Context) {
 	sortBy := c.DefaultQuery("sort_by", "created_at")
 	order := c.DefaultQuery("order", "DESC")
 
+	// Subquery to get the most recent/active subscription per user
+	// Priority: 1) Active subscription, 2) Most recent subscription by start_date
 	query := `
 		SELECT 
 			u.id,
@@ -514,11 +521,21 @@ func getUsersList(c *gin.Context) {
 			u.last_name,
 			u.created_at,
 			IFNULL(p.name, '') as plan_name,
-			IFNULL(s.id, 0) as subscription_id,
-			CASE WHEN s.id IS NOT NULL THEN 1 ELSE 0 END as has_subscription
+			IFNULL(active_sub.id, 0) as subscription_id,
+			CASE WHEN active_sub.id IS NOT NULL THEN 1 ELSE 0 END as has_subscription
 		FROM users u
-		LEFT JOIN subscriptions s ON u.id = s.user_id AND (s.end_date IS NULL OR s.end_date > NOW())
-		LEFT JOIN subscription_plans p ON s.plan_id = p.id
+		LEFT JOIN (
+			SELECT 
+				s.*,
+				ROW_NUMBER() OVER (
+					PARTITION BY s.user_id 
+					ORDER BY 
+						CASE WHEN (s.end_date IS NULL OR s.end_date > NOW()) THEN 0 ELSE 1 END,
+						s.start_date DESC
+				) as rn
+			FROM subscriptions s
+		) active_sub ON u.id = active_sub.user_id AND active_sub.rn = 1
+		LEFT JOIN subscription_plans p ON active_sub.plan_id = p.id
 		WHERE 1=1
 	`
 
@@ -531,9 +548,9 @@ func getUsersList(c *gin.Context) {
 	}
 
 	if hasSubscription == "true" {
-		query += " AND s.id IS NOT NULL"
+		query += " AND active_sub.id IS NOT NULL AND (active_sub.end_date IS NULL OR active_sub.end_date > NOW())"
 	} else if hasSubscription == "false" {
-		query += " AND s.id IS NULL"
+		query += " AND (active_sub.id IS NULL OR (active_sub.end_date IS NOT NULL AND active_sub.end_date <= NOW()))"
 	}
 
 	// Validate sort_by to prevent SQL injection
@@ -570,15 +587,38 @@ func getUsersList(c *gin.Context) {
 		users = append(users, user)
 	}
 
-	// Get total count
+	// Get total count with same filters
 	var total int
-	countQuery := "SELECT COUNT(*) FROM users u WHERE 1=1"
+	countQuery := `
+		SELECT COUNT(DISTINCT u.id)
+		FROM users u
+		LEFT JOIN (
+			SELECT 
+				s.*,
+				ROW_NUMBER() OVER (
+					PARTITION BY s.user_id 
+					ORDER BY 
+						CASE WHEN (s.end_date IS NULL OR s.end_date > NOW()) THEN 0 ELSE 1 END,
+						s.start_date DESC
+				) as rn
+			FROM subscriptions s
+		) active_sub ON u.id = active_sub.user_id AND active_sub.rn = 1
+		WHERE 1=1
+	`
 	countArgs := []interface{}{}
+
 	if search != "" {
 		countQuery += " AND (u.email LIKE ? OR u.first_name LIKE ? OR u.last_name LIKE ?)"
 		searchPattern := "%" + search + "%"
 		countArgs = append(countArgs, searchPattern, searchPattern, searchPattern)
 	}
+
+	if hasSubscription == "true" {
+		countQuery += " AND active_sub.id IS NOT NULL AND (active_sub.end_date IS NULL OR active_sub.end_date > NOW())"
+	} else if hasSubscription == "false" {
+		countQuery += " AND (active_sub.id IS NULL OR (active_sub.end_date IS NOT NULL AND active_sub.end_date <= NOW()))"
+	}
+
 	db.QueryRow(countQuery, countArgs...).Scan(&total)
 
 	log.Printf("[USER_LIST] Returning %d users, total=%d", len(users), total)

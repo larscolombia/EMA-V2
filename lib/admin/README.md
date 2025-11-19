@@ -280,6 +280,16 @@ flutter build web --release --dart-define=API_BASE_URL=https://emma.drleonardohe
    - Editar perfiles
    - Cambiar planes
    - Estadísticas por usuario
+   - **NOTA**: Cada usuario aparece UNA SOLA VEZ, mostrando su suscripción activa o la más reciente
+
+###  Cambios Recientes
+
+**19 de noviembre de 2025 - Fix: Usuarios duplicados en lista**
+- **Problema**: Usuarios con múltiples suscripciones aparecían varias veces en la lista
+- **Solución**: Modificado endpoint `/admin/stats/users/list` para retornar un único registro por usuario
+- **Criterio**: Prioriza suscripción activa; si tiene varias, muestra la más reciente
+- **Archivos modificados**: `backend/stats/admin_stats.go`
+- **Query optimizado**: Usa `ROW_NUMBER()` con `PARTITION BY user_id` para deduplicar
 
 ###  Tecnologías Utilizadas
 
