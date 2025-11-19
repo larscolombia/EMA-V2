@@ -1852,70 +1852,24 @@ func (h *Handler) enrichQueryWithContext(prompt string, docNames []string) strin
 
 // buildDocOnlyPromptEnhanced construye prompt mejorado con fallbacks inteligentes
 func (h *Handler) buildDocOnlyPromptEnhanced(userPrompt string, docNames []string) string {
-	enrichedPrompt := h.enrichQueryWithContext(userPrompt, docNames)
-
-	docContext := "los PDFs adjuntos al thread"
+	docContext := "los documentos PDF adjuntos"
 	if len(docNames) > 0 {
-		docContext = fmt.Sprintf("el documento: %s", strings.Join(docNames, ", "))
+		docContext = fmt.Sprintf("el documento '%s'", strings.Join(docNames, ", "))
 	}
 
-	return fmt.Sprintf(`⚠️ INSTRUCCIÓN CRÍTICA: MODO DOCUMENTO PDF ⚠️
+	return fmt.Sprintf(`INSTRUCCIÓN CRÍTICA: Responde ÚNICAMENTE con información que aparezca TEXTUALMENTE en %s. NO inventes, NO supongas, NO uses conocimiento general.
 
-CONTEXTO: Este thread tiene documentos PDF cargados que debes consultar OBLIGATORIAMENTE.
+Pregunta: %s
 
-═══ TU TAREA ═══
-1. USA el tool "file_search" INMEDIATAMENTE para buscar en %s
-2. Lee ÚNICAMENTE el contenido que file_search te devuelva
-3. NO uses conocimiento médico general externo
+REGLAS OBLIGATORIAS:
+• Lee cuidadosamente el contenido REAL del PDF antes de responder
+• Si el PDF tiene secciones/estructura, descríbelas TAL COMO APARECEN (no inventes "Antecedentes", "Metodología", "Capítulos" si no están)
+• Para resúmenes: extrae los puntos principales que REALMENTE aparecen en el texto
+• Si algo no está en el PDF, di EXPLÍCITAMENTE: "Esta información no aparece en el documento"
+• NO agregues términos médicos, estructura académica, ni información que no esté en el PDF
+• Al final: "Fuente: %s"
 
-═══ REGLAS DE RESPUESTA ═══
-
-🔹 SI ENCUENTRAS INFORMACIÓN RELEVANTE:
-- Responde con el contenido encontrado
-- Cita textualmente fragmentos relevantes
-- Termina con: "## Fuentes\n- [Nombre del archivo PDF], p. X-Y"
-
-🔹 SI LA CONSULTA ES VAGA O AMBIGUA (ej: "¿qué es el pdf?", "historia clínica?"):
-PROHIBIDO responder "no hay información". En su lugar:
-A) ÍNDICE: Lista la estructura del documento (títulos, capítulos, secciones detectables)
-   Formato: "El documento contiene:\n- Capítulo 1: ...\n- Capítulo 2: ...\n¿Qué sección te interesa?"
-   
-B) FRAGMENTOS REPRESENTATIVOS: Si no hay índice claro, muestra 3-5 fragmentos importantes con sus páginas
-   Formato: "Fragmentos relevantes:\n- p. 5: [fragmento]\n- p. 12: [fragmento]\n..."
-   
-C) SINÓNIMOS: Si buscaste un término y no lo encontraste, sugiere términos alternativos
-   Ejemplo: "No encontré 'historia clínica' exactamente. ¿Buscas: historial médico, expediente clínico, anamnesis?"
-
-🔹 SI EL DOCUMENTO NO TIENE TEXTO EXTRAÍBLE (escaneado sin OCR):
-"El documento parece ser un escaneo sin texto extraíble (OCR). Sugerencias:
-- Sube una versión con OCR aplicado
-- Usa herramientas de conversión como Adobe Acrobat
-- Indica manualmente qué sección te interesa si ves el documento"
-
-═══ FORMATO DE SALIDA — MARKDOWN ESTRUCTURADO ═══
-OBLIGATORIO usar encabezados Markdown (#, ##, ###), listas (-, 1.), negritas **...**, itálicas *...*, y citas con >.
-PROHIBIDO usar bloques de código con fences, XML/HTML o JSON en la salida visible.
-NO incluyas etiquetas como [STATE], [INTERNAL], ni preámbulos del tipo 'A continuación...'.
-Extensión: clara y suficiente; evita párrafos kilométricos (máx. 6–8 líneas por párrafo).
-
-Estructura sugerida (adapta nombres según el tema):
-# Título breve y específico
-## Resumen
-- Punto clave 1
-- Punto clave 2
-## Contenido del Documento
-- Hallazgo 1
-- Hallazgo 2
-> Nota importante (si aplica)
-## Fuentes
-OBLIGATORIO: Cita el archivo Y páginas específicas. PROHIBIDO citar "Documentos PDF cargados" (usa nombre real del archivo).
-
-═══ IMPORTANTE ═══
-Tu objetivo NO es "opinar" ni dar teoría externa: es navegar, citar y explicar lo que está en %s,
-devolviendo SIEMPRE algo útil (índice/fragmentos/citas) incluso cuando la consulta sea ambigua.
-
-Consulta del usuario:
-%s`, docContext, docContext, enrichedPrompt)
+RECUERDA: Es mejor decir "no está en el documento" que inventar.`, docContext, userPrompt, docContext)
 }
 func errMsg(err error) string {
 	if err == nil {
