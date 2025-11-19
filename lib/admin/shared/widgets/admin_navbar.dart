@@ -76,33 +76,6 @@ class AdminNavbar extends StatelessWidget {
 
             const SizedBox(width: 16),
 
-            // Notificaciones
-            IconButton(
-              icon: Stack(
-                children: [
-                  const Icon(Icons.notifications_outlined),
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: AdminColors.error,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              onPressed: () {
-                // TODO: Mostrar notificaciones
-              },
-              tooltip: 'Notificaciones',
-            ),
-
-            const SizedBox(width: 8),
-
             // Perfil de usuario
             if (authController != null)
               _buildUserProfile(authController)

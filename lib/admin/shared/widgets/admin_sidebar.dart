@@ -81,11 +81,6 @@ class AdminSidebar extends StatelessWidget {
                   label: 'Libros',
                   route: AdminRoutes.books,
                 ),
-                _buildMenuItem(
-                  icon: Icons.bar_chart,
-                  label: 'Estadísticas',
-                  route: AdminRoutes.statistics,
-                ),
               ],
             ),
           ),

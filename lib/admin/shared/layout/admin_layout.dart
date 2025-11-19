@@ -1,17 +1,22 @@
+import 'package:ema_educacion_medica_avanzada/admin/config/admin_routes.dart';
+import 'package:ema_educacion_medica_avanzada/admin/core/services/admin_auth_service.dart';
 import 'package:ema_educacion_medica_avanzada/admin/shared/widgets/admin_navbar.dart';
 import 'package:ema_educacion_medica_avanzada/admin/shared/widgets/admin_sidebar.dart';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 
 class AdminLayout extends StatefulWidget {
   final String title;
   final Widget child;
   final List<Widget>? actions;
+  final bool requiresAuth;
 
   const AdminLayout({
     super.key,
     required this.title,
     required this.child,
     this.actions,
+    this.requiresAuth = true,
   });
 
   @override
@@ -19,18 +24,54 @@ class AdminLayout extends StatefulWidget {
 }
 
 class _AdminLayoutState extends State<AdminLayout> {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _isSidebarExpanded = true;
+  bool _isCheckingAuth = true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.requiresAuth) {
+      _checkAuthentication();
+    } else {
+      _isCheckingAuth = false;
+    }
+  }
+
+  Future<void> _checkAuthentication() async {
+    try {
+      final authService = Get.find<AdminAuthService>();
+      final user = await authService.getCurrentUser();
+
+      if (user == null || !user.isSuperAdmin) {
+        // Redirigir al login si no está autenticado
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Get.offAllNamed(AdminRoutes.login);
+        });
+      } else {
+        setState(() {
+          _isCheckingAuth = false;
+        });
+      }
+    } catch (e) {
+      print('❌ [ADMIN LAYOUT] Error checking auth: $e');
+      setState(() {
+        _isCheckingAuth = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.requiresAuth && _isCheckingAuth) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
     final isTablet =
         MediaQuery.of(context).size.width >= 768 &&
         MediaQuery.of(context).size.width < 1024;
 
     return Scaffold(
-      key: _scaffoldKey,
       drawer:
           !isDesktop
               ? Drawer(child: AdminSidebar(isExpanded: true, onToggle: () {}))
@@ -57,7 +98,7 @@ class _AdminLayoutState extends State<AdminLayout> {
                   title: widget.title,
                   onMenuPressed:
                       !isDesktop
-                          ? () => _scaffoldKey.currentState?.openDrawer()
+                          ? () => Scaffold.of(context).openDrawer()
                           : null,
                   onSidebarToggle:
                       isDesktop

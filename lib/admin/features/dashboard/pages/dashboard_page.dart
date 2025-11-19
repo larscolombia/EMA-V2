@@ -18,11 +18,6 @@ class DashboardPage extends StatelessWidget {
       title: 'Dashboard',
       actions: [
         IconButton(
-          icon: const Icon(Icons.download),
-          tooltip: 'Exportar a CSV',
-          onPressed: controller.exportToCSV,
-        ),
-        IconButton(
           icon: const Icon(Icons.refresh),
           tooltip: 'Actualizar',
           onPressed: controller.refresh,
